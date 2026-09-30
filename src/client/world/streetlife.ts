@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, rng } from '../../shared/city';
+import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, lightPhase as signals, rng } from '../../shared/city';
 import { HAIR_COLORS, SKIN_TONES } from '../../shared/avatar';
 import type { Box } from '../../shared/garage';
 import type { NightParts } from './outside';
@@ -79,22 +79,15 @@ export interface Light {
   stage: 'green' | 'amber' | 'red';
   walk: boolean;
 }
-const GREEN = 12;
-const AMBER = 2;
-const CLEAR = 1;
-const HALF = GREEN + AMBER + CLEAR;
-const CYCLE = HALF * 2;
-/** People may set off in the first WALK_T seconds of a green, which leaves the rest of it (and the red for the cross street) to get over. */
-const WALK_T = 6;
-
 /**
- * The lights at a crossing at time `t` (s, shared by everyone): each crossing has its own offset so they don't all change together.
+ * The lights at a crossing at time `t` (s, Date.now() / 1000 so everyone agrees): the same signals the
+ * poles show (shared/city.ts lightPhase), as the traffic reads them.
  */
-// ponytail: local stand-in for shared/city.ts lightPhase (WS-A); same idea, swap it for that one when it lands.
 export function lightPhase(t: number, at: Crossing): Light {
-  const u = (((t + roll(at.ix, at.iz, 77) * CYCLE) % CYCLE) + CYCLE) % CYCLE;
-  const v = u % HALF;
-  return { green: u < HALF ? 'x' : 'z', stage: v < GREEN ? 'green' : v < GREEN + AMBER ? 'amber' : 'red', walk: v < WALK_T };
+  const p = signals(t, { i: at.ix, j: at.iz });
+  const green: Axis = p.z !== 'red' ? 'z' : 'x';
+  const stage = p[green] === 'yellow' ? 'amber' : p[green];
+  return { green, stage, walk: green === 'x' ? p.walkX : p.walkZ };
 }
 
 /** Whether traffic going along `axis` has a green. */

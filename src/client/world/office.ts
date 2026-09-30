@@ -4,6 +4,7 @@ import { frameRect, overlaps, wallFacing, wallPose, wallTop, type WallId, type W
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
+import { buildStreetLife, type StreetLife } from './streetlife';
 import { Fleet } from './cars';
 import { mergeByMaterial, mergeColored, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 import { ART_COUNT, blinds, blobShadows, onWallAt, setShadowFloors, userFrames, wallArt, type ArtItem, type Blob, type BlindItem } from './detail';
@@ -102,6 +103,8 @@ export interface Office {
   garageLift: Elevator;
   /** The Lambos and Ferraris in the garage, which anyone can drive (see driving.ts). */
   cars: Fleet;
+  /** The traffic and the people out on the street. */
+  life: StreetLife;
   /** The merge gong by the PR board. */
   gong: Gong;
   jukebox: JukeboxView;
@@ -1545,6 +1548,10 @@ export function buildOffice(): Office {
   ground.add(cars.group);
   // The clouds stay up in the sky, however far down the street is.
   buildStreet(ground, groundColliders, night, group);
+  // Traffic on the city's streets and people on its sidewalks (world/streetlife.ts).
+  const life = buildStreetLife(night);
+  life.group.position.y = STREET_Y;
+  ground.add(life.group);
   const green = buildGreen(ground, groundColliders, night);
   group.add(ground);
   colliders.push(...groundColliders);
@@ -1990,7 +1997,7 @@ export function buildOffice(): Office {
     hoop.update(dt);
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, garageLift, cars, gong, jukebox, cabinet, whiteboard, tee, green, hoop, stack, wing, setWing, signs, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, garageLift, cars, life, gong, jukebox, cabinet, whiteboard, tee, green, hoop, stack, wing, setWing, signs, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */

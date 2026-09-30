@@ -33,7 +33,7 @@ import { ROUND, score, targetFrame, type BarGame, type Score, type Toss } from '
 import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
-import { CARS, SEAT_HIPS, type CarSeat } from '../shared/garage';
+import { CAR, CARS, SEAT_HIPS, carPoint, type CarSeat } from '../shared/garage';
 import { Smoke } from './world/smoke';
 import { HAZE_MAX, Sky, describeSky } from './world/sky';
 import { Laptop } from './world/laptop';
@@ -4611,6 +4611,14 @@ function frame(ts?: number) {
   walkTick(now);
   // The cars first, so whoever's riding in one sits in it where it's got to.
   office.cars.update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
+  // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
+  if (inOffice() && !upTop) {
+    const pose = driver.driving ? driver.pose : null;
+    const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
+    const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
+    office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid);
+    if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * CAR.length) / 2), Math.abs(pose.speed));
+  }
   player.update(dt);
   // A car coming at you where you stand: out of its way, with a thump if it was going.
   if (inOffice() && !driver.active && !upTop && !trip) {
