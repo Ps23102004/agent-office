@@ -124,3 +124,10 @@ test('the fleet spins both axles, steers only the front, and puts models on thei
   assert.equal(fleet.seatAt(11, 'passenger'), undefined);
   assert.ok(fleet.seatAt(9, 'passenger'));
 });
+
+test('a car stopped by the handbrake mid-slide drives off again on the gas', () => {
+  // Left over from a drift: all but no speed, a crumb of slip and turn that used to keep it braking forever.
+  let p: CarPose = { x: 0, z: 0, rotY: -2.46, speed: -1.5e-26, steer: 0, slip: -2.3e-10, yaw: 8e-15 };
+  for (let i = 0; i < 60; i++) p = drive(p, { gas: 1, turn: 0, brake: false }, 1 / 30);
+  assert.ok(p.speed > 5, `speed ${p.speed}`);
+});

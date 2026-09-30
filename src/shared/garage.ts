@@ -181,10 +181,12 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPos
   const bike = spec.width < 1;
   const want = clamp(pedals.turn, -1, 1) * steerLimit(p.speed);
   const steer = p.steer + clamp(want - p.steer, -DRIVE.steerRate * dt, DRIVE.steerRate * dt);
-  let v = p.speed;
+  // Crumbs of speed left from a slide count as stopped, so the gas isn't read as braking out of reverse forever.
+  let v = Math.abs(p.speed) < 1e-3 ? 0 : p.speed;
   const toward = (target: number, rate: number) => (v += clamp(target - v, -rate * dt, rate * dt));
   const gas = clamp(pedals.gas, -1, 1);
-  if (pedals.brake) toward(0, DRIVE.brake);
+  // A car's handbrake locks only the rear wheels: it slows you less, and lets the tail come round.
+  if (pedals.brake) toward(0, bike ? DRIVE.brake : DRIVE.brake * 0.5);
   else if (gas > 0) {
     if (v < 0) toward(0, DRIVE.brake);
     else v = Math.min(spec.top, v + spec.accel * gas * dt);
@@ -219,7 +221,7 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPos
   }
   v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top);
   slip = clamp(slip, -spec.top * 0.75, spec.top * 0.75);
-  if (v === 0 && Math.abs(slip) < 0.01) { slip = 0; yaw = 0; }
+  if (Math.abs(v) < 1e-3 && Math.abs(slip) < 0.01) { v = 0; slip = 0; yaw = 0; }
   const mid = p.rotY + yaw * dt / 2;
   return {
     x: p.x + (Math.sin(mid) * v + Math.cos(mid) * slip) * dt,

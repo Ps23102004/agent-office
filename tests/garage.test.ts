@@ -43,9 +43,9 @@ test('a car on the gas gets up to top speed and no faster, and rolls to a dead s
   assert.equal(run(p, COAST, 1).z, z);
 });
 
-test('the brake stops it quickly, and S brakes before it reverses', () => {
+test('the handbrake stops it, and S brakes before it reverses', () => {
   const fast = { ...still(), speed: DRIVE.top };
-  assert.equal(run(fast, { ...GAS, brake: true }, 1.1).speed, 0, 'the brake beats the gas');
+  assert.equal(run(fast, { ...GAS, brake: true }, 2.1).speed, 0, 'the handbrake beats the gas');
   const back = { gas: -1, turn: 0, brake: false };
   const braking = run(fast, back, 0.5);
   assert.ok(braking.speed > 0 && braking.speed < fast.speed, 'still going forward, slower');
