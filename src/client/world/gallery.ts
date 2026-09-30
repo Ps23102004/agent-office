@@ -137,7 +137,7 @@ type PictureMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
 /** A flat material the cartoon outline pass leaves alone. */
 function flat(params: THREE.MeshBasicMaterialParameters): THREE.MeshBasicMaterial {
-  const m = new THREE.MeshBasicMaterial(params);
+  const m = new THREE.MeshBasicMaterial({ toneMapped: false, ...params });
   m.userData.outlineParameters = { visible: false };
   return m;
 }

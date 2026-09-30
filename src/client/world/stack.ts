@@ -101,22 +101,46 @@ function rectOutline(r: Rect): [number, number][] {
   ];
 }
 
-/** Ceiling tiles: a light grid, one tile per repeat. */
+/** Ceiling tiles: a light grid, with a light panel, an air vent and a sprinkler head on it once in every 4 x 4 tiles. */
 function tileTexture(): THREE.CanvasTexture {
+  const T = 128;
   const c = document.createElement('canvas');
-  c.width = c.height = 128;
+  c.width = c.height = T * 4;
   const g = c.getContext('2d')!;
   g.fillStyle = '#fbf7ef';
-  g.fillRect(0, 0, 128, 128);
+  g.fillRect(0, 0, c.width, c.height);
   g.fillStyle = '#e3dccf';
-  g.fillRect(0, 0, 128, 5);
-  g.fillRect(0, 0, 5, 128);
+  for (let i = 0; i < 4; i++) {
+    g.fillRect(0, i * T, c.width, 5);
+    g.fillRect(i * T, 0, 5, c.height);
+  }
   // A few speckles, like the mineral fibre in real tiles.
   g.fillStyle = '#efe8dc';
-  for (let i = 0; i < 40; i++) g.fillRect(8 + ((i * 53) % 116), 8 + ((i * 97) % 116), 3, 2);
+  for (let i = 0; i < 640; i++) g.fillRect(8 + ((i * 53) % 496), 8 + ((i * 97) % 496), 3, 2);
+  // A light panel two tiles wide: a bright lens in a pale frame, with the tubes showing.
+  g.fillStyle = '#cfc7b8';
+  g.fillRect(T + 10, T + 12, T * 2 - 20, T - 24);
+  g.fillStyle = '#fffef2';
+  g.fillRect(T + 18, T + 20, T * 2 - 36, T - 40);
+  g.fillStyle = '#f2ecd2';
+  for (const y of [T + 46, T + 82]) g.fillRect(T + 22, y, T * 2 - 44, 6);
+  // An air vent: slots in a pale grille.
+  g.fillStyle = '#d8d1c3';
+  g.fillRect(3 * T + 16, 3 * T + 16, T - 32, T - 32);
+  g.fillStyle = '#8c8577';
+  for (let i = 0; i < 6; i++) g.fillRect(3 * T + 26, 3 * T + 26 + i * 13, T - 52, 5);
+  // A sprinkler head in the middle of a tile: a brass rose on a white ring.
+  g.fillStyle = '#ffffff';
+  g.beginPath();
+  g.arc(T / 2, 2 * T + T / 2, 11, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#c9a75f';
+  g.beginPath();
+  g.arc(T / 2, 2 * T + T / 2, 5, 0, Math.PI * 2);
+  g.fill();
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(1 / 1.2, 1 / 1.2);
+  t.repeat.set(1 / 4.8, 1 / 4.8);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;

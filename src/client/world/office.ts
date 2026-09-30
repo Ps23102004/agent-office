@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, WING, WING_DESKS, deskSeat, plantByWing, streetBelow, wingMinZ, wingRowZ, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
-import { wallFacing, type WallId, type WallRect } from '../../shared/decor';
+import { frameRect, overlaps, wallFacing, wallPose, wallTop, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { Fleet } from './cars';
-import { mergeByMaterial, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
+import { mergeByMaterial, mergeColored, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
+import { ART_COUNT, blinds, blobShadows, onWallAt, wallArt, type ArtItem, type Blob, type BlindItem } from './detail';
 import { palette, piece } from './models';
 import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
@@ -241,6 +242,86 @@ function paintPlanks(c: HTMLCanvasElement, p: FloorPalette) {
     g.fillStyle = 'rgba(255, 255, 255, 0.12)';
     g.fillRect(0, row * 64 + 3, 512, 1);
   }
+}
+
+/** How many meters of wall the paint texture covers before it repeats. */
+const WALL_TEX_W = 4;
+
+/**
+ * Wall paint, in white so the floor's own wall color shows through it: soft mottling, panelling up
+ * to a chair rail, shadow where the wall meets the floor and the ceiling, and a crown band up top.
+ * One texture goes right up the wall (0 to WALL_HEIGHT) and repeats along it every WALL_TEX_W meters.
+ */
+function wallTexture(): THREE.CanvasTexture {
+  const W = 512;
+  const H = 1024;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const g = c.getContext('2d')!;
+  const py = (y: number) => H * (1 - y / WALL_HEIGHT);
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, W, H);
+  let seed = 3;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // Mottling: broad, faint blotches of lighter and darker paint, wrapped so the repeat has no seam.
+  for (let i = 0; i < 90; i++) {
+    const x = rnd() * W;
+    const y = rnd() * H;
+    const r = 40 + rnd() * 90;
+    const dark = rnd() < 0.55;
+    for (const dx of [-W, 0, W]) {
+      const grad = g.createRadialGradient(x + dx, y, 0, x + dx, y, r);
+      grad.addColorStop(0, dark ? 'rgba(120, 90, 70, 0.045)' : 'rgba(255, 255, 255, 0.35)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      g.fillStyle = grad;
+      g.fillRect(x + dx - r, y - r, r * 2, r * 2);
+    }
+  }
+  // Panelling below the chair rail: a shade darker, with a groove every meter.
+  const rail = 1.15;
+  g.fillStyle = 'rgba(150, 110, 80, 0.13)';
+  g.fillRect(0, py(rail), W, H - py(rail));
+  g.fillStyle = 'rgba(90, 60, 40, 0.16)';
+  for (let x = 0; x < W; x += W / WALL_TEX_W) g.fillRect(x, py(rail - 0.08), 3, py(0.3) - py(rail - 0.08));
+  // The rail itself: a lit top, a shadow under it.
+  g.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  g.fillRect(0, py(rail + 0.03), W, py(rail) - py(rail + 0.03));
+  g.fillStyle = 'rgba(80, 50, 30, 0.3)';
+  g.fillRect(0, py(rail), W, 7);
+  // Shadow where the wall meets the floor, and where it meets the ceiling.
+  let grad = g.createLinearGradient(0, py(0.9), 0, py(0.25));
+  grad.addColorStop(0, 'rgba(40, 25, 15, 0)');
+  grad.addColorStop(1, 'rgba(40, 25, 15, 0.22)');
+  g.fillStyle = grad;
+  g.fillRect(0, py(0.9), W, py(0.25) - py(0.9));
+  grad = g.createLinearGradient(0, py(WALL_HEIGHT - 1.1), 0, py(WALL_HEIGHT));
+  grad.addColorStop(0, 'rgba(40, 25, 15, 0)');
+  grad.addColorStop(1, 'rgba(40, 25, 15, 0.24)');
+  g.fillStyle = grad;
+  g.fillRect(0, py(WALL_HEIGHT - 1.1), W, py(WALL_HEIGHT) - py(WALL_HEIGHT - 1.1));
+  // A crown band, lit on top and shaded under.
+  g.fillStyle = 'rgba(255, 255, 255, 0.7)';
+  g.fillRect(0, py(WALL_HEIGHT), W, py(WALL_HEIGHT - 0.22) - py(WALL_HEIGHT));
+  g.fillStyle = 'rgba(70, 45, 30, 0.35)';
+  g.fillRect(0, py(WALL_HEIGHT - 0.22), W, 6);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** Puts a wall piece's texture in the wall's own meters (around (cx, cy, cz) in the world), whatever its size, so the paint doesn't stretch. */
+function wallUv(geo: THREE.BufferGeometry, cx: number, cy: number, cz: number): THREE.BufferGeometry {
+  const p = geo.attributes.position;
+  const n = geo.attributes.normal;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < p.count; i++) {
+    const along = Math.abs(n.getX(i)) > 0.5 ? p.getZ(i) + cz : p.getX(i) + cx;
+    uv.setXY(i, along / WALL_TEX_W, (p.getY(i) + cy) / WALL_HEIGHT);
+  }
+  return geo;
 }
 
 function floorTexture(width = FLOOR.maxX - FLOOR.minX, depth = FLOOR.maxZ - FLOOR.minZ): THREE.CanvasTexture {
@@ -774,7 +855,7 @@ const SHADE_HEIGHT = 4.2;
  * the floor's colors and outside in the building's.
  */
 function buildWalls(group: THREE.Group, colliders: Collider[], openings: Opening[], looks: Looks) {
-  const inside = looks.wall;
+  const inside = looks.paint;
   const outside = toon(PALETTE.exterior);
   const trimMat = looks.trim;
   const T = WALL_T;
@@ -801,8 +882,9 @@ function buildWalls(group: THREE.Group, colliders: Collider[], openings: Opening
       }
       const ends = alongX ? [u0 <= FLOOR.minX - T + 0.001 ? 1 : -1, u1 >= FLOOR.maxX + T - 0.001 ? 0 : -1] : [];
       const mats = Array.from({ length: 6 }, (_, i) => (i === out || ends.includes(i) ? outside : inside));
-      const m = new THREE.Mesh(alongX ? box(u1 - u0, y1 - y0, T) : box(T, y1 - y0, u1 - u0), mats);
-      m.position.copy(at((u0 + u1) / 2, (y0 + y1) / 2));
+      const where = at((u0 + u1) / 2, (y0 + y1) / 2);
+      const m = new THREE.Mesh(wallUv(alongX ? box(u1 - u0, y1 - y0, T) : box(T, y1 - y0, u1 - u0), where.x, where.y, where.z), mats);
+      m.position.copy(where);
       m.castShadow = y1 <= SHADE_HEIGHT;
       m.receiveShadow = true;
       group.add(m);
@@ -868,7 +950,7 @@ function wallRun(into: THREE.Group, cols: Collider[], axis: 'x' | 'z', at: numbe
   // A box's faces go +x, -x, +y, -y, +z, -z.
   const outFace = axis === 'x' ? (out > 0 ? 4 : 5) : out > 0 ? 0 : 1;
   const endFaces = axis === 'x' ? [1, 0] : [5, 4];
-  const paint = Array.from({ length: 6 }, (_, i) => (i === outFace || endFaces.some((f, k) => f === i && endsOut[k]) ? outside : looks.wall));
+  const paint = Array.from({ length: 6 }, (_, i) => (i === outFace || endFaces.some((f, k) => f === i && endsOut[k]) ? outside : looks.paint));
   const piece = (a: number, b: number, y0: number, y1: number) => {
     if (b - a < 0.001 || y1 - y0 < 0.001) return;
     if (y0 < SHADE_HEIGHT && y1 > SHADE_HEIGHT) {
@@ -876,9 +958,10 @@ function wallRun(into: THREE.Group, cols: Collider[], axis: 'x' | 'z', at: numbe
       piece(a, b, SHADE_HEIGHT, y1);
       return;
     }
-    const m = new THREE.Mesh(axis === 'x' ? box(b - a, y1 - y0, T) : box(T, y1 - y0, b - a), paint);
     const u = (a + b) / 2;
-    m.position.set(axis === 'x' ? u : at, (y0 + y1) / 2, axis === 'x' ? at : u);
+    const pos = new THREE.Vector3(axis === 'x' ? u : at, (y0 + y1) / 2, axis === 'x' ? at : u);
+    const m = new THREE.Mesh(wallUv(axis === 'x' ? box(b - a, y1 - y0, T) : box(T, y1 - y0, b - a), pos.x, pos.y, pos.z), paint);
+    m.position.copy(pos);
     m.castShadow = y1 <= SHADE_HEIGHT;
     m.receiveShadow = true;
     into.add(m);
@@ -998,7 +1081,7 @@ function buildWing(group: THREE.Group, colliders: Collider[], interactables: Int
   const board = mesh(roundedBox(2.64, 0.06, 1.12, 0.06), toon(PALETTE.ink), 0, 0, 0, false);
   board.rotation.x = Math.PI / 2;
   sign.add(board);
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(2.56, 1.05), new THREE.MeshBasicMaterial({ map: tex }));
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(2.56, 1.05), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
   face.position.z = 0.032;
   sign.add(face);
   group.add(sign);
@@ -1117,13 +1200,20 @@ function chair(color: string): THREE.Group {
   const back = mesh(roundedBox(0.62, 0.1, 0.6, 0.12), mat, 0, 0.86, 0.27);
   back.rotation.x = Math.PI / 2 - 0.12;
   g.add(back);
+  // A padded seat with a stitched-looking rim, a stem and five spokes with a caster on each.
+  g.add(mesh(box(0.65, 0.035, 0.6), toon('#ffffff'), 0, 0.455, 0));
   g.add(mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.42, 8), toon(PALETTE.deskLeg), 0, 0.26, 0));
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2;
     const leg = mesh(box(0.05, 0.04, 0.32), toon(PALETTE.deskLeg), Math.sin(a) * 0.15, 0.05, Math.cos(a) * 0.15);
     leg.rotation.y = a;
     g.add(leg);
+    g.add(mesh(box(0.05, 0.05, 0.05), toon('#2b2d42'), Math.sin(a) * 0.29, 0.03, Math.cos(a) * 0.29, false));
   }
+  // One or two draw calls, not fifteen.
+  const merged = mergeColored(g);
+  g.clear();
+  g.add(...merged.children);
   return g;
 }
 
@@ -1136,13 +1226,49 @@ export function buildDesk(def: DeskDef, index: number, trimMat: THREE.Material):
   group.position.set(def.x, 0, def.z);
   group.rotation.y = def.rotY;
   const { width, depth, height } = DESK_SIZE;
-  group.add(mesh(roundedBox(width - 0.06, 0.08, depth - 0.04, 0.08), toon(PALETTE.desk), 0, height - 0.04, 0));
+  // What never moves on a desk (its top and legs, the cable tray under it, and what's left lying about on
+  // it) is one mesh: each desk's own clutter is a matter of which desk it is.
+  const still = new THREE.Group();
+  still.add(mesh(roundedBox(width - 0.06, 0.08, depth - 0.04, 0.08), toon(PALETTE.desk), 0, height - 0.04, 0));
   const legMat = toon('#8d99ae');
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      group.add(mesh(new THREE.CylinderGeometry(0.035, 0.035, height - 0.08, 8), legMat, sx * (width / 2 - 0.14), (height - 0.08) / 2, sz * (depth / 2 - 0.12)));
+      still.add(mesh(new THREE.CylinderGeometry(0.035, 0.035, height - 0.08, 8), legMat, sx * (width / 2 - 0.14), (height - 0.08) / 2, sz * (depth / 2 - 0.12)));
     }
   }
+  const dark = toon('#4a4e69');
+  still.add(mesh(box(width - 0.5, 0.04, 0.14), dark, 0, height - 0.16, -depth / 2 + 0.1, false));
+  for (const x of [-0.5, 0.1, 0.6]) still.add(mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.5, 4).rotateZ(Math.PI / 2), toon('#1d1d1d'), x, height - 0.2 + Math.sin(x * 9) * 0.02, -depth / 2 + 0.16, false));
+  still.add(mesh(new THREE.CylinderGeometry(0.009, 0.009, height - 0.2, 4), toon('#1d1d1d'), width / 2 - 0.3, (height - 0.2) / 2, -depth / 2 + 0.08, false));
+  const top = height;
+  const lie = (geo: THREE.BufferGeometry, color: string, x: number, y: number, z: number, turn = 0) => {
+    const m = mesh(geo, toon(color), x, top + y, z, false);
+    m.rotation.y = turn;
+    still.add(m);
+  };
+  const pastel = ['#ffd166', '#ef8354', '#06d6a0', '#118ab2', '#ef476f'];
+  // A notepad at its own angle on every desk, and then, depending on the desk, some of the rest.
+  lie(box(0.2, 0.012, 0.27), '#fff7d6', -0.72, 0.006, 0.28, 0.35 * Math.sin(index * 2.3));
+  lie(new THREE.CylinderGeometry(0.008, 0.008, 0.15, 5).rotateZ(Math.PI / 2), pastel[(index + 2) % 5], -0.6, 0.02, 0.36, 0.9 + index * 0.7);
+  const kind = index % 4;
+  if (kind === 0 || kind === 3) {
+    // A pen cup with a few pens in it.
+    lie(new THREE.CylinderGeometry(0.04, 0.035, 0.1, 6), pastel[index % 5], -0.35, 0.05, -0.32);
+    for (let i = 0; i < 3; i++) lie(new THREE.CylinderGeometry(0.006, 0.006, 0.09, 4), pastel[(index + i + 1) % 5], -0.35 + (i - 1) * 0.02, 0.13, -0.32 + (i % 2) * 0.015);
+  }
+  if (kind === 1) {
+    // Headphones left on the desk, band up.
+    lie(new THREE.TorusGeometry(0.07, 0.012, 5, 12, Math.PI).rotateX(-0.5), '#2b2d42', -0.35, 0.06, 0.3);
+    for (const sx of [-1, 1]) lie(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 8).rotateZ(Math.PI / 2), '#ef476f', -0.35 + sx * 0.07, 0.035, 0.3);
+  }
+  if (kind === 2 || kind === 3) {
+    // A water bottle, and sticky notes stuck up on the desk.
+    lie(new THREE.CylinderGeometry(0.03, 0.03, 0.2, 6), '#a8dadc', -0.42, 0.1, -0.3);
+    lie(new THREE.CylinderGeometry(0.02, 0.02, 0.03, 6), '#1d3557', -0.42, 0.215, -0.3);
+    lie(box(0.075, 0.006, 0.075), '#ffe066', -0.3, 0.003, 0.02, 0.3);
+    lie(box(0.075, 0.006, 0.075), '#ff9ecb', -0.24, 0.009, 0.06, -0.2);
+  }
+  group.add(mergeColored(still));
   // Modesty panel facing away from the worker
   group.add(mesh(box(width - 0.3, 0.32, 0.03), trimMat, 0, height - 0.26, -depth / 2 + 0.06));
   // Little desk decorations. Which desk gets which stays as it is: the holiday present goes in whichever
@@ -1163,11 +1289,6 @@ export function buildDesk(def: DeskDef, index: number, trimMat: THREE.Material):
     books.position.set(width / 2 - 0.26, height, -0.3);
     group.add(books);
   }
-
-  // Every desk gets a notepad at its own angle, so no two look stamped out.
-  const pad = mesh(box(0.2, 0.012, 0.27), toon('#fff7d6'), -0.72, height + 0.006, 0.28, false);
-  pad.rotation.y = 0.35 * Math.sin(index * 2.3);
-  group.add(pad);
 
   const laptopAnchor = new THREE.Object3D();
   laptopAnchor.position.set(0, height, -0.06);
@@ -1314,7 +1435,7 @@ function wallBoard(width: number, height: number, frameColor: string): { group: 
   const frame = mesh(roundedBox(width + 0.3, 0.12, height + 0.3, 0.1), toon(frameColor), 0, 0, 0);
   frame.rotation.x = Math.PI / 2;
   group.add(frame);
-  const faceMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+  const faceMat = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false });
   const face = new THREE.Mesh(new THREE.PlaneGeometry(width, height), faceMat);
   face.position.z = 0.07;
   group.add(face);
@@ -1329,7 +1450,8 @@ export function buildOffice(): Office {
   const fixture = (wall: WallId, u: number, y: number, w: number, h: number) => fixtures.push({ wall, u0: u - w / 2, u1: u + w / 2, y0: y - h / 2, y1: y + h / 2 });
 
   // What each floor paints its own way (see setLook): the walls, their trim, the planks.
-  const looks: Looks = { wall: toonUnique(PALETTE.wall), trim: toonUnique(PALETTE.wallTrim), planks: [] };
+  const looks: Looks = { wall: toonUnique(PALETTE.wall), paint: toonUnique(PALETTE.wall), trim: toonUnique(PALETTE.wallTrim), planks: [] };
+  looks.paint.map = wallTexture();
 
   // Floor, and the ceiling, with the ways up and down to the other floors through them (see stack.ts).
   const floorTex = floorTexture();
@@ -1374,6 +1496,25 @@ export function buildOffice(): Office {
     group.add(wetPane(o, night.wetGlass));
   }
   group.add(mergeByMaterial(glazing));
+  // Blinds half-drawn at the top of every window, all in one mesh; and crown molding round the top of the room.
+  group.add(
+    blinds(
+      WINDOWS.map((o): BlindItem => {
+        const at = onWall(o.wall, o.u);
+        return { x: at.x, y: o.y1 - 0.09, z: at.z, rotY: at.rotY, w: o.width - 0.18, drop: (o.y1 - o.y0 - 0.18) * 0.32 };
+      }).map((b) => {
+        // On the room side of the wall (its outdoor side is +z, here).
+        const m = onWallAt(b.x, b.y, b.z, b.rotY, -(WALL_T / 2 + 0.02));
+        const p = new THREE.Vector3().setFromMatrixPosition(m);
+        return { ...b, x: p.x, z: p.z };
+      }),
+    ),
+  );
+  const crown = (x0: number, x1: number, z0: number, z1: number) => group.add(mesh(box(x1 - x0, 0.2, z1 - z0), trimMat, (x0 + x1) / 2, WALL_HEIGHT - 0.1, (z0 + z1) / 2, false));
+  crown(FLOOR.minX, WING.minX, FLOOR.minZ, FLOOR.minZ + 0.08);
+  crown(FLOOR.minX, FLOOR.maxX, FLOOR.maxZ - 0.08, FLOOR.maxZ);
+  crown(FLOOR.minX, FLOOR.minX + 0.08, FLOOR.minZ, FLOOR.maxZ);
+  crown(FLOOR.maxX - 0.08, FLOOR.maxX, FLOOR.minZ, FLOOR.maxZ);
   const doors: Door[] = [];
   // Out the glass doors on the south wall: the balcony.
   const slider = balconyDoor();
@@ -1512,7 +1653,7 @@ export function buildOffice(): Office {
   const tvGroup = new THREE.Group();
   tvGroup.add(mesh(roundedBox(TV.width + 0.3, 0.14, TV.height + 0.3, 0.12), toon(PALETTE.ink), 0, 0, 0));
   (tvGroup.children[0] as THREE.Mesh).rotation.x = Math.PI / 2;
-  const tvScreen = new THREE.Mesh(new THREE.PlaneGeometry(TV.width, TV.height), new THREE.MeshBasicMaterial({ color: '#1b1d2e' }));
+  const tvScreen = new THREE.Mesh(new THREE.PlaneGeometry(TV.width, TV.height), new THREE.MeshBasicMaterial({ color: '#1b1d2e', toneMapped: false }));
   tvScreen.position.z = 0.08;
   tvGroup.add(tvScreen);
   tvGroup.position.set(TV.x - 0.1, TV.y, TV.z);
@@ -1528,7 +1669,7 @@ export function buildOffice(): Office {
   const bezel = mesh(roundedBox(MACHINE_MONITOR.width + 0.16, 0.1, MACHINE_MONITOR.height + 0.16, 0.06), toon(PALETTE.ink), 0, 0, 0);
   bezel.rotation.x = Math.PI / 2;
   monitor.add(bezel);
-  const machineScreen = new THREE.Mesh(new THREE.PlaneGeometry(MACHINE_MONITOR.width, MACHINE_MONITOR.height), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+  const machineScreen = new THREE.Mesh(new THREE.PlaneGeometry(MACHINE_MONITOR.width, MACHINE_MONITOR.height), new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }));
   machineScreen.position.z = 0.06;
   monitor.add(machineScreen);
   monitor.position.set(MACHINE_MONITOR.x + 0.07, MACHINE_MONITOR.y, MACHINE_MONITOR.z);
@@ -1691,9 +1832,93 @@ export function buildOffice(): Office {
   fixture('east', loftZ, LOFT.y + 0.5, 2.4, 1);
   fixture('south', LOFT.maxX - 3, LOFT.y + 1.9, 2.6, 0.6);
 
+  // Soft contact shadows under the furniture, in one mesh (the sun's shadow map leaves the small pieces out).
+  const spots: Blob[] = [];
+  for (const d of DESKS) {
+    spots.push([d.x, d.z, 2.7, 1.6, d.rotY, 0.9], [d.x + Math.sin(d.rotY) * 0.9, d.z + Math.cos(d.rotY) * 0.9, 1.0, 1.0, d.rotY, 0.9]);
+  }
+  spots.push([10.5, 0, 1.5, 4.8, 0, 0.8], [13, 0, 2.1, 1.4, 0, 0.7]);
+  for (const [x, z, sc] of PLANTS) spots.push([x, z, 0.95 * sc, 0.95 * sc, 0, 0.8]);
+  group.add(blobShadows(spots));
+
+  // Pictures on the walls, wherever there's room: the frames are one mesh and the paintings (all on one sheet) another.
+  const art: ArtItem[] = [];
+  const taken: WallRect[] = [...fixtures];
+  const clear = (r: WallRect) => taken.every((f) => f.wall !== r.wall || !overlaps(r, f, 0.35));
+  const skipOpening = (o: Opening) => taken.push({ wall: o.wall, u0: o.u - o.width / 2, u1: o.u + o.width / 2, y0: o.y0, y1: o.y1 });
+  [...WINDOWS, EXIT_DOOR, BALCONY_DOOR].forEach(skipOpening);
+  const frames = ['#c98b5a', '#2b2d42', '#fffaf3', '#e9b949', '#2a9d8f', '#ff8a5b'];
+  let n = 0;
+  for (const wall of ['north', 'west', 'south', 'east'] as const) {
+    const [lo, hi] = wall === 'north' || wall === 'south' ? [FLOOR.minX, wall === 'north' ? WING.minX : FLOOR.maxX] : [FLOOR.minZ, FLOOR.maxZ];
+    for (let u = lo + 1.8; u < hi - 1.2; u += 3.1) {
+      for (const y of [5.5, 2.6]) {
+        const w = 1.1 + ((n * 7) % 5) * 0.16;
+        const h = 0.8 + ((n * 3) % 4) * 0.14;
+        const r = frameRect({ wall, u, y, w, h });
+        // Not into the loft's corner, nor where the wall's too short for it.
+        if (wall === 'south' && r.u1 > LOFT.minX - 0.5) continue;
+        if (wall === 'east' && r.u1 > LOFT.minZ - 0.5) continue;
+        if (wallTop(wall, r.u0) < r.y1 + 0.3 || wallTop(wall, r.u1) < r.y1 + 0.3 || !clear(r)) continue;
+        taken.push(r);
+        fixtures.push(r);
+        const pose = wallPose(wall, u, y);
+        art.push({ x: pose.x, y, z: pose.z, rotY: pose.rotY, w, h, art: n % ART_COUNT, frame: frames[(n * 5) % frames.length] });
+        n++;
+      }
+    }
+  }
+  group.add(wallArt(art));
+
+  // A wall clock, with the time on it.
+  const clock = new THREE.Group();
+  {
+    const pose = wallPose('south', -5.6, 5.4);
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#2b2d42';
+    g.beginPath();
+    g.arc(64, 64, 64, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#fffaf3';
+    g.beginPath();
+    g.arc(64, 64, 55, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#2b2d42';
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      g.fillRect(64 + Math.sin(a) * 46 - (i % 3 ? 2 : 4), 64 - Math.cos(a) * 46 - (i % 3 ? 2 : 4), i % 3 ? 4 : 8, i % 3 ? 4 : 8);
+    }
+    const face = new THREE.CanvasTexture(c);
+    face.colorSpace = THREE.SRGBColorSpace;
+    clock.add(new THREE.Mesh(new THREE.CircleGeometry(0.42, 24), new THREE.MeshToonMaterial({ map: face, gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap })));
+    fixture('south', -5.6, 5.4, 1, 1);
+    clock.position.set(pose.x, 5.4, pose.z - 0.03);
+    clock.rotation.y = pose.rotY;
+  }
+  const hand = (len: number, w: number) => {
+    const pivot = new THREE.Group();
+    const bar = mesh(box(w, len, 0.01), toon('#2b2d42'), 0, len / 2 - 0.03, 0.012, false);
+    pivot.add(bar);
+    clock.add(pivot);
+    return pivot;
+  };
+  const hourHand = hand(0.22, 0.028);
+  const minuteHand = hand(0.32, 0.02);
+  group.add(clock);
+  const setClock = () => {
+    const d = new Date();
+    minuteHand.rotation.z = -((d.getMinutes() + d.getSeconds() / 60) / 60) * Math.PI * 2;
+    hourHand.rotation.z = -(((d.getHours() % 12) + d.getMinutes() / 60) / 12) * Math.PI * 2;
+  };
+  setClock();
+  let clockAt = 0;
+
   const setProjectName = (name: string) => elevator.setSign(`🛗 ${name}`);
   const setLook = (p: FloorPalette) => {
     looks.wall.color.set(p.wall);
+    looks.paint.color.set(p.wall);
     looks.trim.color.set(p.trim);
     for (const t of looks.planks) {
       paintPlanks(t.image as HTMLCanvasElement, p);
@@ -1736,6 +1961,10 @@ export function buildOffice(): Office {
       if (!d.vacancy.visible || !d.group.visible || d.def.station) continue;
       d.vacancy.position.y = d.vacancyY + Math.sin(t * 2 + d.def.x) * 0.06;
       d.vacancy.rotation.y = t * 1.2;
+    }
+    if (t - clockAt > 5) {
+      clockAt = t;
+      setClock();
     }
     elevator.update(dt);
     garageLift.update(dt);
@@ -1889,7 +2118,7 @@ function buildMeetingRoom(group: THREE.Group, colliders: Collider[], interactabl
 
   // The panel on the glass beside the door, like a room-booking screen: what's on, the round, the
   // tokens, and the summary once it's over. Beside the door rather than past it, so the board shows.
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.96), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.96), new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }));
   sign.position.set((R.minX + R.door.x0) / 2 + 0.01, 1.45, R.minZ - T / 2 - 0.03);
   sign.rotation.y = Math.PI;
   group.add(sign);
@@ -1911,6 +2140,8 @@ function buildMeetingRoom(group: THREE.Group, colliders: Collider[], interactabl
 /** The materials and textures a floor paints in its own colors. */
 interface Looks {
   wall: THREE.MeshToonMaterial;
+  /** The same color, painted (see wallTexture): for the flat walls, whose uvs are in meters. */
+  paint: THREE.MeshToonMaterial;
   trim: THREE.MeshToonMaterial;
   planks: THREE.CanvasTexture[];
 }

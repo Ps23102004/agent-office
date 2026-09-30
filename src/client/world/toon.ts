@@ -103,7 +103,7 @@ function textTexture(text: string, opts: TextOpts) {
 /** A camera-facing text label. */
 export function textSprite(text: string, opts: TextOpts = {}): THREE.Sprite {
   const { tex, w, h } = textTexture(text, opts);
-  const mat = new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true });
+  const mat = new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true, toneMapped: false });
   const sprite = new THREE.Sprite(mat);
   sprite.scale.set(w * TEXT_SCALE, h * TEXT_SCALE, 1);
   sprite.renderOrder = 10;
@@ -113,7 +113,7 @@ export function textSprite(text: string, opts: TextOpts = {}): THREE.Sprite {
 /** A flat text sign facing +Z, for mounting on a wall (a sprite would swing into the wall). */
 export function textPlane(text: string, opts: TextOpts = {}): THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> {
   const { tex, w, h } = textTexture(text, opts);
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.05 });
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.05, toneMapped: false });
   return new THREE.Mesh(new THREE.PlaneGeometry(w * TEXT_SCALE, h * TEXT_SCALE), mat);
 }
 
@@ -216,7 +216,7 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true }));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true, toneMapped: false }));
   sprite.scale.set((w / R) * TEXT_SCALE, (h / R) * TEXT_SCALE, 1);
   sprite.center.set(0.5, 0);
   sprite.renderOrder = 10;
@@ -304,6 +304,45 @@ export function mergeByMaterial(root: THREE.Object3D): THREE.Group {
   const out = new THREE.Group();
   for (const { mat, cast, geos } of byKey.values()) {
     out.add(mesh(mergeGeometries(geos)!, mat, 0, 0, 0, cast));
+    for (const geo of geos) geo.dispose();
+  }
+  return out;
+}
+
+let vertexToon: THREE.MeshToonMaterial | null = null;
+
+/** One toon material for everything merged by mergeColored: each vertex carries its own color. */
+export function toonVertex(): THREE.MeshToonMaterial {
+  return (vertexToon ??= new THREE.MeshToonMaterial({ color: '#ffffff', vertexColors: true, gradientMap: gradientMap() }));
+}
+
+/**
+ * Like mergeByMaterial, but every color in `root` (as many as you like) ends up in one mesh, or two:
+ * each vertex takes its color from the mesh's material, so a desk's top, legs, pen cup and notepad cost
+ * a single draw call between them. Small parts go in the mesh that casts no shadow. Plain toon colors only.
+ */
+export function mergeColored(root: THREE.Object3D): THREE.Group {
+  root.updateMatrixWorld(true);
+  const inv = root.matrixWorld.clone().invert();
+  const by = { cast: [] as THREE.BufferGeometry[], still: [] as THREE.BufferGeometry[] };
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    for (const k of Object.keys(geo.attributes)) if (k !== 'position' && k !== 'normal') geo.deleteAttribute(k);
+    geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    const c = (m.material as THREE.MeshToonMaterial).color;
+    const n = geo.attributes.position.count;
+    const rgb = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) c.toArray(rgb, i * 3);
+    geo.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+    geo.computeBoundingBox();
+    (m.castShadow && !tinyForShadow(geo.boundingBox!) ? by.cast : by.still).push(geo);
+  });
+  const out = new THREE.Group();
+  for (const [k, geos] of Object.entries(by)) {
+    if (!geos.length) continue;
+    out.add(mesh(mergeGeometries(geos)!, toonVertex(), 0, 0, 0, k === 'cast'));
     for (const geo of geos) geo.dispose();
   }
   return out;
