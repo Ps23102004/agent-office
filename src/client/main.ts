@@ -89,6 +89,10 @@ import { GAME, scoreText } from '../shared/cabinet';
 import { EMOTES, EMOTE_BY_ID, EmoteBucket, type EmoteId } from '../shared/emotes';
 import { EmoteWheel } from './ui/emotes';
 import { whereabouts } from './ui/whereabouts';
+// W4 UI + features: race screens and the shared hangout window.
+import { RaceUI } from './ui/race';
+import { raceAdapter } from './ui/race-adapter';
+import { openHangout } from './ui/hangout';
 import { wayTo } from './walkto';
 import { DESK_KEYS, interactionAvailable, type DeskKey } from './interaction';
 import { MeetingBoardTexture, MeetingSignTexture } from './world/meeting';
@@ -2610,6 +2614,9 @@ function paletteEntries(): PaletteEntry[] {
   });
   out.push(at('queue', 'the task queue', { icon: '📋', kind: 'Action', title: 'Open the task queue', detail: 'Issues and tasks waiting for a worker', keywords: ['backlog', 'tasks'], open: showQueue }));
   out.push({ icon: '⚙️', kind: 'Action', title: 'Settings', keywords: ['preferences', 'options'], open: () => showSettings() });
+  // W4 UI + features: the same actions as the menu, without a second navigation path.
+  out.push({ icon: '👋', kind: 'Action', title: 'Hang out', detail: 'Find friends, voice and invite links', keywords: ['friends', 'voice', 'invite', 'emotes'], open: showHangout });
+  out.push({ icon: '🏁', kind: 'Action', title: 'Race lobby', detail: 'Line up, watch the race or see results', keywords: ['circuit', 'grid', 'leaderboard'], open: () => raceUI.openLobby() });
   if (store.invites) out.push({ icon: '👥', kind: 'Action', title: 'Invite teammates', keywords: ['team', 'add people'], open: () => openTeam(net) });
   else if (store.me.admin) out.push({ icon: '👥', kind: 'Action', title: 'Invite people', detail: 'Accounts', keywords: ['invite teammates', 'accounts', 'team'], open: () => openAccounts(net) });
   out.push({ icon: '🖼️', kind: 'Action', title: 'Hang a picture', detail: 'On a wall of this floor', keywords: ['decorate', 'frame', 'art'], open: startHanging });
@@ -4355,6 +4362,12 @@ $('project').addEventListener('click', () => {
 });
 
 // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu ----------------------------
+// W4 UI + features: W2 only needs to swap the race adapter for its live store/actions.
+const raceUI = new RaceUI($('hud'), raceAdapter);
+function showHangout() {
+  openHangout({ net, voice, toggleVoice, jumpTo: walkTo, peerAtCircuit: (p) => raceAdapter.peerAtCircuit(p),
+    jumpBlocked: (p) => raceAdapter.peerAtCircuit(p) ? 'Meet them through the circuit gate' : undefined });
+}
 const waitingNow = () => waitingInOrder(store.workers.values());
 const noMedia = () => (window.isSecureContext ? undefined : 'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel');
 const hud = mountHud(
@@ -4380,6 +4393,9 @@ const hud = mountHud(
     { id: 'docs', icon: '📚', label: 'Docs', section: 'Open', shown: () => !inOffice(), title: () => 'Read the project’s docs', run: showBookshelf },
     { id: 'elevator', icon: '🛗', label: () => (inOffice() ? 'Elevator' : 'Floors'), section: 'Open', count: () => store.floors.reduce((n, f) => n + (f.id === store.floor ? 0 : f.waiting), 0), title: () => (inOffice() ? 'Ride to another project' : 'Go to another project, or add one'), run: showElevator },
     { id: 'roof', icon: '🍸', label: 'Rooftop bar', section: 'Open', shown: () => !upTop && inOffice() && builtFloors().length > 0, title: () => 'Ride the elevator up to the roof: a DJ, drinks and the city', run: () => ride(ROOF) },
+    // W4 UI + features: race and social windows share the existing menu/palette actions.
+    { id: 'race', icon: '🏁', label: 'Race lobby', section: 'Open', title: () => 'Join the circuit grid or read the finish leaderboard', run: () => raceUI.openLobby() },
+    { id: 'hangout', icon: '👋', label: 'Hang out', section: 'Together', title: () => 'Invite friends, find them and get into voice', run: showHangout },
     // In voice, V is push to talk, so leaving is only from here.
     { id: 'voice', icon: '🎙️', label: () => (voice.inVoice ? 'Leave voice' : 'Join voice'), section: 'Together', key: () => (voice.inVoice ? undefined : 'V'), on: () => voice.inVoice, blocked: noMedia, run: () => void toggleVoice() },
     // While you're in voice, the top bar keeps the mute button handy. Muted is the usual with push to talk, so it doesn't stand out then.
@@ -4594,6 +4610,10 @@ function frame(ts?: number) {
   const t = timer.getElapsed();
   const now = performance.now();
   if (slowFrames.frame(now, delta * 1000)) offer2d('slow');
+  // W4 UI + features: screen-space UI, throttled inside to 10 Hz; signed speed comes from the real car.
+  const gaugeCar = driver.car === null ? null : CARS[driver.car];
+  raceUI.update(now, gaugeCar ? { name: gaugeCar.name, speed: driver.pose?.speed ?? 0,
+    top: SPECS[gaugeCar.kind].top, bicycle: gaugeCar.kind === 'bicycle', passenger: !driver.driving } : null);
 
   // Coffee: quicker feet, higher jumps, a mug in hand, and maybe the jitters.
   const secs = now / 1000;
