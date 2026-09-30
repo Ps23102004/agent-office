@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { userFrames } from './detail';
 import { FRAMES, FRAME_BORDER, WALLS, frameRect, wallPose, wallTop, type Decoration, type WallId, type WallRect } from '../../shared/decor';
 import { FLOOR, LOFT } from '../../shared/layout';
 import type { Interactable } from './office';
@@ -242,6 +243,7 @@ export class Gallery {
       this.frames.delete(id);
     }
     this.refresh();
+    userFrames.set(this.rects());
     prunePictures(new Set(items.map((d) => d.url)));
   }
 

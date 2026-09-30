@@ -4,6 +4,9 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { WallRect } from '../../shared/decor';
+import { groundAt } from '../player';
+import type { Collider } from './office';
 import { toon } from './toon';
 
 // ---- Contact shadows ----------------------------------------------------------------------------
@@ -63,6 +66,35 @@ export function blobShadows(spots: Blob[], y = 0.024): THREE.Mesh {
   return mesh;
 }
 
+let floors: Collider[] = [];
+
+/** The colliders that say where the floor is (and desks, the couch and stairs: what someone can stand on), for settleShadow. */
+export function setShadowFloors(colliders: Collider[]) {
+  floors = colliders;
+}
+
+const at = new THREE.Vector3();
+
+/**
+ * Puts a follow shadow on the floor under its parent (whatever it's standing over: the ground, a desk,
+ * a stair), not wherever the parent is; a jump or a climb shrinks it and past a couple of meters
+ * it's gone. `hidden` for while their seat already has a shadow of its own.
+ */
+export function settleShadow(m: THREE.Mesh, size: number, hidden = false) {
+  const parent = m.parent;
+  if (!parent || hidden) {
+    m.visible = false;
+    return;
+  }
+  parent.getWorldPosition(at);
+  const ground = groundAt(floors, at.x, at.z, at.y + 0.4);
+  const height = Number.isFinite(ground) ? Math.max(0, at.y - ground) : 0;
+  const k = THREE.MathUtils.clamp(1 - height / 2.5, 0, 1);
+  m.visible = k > 0.05;
+  m.position.y = 0.03 - height;
+  m.scale.set(size * k, 1, size * k);
+}
+
 /** A spot that goes wherever its parent does (a person, a dog), `size` meters across. */
 export function followShadow(size: number, y = 0.03): THREE.Mesh {
   blobGeo ??= blobQuad(1);
@@ -73,7 +105,17 @@ export function followShadow(size: number, y = 0.03): THREE.Mesh {
   return m;
 }
 
-// ---- Pictures -----------------------------------------------------------------------------------
+// ---- Pictures
+
+/** The frames people have hung (see Gallery), so what's painted on the walls can make way for them. */
+export const userFrames = {
+  rects: [] as WallRect[],
+  listeners: new Set<() => void>(),
+  set(rects: WallRect[]) {
+    this.rects = rects;
+    for (const l of this.listeners) l();
+  },
+};
 
 /** Pictures on the sheet: 4 across, 2 down, each this many pixels square. */
 const CELL = 256;

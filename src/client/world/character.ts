@@ -11,7 +11,7 @@ import { axeModel, dartModel } from './bargames';
 import { OpenBook } from './book';
 import { HeldCard } from './card';
 import { GRIME, UNDEAD_SKIN, beard, beardColor, elfBoot, elfHat, elfWorker, grime, peasantGarb, santaHat, warlockHat, zombieWorker, type Beard, type PeasantGarb } from './costumes';
-import { followShadow } from './detail';
+import { followShadow, settleShadow } from './detail';
 import { cardSprite, disposeSprite, mesh, textSprite, toon, toonUnique, toonVertex } from './toon';
 
 export type Pose = 'stand' | 'walk' | 'sit' | 'type';
@@ -357,6 +357,7 @@ export class Person {
   private mouth: THREE.Mesh;
   /** The eyes with their glints, squashed shut on a blink. */
   private lids!: THREE.Mesh;
+  private shadow!: THREE.Mesh;
   /** Seconds until the next stretch, and how far into one (-1: not stretching). */
   private stretch = { next: 8 + Math.random() * 14, t: -1 };
   private blinkIn = 1 + Math.random() * 3;
@@ -447,7 +448,7 @@ export class Person {
     this.hairMat.side = THREE.DoubleSide;
     const ink = toon('#1d1d1d');
 
-    this.root.add(this.body, followShadow(1));
+    this.root.add(this.body, (this.shadow = followShadow(1)));
     // Torso
     this.body.add(
       mesh(
@@ -455,7 +456,8 @@ export class Person {
           [new THREE.CapsuleGeometry(0.26, 0.28, 6, 12), '#ffffff'],
           // A collar round the neck, and a breast pocket.
           [new THREE.TorusGeometry(0.19, 0.035, 5, 20).rotateX(Math.PI / 2), new THREE.Color(1.7, 1.7, 1.7), 0, 0.33, 0],
-          [new THREE.BoxGeometry(0.1, 0.11, 0.03), new THREE.Color(0.8, 0.8, 0.8), 0.11, 0.12, 0.255],
+          [new THREE.BoxGeometry(0.1, 0.11, 0.025), new THREE.Color(0.93, 0.93, 0.93), 0.11, 0.12, 0.257],
+          [new THREE.BoxGeometry(0.1, 0.016, 0.03), new THREE.Color(1.3, 1.3, 1.3), 0.11, 0.18, 0.257],
         ]),
         this.shirt,
         0,
@@ -1256,6 +1258,8 @@ export class Person {
     const blinking = this.blinkIn < 0.12 && this.blinkIn > 0;
     if (this.blinkIn < 0) this.blinkIn = 2 + Math.random() * 4;
     this.lids.scale.y = blinking ? 0.1 : 1;
+    // Its shadow stays on the floor: not while they sit (the chair has one) or hang on a ladder or pole.
+    settleShadow(this.shadow, 1, sit > 0.3 || this.grip !== null);
     // Standing around they breathe, and look about now and then; walking or sitting, they don't.
     const still = !moving && !airborne && !sit && !this.book ? 1 : 0;
     const g = this.glance;
@@ -1515,6 +1519,7 @@ const HOP = 0.5;
 
 /** The little Claude worker that sits at a desk. Forward is +z. */
 export class Worker {
+  private shadow!: THREE.Mesh;
   readonly root = new THREE.Group();
   private body = new THREE.Group();
   private bulb: THREE.MeshToonMaterial;
@@ -1592,7 +1597,7 @@ export class Worker {
     const white = toon('#ffffff');
     const ink = toon('#1d1d1d');
 
-    this.root.add(this.body, followShadow(0.95));
+    this.root.add(this.body, (this.shadow = followShadow(0.95)));
     // Bean-shaped body
     const bean = mesh(new THREE.CapsuleGeometry(0.28, 0.3, 8, 16), skin, 0, 0.55, 0);
     this.body.add(bean);
@@ -1889,6 +1894,8 @@ export class Worker {
   }
 
   update(dt: number, t: number) {
+    // Seated, it's parented to its seat's anchor (a plain Object3D), whose chair already has a shadow.
+    settleShadow(this.shadow, 0.95, this.root.parent?.type === 'Object3D');
     if (this.leaving) return this.carry(this.leaving, dt, t);
     if (this.dancing) return this.boogie(this.dancing, dt, t);
     this.cheerT = Math.max(0, this.cheerT - dt);

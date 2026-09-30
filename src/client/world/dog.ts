@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BARK_EVERY_S, BARK_FOR_S, DOG_COATS, dogAt, dogBreed, legSeconds, type DogAct, type DogBreed, type DogState } from '../../shared/dog';
 import type { Theme } from '../../shared/protocol';
 import { dogAntlers, dogBatWings, dogRedNose, dogScarf, dogWitchHat } from './costumes';
-import { followShadow } from './detail';
+import { followShadow, settleShadow } from './detail';
 import { loadModel, type Model } from './models';
 import type { Interactable } from './office';
 import { disposeSprite, textSprite, toon, toonUnique } from './toon';
@@ -138,6 +138,7 @@ interface Rig {
  */
 export class Dog {
   readonly root = new THREE.Group();
+  private shadow!: THREE.Mesh;
   readonly interactable: Interactable = { kind: 'dog', x: 0, z: 0, radius: 1.5 };
   /** Holds the model, and lifts it off the floor for the little hop it gives with a woof. */
   private body = new THREE.Group();
@@ -184,7 +185,7 @@ export class Dog {
     private hushed: (workerId: string) => boolean,
   ) {
     this.coatMats = [toonUnique(DOG_COATS[0][0]), toonUnique(DOG_COATS[0][1]), toonUnique(DOG_COATS[0][2])];
-    this.root.add(this.body, followShadow(0.9));
+    this.root.add(this.body, (this.shadow = followShadow(0.9)));
     this.root.visible = false;
     this.root.userData.interact = this.interactable;
   }
@@ -280,6 +281,7 @@ export class Dog {
   }
 
   update(dt: number) {
+    settleShadow(this.shadow, 0.9);
     const s = this.state;
     if (!s) return;
     this.t += dt;
