@@ -44,3 +44,10 @@ test('decorations update at their own rate with all the time they missed', () =>
   assert.equal(quality.decorHz, 0);
   assert.equal(tick(0.01), 0.01);
 });
+
+test('service discovery is every 4 s while a worker works, and every 15 s otherwise', async () => {
+  const { scanDue } = await import('../src/server/services.js');
+  assert.equal(scanDue(4000, 0, true), true);
+  assert.equal(scanDue(4000, 0, false), false);
+  assert.equal(scanDue(15_000, 0, false), true);
+});

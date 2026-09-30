@@ -1540,6 +1540,8 @@ function usable(): Interactable[][] {
  * the pole…). `back` is standing in the spot you left from last time, the doors open already.
  */
 function arrive(how: TripKind | 'back' = trip?.how ?? 'elevator') {
+  // A different floor to light: its shadows are drawn afresh.
+  shadowsAt = 0;
   // The balls lying about were this floor's.
   balls.clear();
   setPlace();
@@ -1617,6 +1619,8 @@ function worldFor(p: MapPlan): { world: World; court: Court | null; idle: IdleAg
  * one's put up, every worker sits down in its seat there, and you come in where it has you arrive.
  */
 function applyMap() {
+  // A different map, or the same one again: its shadows are drawn afresh.
+  shadowsAt = 0;
   const next = worldFor(store.plan());
   if (next.world === world) return;
   // Everyone gets up from the old map's seats; they sit down in the new one's below.
@@ -4534,6 +4538,36 @@ const slowFrames = new SlowFrames();
 /** When a car last shoved you out of its way. */
 let shovedAt = 0;
 
+/** The people list and who can be heard: what people are up to, who's speaking, and that nobody on another floor is audible. */
+function speakWork() {
+  // What people are up to changes as they walk about, not only when they open something.
+  for (const [id, r] of remotes) {
+    const p = store.peers.get(id);
+    if (p) r.person.setDoing(whereabouts(p, store.carOf(id), plan()));
+  }
+  renderPeople(voice, editProfile, walkTo, false);
+  updateSpeaking(voice);
+  // People on other floors can't be heard here (their voice connection stays up for when you meet).
+  for (const p of store.peers.values()) if (p.id !== store.you && !store.onMyFloor(p)) voice.setVolume(p.id, 0);
+}
+
+/**
+ * What still matters while the tab is hidden and nothing is drawn: the frame loop is stopped, so this
+ * keeps the parts of it that aren't for the eyes going, a few times a second. Someone who takes
+ * the elevator is out of earshot, and the ones on your floor are as loud as they are close.
+ */
+function backgroundTick() {
+  if (!document.hidden) return;
+  checkSmokeBreak(performance.now());
+  speakWork();
+  for (const p of store.peers.values()) {
+    if (p.id === store.you || !store.onMyFloor(p)) continue;
+    const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z);
+    voice.setVolume(p.id, d < 4 ? 1 : Math.max(0.2, 1 - (d - 4) / 16));
+  }
+}
+setInterval(backgroundTick, 250);
+
 /** The loop stops while the tab is hidden, and this starts it again. */
 let asleep = false;
 document.addEventListener('visibilitychange', () => {
@@ -4776,15 +4810,7 @@ function frame(ts?: number) {
 
   if (now - speakTick > 200) {
     speakTick = now;
-    // What people are up to changes as they walk about, not only when they open something.
-    for (const [id, r] of remotes) {
-      const p = store.peers.get(id);
-      if (p) r.person.setDoing(whereabouts(p, store.carOf(id), plan()));
-    }
-    renderPeople(voice, editProfile, walkTo, false);
-    updateSpeaking(voice);
-    // People on other floors can't be heard here (their voice connection stays up for when you meet).
-    for (const p of store.peers.values()) if (p.id !== store.you && !store.onMyFloor(p)) voice.setVolume(p.id, 0);
+    speakWork();
   }
 
   // A few drinks in, the frame goes to the screen through the drunk vision (see world/drunk.ts).
@@ -4816,11 +4842,43 @@ function frame(ts?: number) {
  */
 function refreshShadows(now: number) {
   shadowNow.copy(sun.position).sub(sun.target.position).normalize();
-  if (shadowNow.dot(shadowSun) > 0.9999 && player.pos.distanceToSquared(shadowMe) < 0.25 && now - shadowsAt < quality.shadowEvery) return;
+  if (shadowNow.dot(shadowSun) > 0.9999 && player.pos.distanceToSquared(shadowMe) < 0.25 && now - shadowsAt < quality.shadowEvery && !castersMoved(false)) return;
   shadowSun.copy(shadowNow);
   shadowMe.copy(player.pos);
+  castersMoved(true);
   shadowsAt = now;
   renderer.shadowMap.needsUpdate = true;
+}
+
+/** Where (x, y, z each) the things that walk, drive or ride about were when the shadows were last drawn. */
+const casterSeen: number[] = [];
+const casterAt = new THREE.Vector3();
+/**
+ * Whether anything that moves about and casts a shadow (the people, the workers, the dog, the cars, the
+ * elevator) has moved a little since the shadows were last drawn; with `record`, remembers where they are now.
+ */
+function castersMoved(record: boolean): boolean {
+  let i = 0;
+  let moved = !office.elevator.settled;
+  const visit = (o: THREE.Object3D) => {
+    if (!o.visible) return;
+    o.getWorldPosition(casterAt);
+    if (record) {
+      casterSeen[i] = casterAt.x;
+      casterSeen[i + 1] = casterAt.y;
+      casterSeen[i + 2] = casterAt.z;
+    } else if (Math.abs(casterAt.x - casterSeen[i]) + Math.abs(casterAt.y - casterSeen[i + 1]) + Math.abs(casterAt.z - casterSeen[i + 2]) > 0.15 || Number.isNaN(casterSeen[i])) moved = true;
+    i += 3;
+  };
+  for (const r of remotes.values()) visit(r.person.root);
+  for (const v of workerViews.values()) visit(v.model.root);
+  for (const a of idleAgents) visit(a.model.root);
+  for (const c of office.cars.cars) visit(c.root);
+  visit(dog.root);
+  // Someone came or went: what's there to compare with is different.
+  if (record) casterSeen.length = i;
+  else if (i !== casterSeen.length) moved = true;
+  return moved;
 }
 
 // ---- Boot ------------------------------------------------------------------------------------------

@@ -12,6 +12,9 @@ import type { ServiceInfo } from '../shared/protocol.js';
 /** How often to look for services while a worker is working (it may start one), and how often when none is. */
 const SCAN_MS = 4000;
 const IDLE_SCAN_MS = 15_000;
+
+/** Whether it's time to look for services: every SCAN_MS while a worker is working, else every IDLE_SCAN_MS. */
+export const scanDue = (now: number, last: number, working: boolean) => working || now - last >= IDLE_SCAN_MS;
 /** A port that stopped listening this recently still gets a "stopped" page instead of the office. */
 const GONE_MS = 24 * 60 * 60_000;
 /** Listeners that aren't something to review: browsers driven by tests, their helpers. */
@@ -184,15 +187,20 @@ export class Services {
   ) {}
 
   start() {
-    const tick = () => {
+    // Checked every SCAN_MS whether it's time: a worker that starts working is noticed within that, not after a long wait.
+    let last = 0;
+    this.timer = setInterval(() => {
+      const now = Date.now();
+      if (!scanDue(now, last, this.owners().some((o) => o.working))) return;
+      last = now;
       void this.scan();
-      this.timer = setTimeout(tick, this.owners().some((o) => o.working) ? SCAN_MS : IDLE_SCAN_MS);
-    };
-    tick();
+    }, SCAN_MS);
+    last = Date.now();
+    void this.scan();
   }
 
   stop() {
-    clearTimeout(this.timer);
+    clearInterval(this.timer);
   }
 
   /** The web servers (listeners that answered HTTP), by port. */
