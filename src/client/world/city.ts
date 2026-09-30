@@ -4,6 +4,7 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, toon } from './toon';
 import { buildTower } from './tower';
+import { PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, rng } from '../../shared/city';
 
 // The city around the rooftop bar: the building's own floors going down to the street (as the tower
 // looks from outside, world/tower.ts), a grid of streets with cars running along them, parks, and
@@ -17,15 +18,6 @@ import { buildTower } from './tower';
 
 /** The building, walls included. */
 const B = { minX: FLOOR.minX - WALL_T, maxX: FLOOR.maxX + WALL_T, minZ: FLOOR.minZ - WALL_T, maxZ: FLOOR.maxZ + WALL_T } as const;
-/** A block and the street beside it; streets run down x = 28 + 56k and z = 27 + 56k. */
-const PERIOD = 56;
-const STREET_X = 28;
-const STREET_Z = 27;
-/** The road, and a sidewalk either side. */
-const ROAD = 8;
-const WALK = 2;
-/** How far out the city goes: past this the haze has it anyway. */
-const RADIUS = 330;
 /** One storey, and one bay of windows, in meters. */
 const STOREY = 3.3;
 const BAY = 2.8;
@@ -41,18 +33,6 @@ export interface City {
   setFloors(floors: number, wings?: readonly number[]): void;
   /** The cars along the streets, the blinking lights on the towers: `night` is how dark it is (0–1). */
   update(t: number, dt: number, night: number): void;
-}
-
-/** The same numbers every time, so everyone sees the same city. */
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 function canvasTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
