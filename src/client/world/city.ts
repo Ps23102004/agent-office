@@ -4,7 +4,8 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, rng, type Light, type Lot } from '../../shared/city';
+import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, parkHedges, rng, type Light, type Lot } from '../../shared/city';
+import { buildIsland } from './ocean';
 
 // The city around the rooftop bar: the building's own floors going down to the street (as the tower
 // looks from outside, world/tower.ts), a grid of streets with cars running along them, parks, and
@@ -177,6 +178,11 @@ class Walls {
   }
 }
 
+/** The streets' square (shared/city.ts GRID) as a flat plane on the ground, for a block-at-a-time texture. */
+function streetsGround(): THREE.PlaneGeometry {
+  return new THREE.PlaneGeometry(GRID.maxX - GRID.minX, GRID.maxZ - GRID.minZ).rotateX(-Math.PI / 2).translate((GRID.minX + GRID.maxX) / 2, 0, (GRID.minZ + GRID.maxZ) / 2);
+}
+
 /** The streets and blocks, a block at a time: roads, sidewalks, crossings and the lane markings. */
 function groundTexture(): THREE.CanvasTexture {
   const S = 512;
@@ -293,17 +299,15 @@ export function buildCity(night: NightParts): City {
   group.add(street);
   const r = rng(20260927);
 
-  // The ground: every block and street, repeated out to the haze.
-  const size = PERIOD * 24;
-  const groundGeo = new THREE.PlaneGeometry(size, size);
-  groundGeo.rotateX(-Math.PI / 2);
+  // The ground: every block and street, out to the ring road, and the island round it (world/ocean.ts).
+  const groundGeo = streetsGround();
   const uv = groundGeo.getAttribute('uv') as THREE.BufferAttribute;
   const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
   // Line the texture up with the streets: a road down its middle falls on x = STREET_X, z = STREET_Z.
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
   const ground = new THREE.Mesh(groundGeo, new THREE.MeshToonMaterial({ map: groundTexture(), gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }));
   ground.receiveShadow = false;
-  street.add(ground);
+  street.add(ground, buildIsland(night));
 
   // The blocks: parks now and then, and lots with a building on each, laid out once (shared/city.ts,
   // which the street's cars and the office's checks use too). How tall the buildings stand depends on
@@ -817,14 +821,15 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   const { lots, parks, gas } = cityLayout();
   const scape = cityStreetscape();
 
-  // The ground, pushed back a little so the garage's lots and the plaza, laid on top, always win.
-  const size = PERIOD * 24;
-  const groundGeo = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
+  // The ground, pushed back a little so the garage's lots and the plaza, laid on top, always win: the
+  // streets' square, out to the ring road's far sidewalk. Past that it's the island's (world/ocean.ts).
+  const groundGeo = streetsGround();
   const uv = groundGeo.getAttribute('uv') as THREE.BufferAttribute;
   const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
   const groundMat = new THREE.MeshToonMaterial({ map: streetTexture(), gradientMap: gradient, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
   group.add(new THREE.Mesh(groundGeo, groundMat));
+  group.add(buildIsland(night));
 
   // Walls: a material per paint, and the shop fronts' atlas.
   const paintMats = new Map<number, THREE.MeshToonMaterial>();
@@ -1000,14 +1005,11 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   // Parks: a lawn, a kerb of hedge all round, two paths, and the trees.
   for (const p of parks) {
-    const h = p.size / 2;
     soup.add(box, '#8fcf7a', p.x, 0.04, p.z, p.size, 0.08, p.size);
     soup.add(box, '#dcd2b8', p.x, 0.09, p.z, 2.4, 0.06, p.size);
     soup.add(box, '#dcd2b8', p.x, 0.09, p.z, p.size, 0.06, 2.4);
-    for (const s of [-1, 1]) {
-      soup.add(box, '#4ea657', p.x, 0.3, p.z + s * (h - 0.25), p.size, 0.6, 0.5);
-      soup.add(box, '#4ea657', p.x + s * (h - 0.25), 0.3, p.z, 0.5, 0.6, p.size);
-    }
+    // Open where the paths come out: you can drive in (shared/city.ts parkHedges, which are solid).
+    for (const a of parkHedges(p)) soup.add(box, '#4ea657', (a.minX + a.maxX) / 2, 0.3, (a.minZ + a.maxZ) / 2, a.maxX - a.minX, 0.6, a.maxZ - a.minZ);
     for (const t of p.trees) tree(t.x, t.z, t.s, t.tone);
   }
 

@@ -284,8 +284,9 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
   const city = buildStreetCity(night);
   city.position.y = G - 0.03;
   group.add(city);
-  // What you stand on anywhere out there, the lot and the road and the grass alike.
-  colliders.push({ minX: -200, maxX: 200, minZ: -200, maxZ: 200, bottom: G - 1, top: G });
+  // What you stand on anywhere out there, the lot and the road and the grass alike, out over the
+  // island's beach (walk into the sea and you're put back on it: main.ts).
+  colliders.push({ minX: -700, maxX: 700, minZ: -700, maxZ: 700, bottom: G - 1, top: G });
 
   // The lot in front of the garage, out to the sidewalk, and the one down its east side.
   for (const [b, y] of [

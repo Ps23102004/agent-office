@@ -1,5 +1,5 @@
 import { FLOOR, ROAD, WALL_T } from './layout.js';
-import { cityPaved } from './city.js';
+import { surfaceAt, type Surface } from './city.js';
 
 // The cars and bikes in the garage, which anyone can drive: where they're parked, where you can
 // take them (the garage, the lots round it and the street), and the arcade physics a driver's own
@@ -165,19 +165,37 @@ export function leanAngle(p: CarPose, kind: CarKind): number {
   return SPECS[kind].width < 1 ? clamp(Math.atan(p.speed * p.speed * Math.tan(p.steer) / (SPECS[kind].wheelbase * TIRES.gravity)), -0.55, 0.55) : 0;
 }
 
-/** The car `dt` seconds on: tires push across the body and turn it about its middle. No world state. */
-export function drive(p: CarPose, pedals: Pedals, dt: number, kind: CarKind = 'lambo'): CarPose {
+/**
+ * What the ground does to the tires (shared/city.ts surfaceAt): how much of their grip they keep, how
+ * hard it drags at the wheels (m/s², on top of rolling to a stop), and how much of top speed you can
+ * get to on it. Grass is slippery, sand bogs you down, and the sea very nearly stops you.
+ */
+export const GROUND: Record<Surface, { grip: number; drag: number; top: number }> = {
+  road: { grip: 1, drag: 0, top: 1 },
+  walk: { grip: 1, drag: 0, top: 1 },
+  grass: { grip: 0.62, drag: 1.2, top: 0.7 },
+  sand: { grip: 0.78, drag: 3.2, top: 0.45 },
+  water: { grip: 0.3, drag: 9, top: 0.15 },
+};
+
+/**
+ * The car `dt` seconds on: tires push across the body and turn it about its middle, on `surface`
+ * (a road, unless said). No world state: the caller asks surfaceAt where the car is.
+ */
+export function drive(p: CarPose, pedals: Pedals, dt: number, kind: CarKind = 'lambo', surface: Surface = 'road'): CarPose {
   if (!Number.isFinite(dt) || dt <= 0) return { ...p };
   // Also keep callers outside Driver stable when they give us a whole frame at once.
   const n = Math.ceil(dt / DRIVE_STEP);
   const h = dt / n;
   let next = p;
-  for (let i = 0; i < n; i++) next = tireStep(next, pedals, h, kind);
+  for (let i = 0; i < n; i++) next = tireStep(next, pedals, h, kind, GROUND[surface] ?? GROUND.road);
   return next;
 }
 
-function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPose {
+function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground: (typeof GROUND)[Surface]): CarPose {
   const spec = SPECS[kind];
+  const grip = spec.grip * ground.grip;
+  const top = spec.top * ground.top;
   const bike = spec.width < 1;
   const want = clamp(pedals.turn, -1, 1) * steerLimit(p.speed);
   const steer = p.steer + clamp(want - p.steer, -DRIVE.steerRate * dt, DRIVE.steerRate * dt);
@@ -186,21 +204,28 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPos
   const toward = (target: number, rate: number) => (v += clamp(target - v, -rate * dt, rate * dt));
   const gas = clamp(pedals.gas, -1, 1);
   // A car's handbrake locks only the rear wheels: it slows you less, and lets the tail come round.
-  if (pedals.brake) toward(0, bike ? DRIVE.brake : DRIVE.brake * 0.5);
+  // Brakes bite as hard as the ground lets the tires.
+  const brake = DRIVE.brake * Math.min(1, ground.grip * 1.25);
+  if (pedals.brake) toward(0, bike ? brake : brake * 0.5);
   else if (gas > 0) {
-    if (v < 0) toward(0, DRIVE.brake);
-    else v = Math.min(spec.top, v + spec.accel * gas * dt);
+    if (v < 0) toward(0, brake);
+    else if (v < top) v = Math.min(top, v + spec.accel * gas * dt);
   } else if (gas < 0) {
-    if (v > 0) toward(0, DRIVE.brake);
-    else v = Math.max(-spec.reverse, v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
+    if (v > 0) toward(0, brake);
+    else v = Math.max(-spec.reverse * Math.max(0.5, ground.top), v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
   } else toward(0, kind === 'bicycle' ? 0.65 : kind === 'motorbike' ? 2 : DRIVE.coast);
+  // Off the road: the ground drags at the wheels, and bogs you down to what it lets you do.
+  if (ground.drag) {
+    toward(0, ground.drag);
+    if (Math.abs(v) > top) toward(Math.sign(v) * top, 3 + ground.drag);
+  }
 
   let yaw = p.yaw ?? 0;
   let slip = p.slip ?? 0;
   if (bike || Math.abs(v) < 3) {
     // At walking speed the tires settle before another step: no jitter, and no sideways bikes.
     // No sharper than the tires can hold: sideways, v × yaw is at most grip × g.
-    const most = (spec.grip * TIRES.gravity) / Math.max(1, Math.abs(v));
+    const most = (grip * TIRES.gravity) / Math.max(1, Math.abs(v));
     const target = clamp((v * Math.tan(steer)) / spec.wheelbase, -most, most);
     yaw += (target - yaw) * (1 - Math.exp(-dt * 18));
     slip = bike ? 0 : slip * Math.exp(-dt * 12);
@@ -213,8 +238,8 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPos
     const rearLoad = weight - frontLoad;
     const frontAngle = Math.atan2(slip + axle * yaw, Math.abs(v)) - steer * Math.sign(v);
     const rearAngle = Math.atan2(slip - axle * yaw, Math.abs(v));
-    const frontGrip = spec.grip * frontLoad;
-    const rearGrip = spec.grip * rearLoad * (pedals.brake ? TIRES.rearBrakeGrip : 1);
+    const frontGrip = grip * frontLoad;
+    const rearGrip = grip * rearLoad * (pedals.brake ? TIRES.rearBrakeGrip : 1);
     const front = clamp(-frontAngle * spec.mass * TIRES.stiffness, -frontGrip, frontGrip);
     const rear = clamp(-rearAngle * spec.mass * TIRES.stiffness, -rearGrip, rearGrip);
     const inertia = spec.mass * (spec.length ** 2 + spec.width ** 2) / 12 * TIRES.inertia;
@@ -254,12 +279,15 @@ export function carPoint(p: { x: number; z: number; rotY: number }, lx: number, 
   return { x: p.x + lx * c + lz * s, z: p.z - lx * s + lz * c };
 }
 
-/** Whether (x, z) is somewhere a car can be. */
+/**
+ * Whether (x, z) is somewhere a car can be: the garage and its lots, and anywhere on the island,
+ * off-road included (what stands in the way is citySolids'). Not out in the sea.
+ */
 export function paved(x: number, z: number): boolean {
-  return PAVEMENT.some((b) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) || cityPaved(x, z);
+  return PAVEMENT.some((b) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) || surfaceAt(x, z) !== 'water';
 }
 
-/** Whether the whole car is on the pavement: its corners, and halfway along each side. */
+/** Whether the whole car is on land: its corners, and halfway along each side. */
 export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarKind = 'lambo'): boolean {
   const w = SPECS[kind].width / 2;
   const l = SPECS[kind].length / 2;
@@ -299,9 +327,11 @@ export function overlaps(p: { x: number; z: number; rotY: number }, b: Box, kind
   return true;
 }
 
-/** Whether the car can be at `p`: on the pavement, clear of all of `solids`. */
+/**
+ * Whether the car can be at `p`: clear of all of `solids`. Nothing invisible stops it: it can roll on
+ * into the sea (the driver's page sees it go under: client/driving.ts).
+ */
 export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>, kind: CarKind = 'lambo'): boolean {
-  if (!onPavement(p, kind)) return false;
   for (const b of solids) if (overlaps(p, b, kind)) return false;
   return true;
 }

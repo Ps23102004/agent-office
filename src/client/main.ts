@@ -35,6 +35,9 @@ import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
 import { CARS, SPECS, carPoint, seatHips, type CarSeat } from '../shared/garage';
 import { Smoke } from './world/smoke';
+// W1 island: splashes in the sea, and where you come back out of it.
+import { Splashes } from './world/ocean';
+import { shoreRespawn, surfaceAt } from '../shared/city';
 import { HAZE_MAX, Sky, describeSky } from './world/sky';
 import { Laptop } from './world/laptop';
 import { BoardTexture, QueueBoardTexture, ServicesBoardTexture } from './world/boards';
@@ -380,6 +383,13 @@ const driver = new Driver(player, office.cars, {
     if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 15));
   },
   traffic: (x, z, reach) => (upTop ? [] : office.life.obstacles(x, z, reach).map((o) => ({ ...o.box, vx: o.vx, vz: o.vz, mass: 1600 }))),
+  // W1 island: driven into the sea.
+  splash: (at, speed) => {
+    const size = 1.5 + Math.min(2, speed / 8);
+    splashes.burst(at.x, player.street - 0.3, at.z, size);
+    sound.splash({ x: at.x, y: player.street, z: at.z }, size);
+  },
+  fade: (on) => fade(on),
 });
 const telescope = new TelescopeView(
   camera,
@@ -415,6 +425,11 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 // Cigarette smoke, from anyone on a smoke break.
 const smoke = new Smoke();
 scene.add(smoke.group);
+// W1 island: water thrown up where a car or someone on foot goes into the sea (world/ocean.ts).
+const splashes = new Splashes();
+scene.add(splashes.points);
+/** W1 island: when you walked into the sea (ms), while you're being put back up the beach. */
+let wadedAt = 0;
 const puff = (kind: 'wisp' | 'exhale', at: THREE.Vector3, dir: THREE.Vector3) => (kind === 'wisp' ? smoke.wisp(at) : smoke.exhale(at, dir));
 const camLocal = new THREE.Vector3();
 // In first person yours comes off the cigarette in your hand and out in front of the camera.
@@ -4630,6 +4645,19 @@ function frame(ts?: number) {
       if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.7, hit / 12));
     }
   }
+  // W1 island: walked off the beach into the sea — a splash, and back up the beach, facing inland.
+  if (inOffice() && !upTop && !driver.active && !trip && !wadedAt && Math.abs(player.pos.y - player.street) < 0.5 && surfaceAt(player.pos.x, player.pos.z) === 'water') {
+    wadedAt = now;
+    const { x, z } = player.pos;
+    splashes.burst(x, player.street - 0.3, z, 1);
+    sound.splash({ x, y: player.street, z }, 1);
+    fade(true);
+    setTimeout(() => {
+      if (!driver.active && !upTop && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
+      fade(false);
+      wadedAt = 0;
+    }, 700);
+  }
   // Walked into a pole's hole: you grab the pole on your way down it.
   const hole = inOffice() && office.stack.polesGoDown() ? office.stack.poles().find((s) => Math.hypot(player.pos.x - s.x, player.pos.z - s.z) < POLE.hole - 0.15) : undefined;
   if (hole && !climber.active && !trip && !player.seat && player.enabled && player.pos.y > -1.35 && player.pos.y < 0.6) climber.slide(hole);
@@ -4790,6 +4818,7 @@ function frame(ts?: number) {
   }
   checkSmokeBreak(now);
   smoke.update(dt, camera);
+  splashes.update(dt);
   confetti.update(dt);
   hanger.update();
   sky.update(dt, t, camera);

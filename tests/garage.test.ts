@@ -72,21 +72,20 @@ test('it turns tighter slowly than flat out, so it never spins at speed', () => 
   assert.ok(Math.abs(run(p, { gas: 1, turn: 1, brake: false }, 1).steer - steerLimit(DRIVE.top)) < 0.05);
 });
 
-test('you can drive out of the garage, across the lot and down the street, but not onto the grass', () => {
+test('you can drive out of the garage, across the lot, down the street and off-road, but not out to sea', () => {
   // A Ferrari backed in facing the street drives straight out onto the road.
   const ferrari = CARS.find((c) => c.kind === 'ferrari')!;
   for (let z = ferrari.z; z <= (ROAD.minZ + ROAD.maxZ) / 2; z += 0.5) assert.ok(onPavement({ ...ferrari, z }), `z ${z}`);
-  // Turned along the road, both ways as far as the street goes.
+  // Turned along the road, both ways, and on across the city.
   const road = (ROAD.minZ + ROAD.maxZ) / 2;
   assert.ok(onPavement({ x: 80, z: road, rotY: Math.PI / 2 }));
   assert.ok(onPavement({ x: -80, z: road, rotY: -Math.PI / 2 }));
-  assert.ok(onPavement({ x: 95, z: road, rotY: Math.PI / 2 }), 'the city carries the street on');
-  assert.ok(!onPavement({ x: 400, z: road, rotY: Math.PI / 2 }), 'but not off the end of the city');
-  assert.ok(!onPavement({ x: -40, z: 18, rotY: 0 }), 'the lawn beside the lot');
-  assert.ok(!onPavement({ x: 0, z: FLOOR.minZ - 1, rotY: Math.PI / 2 }), 'through the back wall');
-  assert.ok(paved(0, ROAD.maxZ + 1.5), 'the far sidewalk');
-  assert.ok(!paved(0, ROAD.maxZ + 8), 'the lot across the street');
-  // Nothing sticks out of a paved patch where two meet a corner the car could cut.
+  assert.ok(onPavement({ x: 300, z: road, rotY: Math.PI / 2 }), 'out to the ring road');
+  assert.ok(onPavement({ x: -40, z: 18, rotY: 0 }), 'the lawn beside the lot: off-road is fine');
+  assert.ok(paved(0, ROAD.maxZ + 8), 'the lot across the street');
+  assert.ok(!paved(0, -600) && !onPavement({ x: 700, z: road, rotY: Math.PI / 2 }), 'but not out in the sea');
+  // Nothing invisible in the way: only what's solid stops a car.
+  assert.ok(carFits({ x: 0, z: -600, rotY: 0 }, []), 'it can roll on into the water (and goes under)');
   assert.ok(PAVEMENT.every((b) => b.minX < b.maxX && b.minZ < b.maxZ));
 });
 
@@ -116,7 +115,9 @@ test('the garage: one driver and one passenger a car, and only the driver moves 
   assert.ok(!g.drive('bob', 1, pose), "the passenger doesn't steer");
   assert.deepEqual(g.drive('ann', 1, pose), { ...pose, slip: 0 });
   assert.deepEqual({ ...g.state()[1], driver: undefined, passenger: undefined }, { ...pose, slip: 0, driver: undefined, passenger: undefined });
-  assert.ok(!g.drive('ann', 1, { ...pose, x: -60 }), 'not off onto the grass');
+  assert.ok(g.drive('ann', 1, { ...pose, x: -60 }), 'off onto the grass is fine');
+  assert.ok(!g.drive('ann', 1, { ...pose, x: 0, z: -600 }), 'but not out in the sea');
+  g.drive('ann', 1, pose);
   assert.ok(!g.drive('ann', 1, { ...pose, speed: Number.NaN }), 'nor any nonsense');
   assert.equal(g.drive('ann', 1, { ...pose, speed: 999 })?.speed, DRIVE.top, 'no faster than a car goes');
   assert.ok(!g.enter('ann', 1, 'bogus' as never));
