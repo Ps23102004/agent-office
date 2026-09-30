@@ -6,7 +6,8 @@ import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { Fleet } from './cars';
 import { mergeByMaterial, mergeColored, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
-import { ART_COUNT, blinds, blobShadows, onWallAt, wallArt, type ArtItem, type Blob, type BlindItem } from './detail';
+import { ART_COUNT, blinds, blobShadows, onWallAt, setShadowFloors, userFrames, wallArt, type ArtItem, type Blob, type BlindItem } from './detail';
+import { officeClock } from './sky';
 import { palette, piece } from './models';
 import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
@@ -1832,6 +1833,7 @@ export function buildOffice(): Office {
   fixture('east', loftZ, LOFT.y + 0.5, 2.4, 1);
   fixture('south', LOFT.maxX - 3, LOFT.y + 1.9, 2.6, 0.6);
 
+  setShadowFloors(colliders);
   // Soft contact shadows under the furniture, in one mesh (the sun's shadow map leaves the small pieces out).
   const spots: Blob[] = [];
   for (const d of DESKS) {
@@ -1843,6 +1845,7 @@ export function buildOffice(): Office {
 
   // Pictures on the walls, wherever there's room: the frames are one mesh and the paintings (all on one sheet) another.
   const art: ArtItem[] = [];
+  const artRects0: WallRect[] = [];
   const taken: WallRect[] = [...fixtures];
   const clear = (r: WallRect) => taken.every((f) => f.wall !== r.wall || !overlaps(r, f, 0.35));
   const skipOpening = (o: Opening) => taken.push({ wall: o.wall, u0: o.u - o.width / 2, u1: o.u + o.width / 2, y0: o.y0, y1: o.y1 });
@@ -1861,6 +1864,7 @@ export function buildOffice(): Office {
         if (wall === 'east' && r.u1 > LOFT.minZ - 0.5) continue;
         if (wallTop(wall, r.u0) < r.y1 + 0.3 || wallTop(wall, r.u1) < r.y1 + 0.3 || !clear(r)) continue;
         taken.push(r);
+        artRects0.push(r);
         fixtures.push(r);
         const pose = wallPose(wall, u, y);
         art.push({ x: pose.x, y, z: pose.z, rotY: pose.rotY, w, h, art: n % ART_COUNT, frame: frames[(n * 5) % frames.length] });
@@ -1868,7 +1872,19 @@ export function buildOffice(): Office {
       }
     }
   }
-  group.add(wallArt(art));
+  // What people have hung wins: a painting that's under one of their frames comes down, whenever the gallery changes.
+  const artRects = art.map((item, i) => ({ item, rect: artRects0[i] }));
+  let artMesh: THREE.Group | null = null;
+  const showArt = () => {
+    if (artMesh) {
+      group.remove(artMesh);
+      artMesh.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+    }
+    artMesh = wallArt(artRects.filter(({ rect }) => userFrames.rects.every((f) => f.wall !== rect.wall || !overlaps(rect, f, 0.05))).map((a) => a.item));
+    group.add(artMesh);
+  };
+  userFrames.listeners.add(showArt);
+  showArt();
 
   // A wall clock, with the time on it.
   const clock = new THREE.Group();
@@ -1908,9 +1924,10 @@ export function buildOffice(): Office {
   const minuteHand = hand(0.32, 0.02);
   group.add(clock);
   const setClock = () => {
-    const d = new Date();
-    minuteHand.rotation.z = -((d.getMinutes() + d.getSeconds() / 60) / 60) * Math.PI * 2;
-    hourHand.rotation.z = -(((d.getHours() % 12) + d.getMinutes() / 60) / 12) * Math.PI * 2;
+    // The office's time, whatever the viewer's clock says.
+    const d = new Date(Date.now() + officeClock.utcOffset * 60_000);
+    minuteHand.rotation.z = -((d.getUTCMinutes() + d.getUTCSeconds() / 60) / 60) * Math.PI * 2;
+    hourHand.rotation.z = -(((d.getUTCHours() % 12) + d.getUTCMinutes() / 60) / 12) * Math.PI * 2;
   };
   setClock();
   let clockAt = 0;

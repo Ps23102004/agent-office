@@ -350,6 +350,9 @@ function moonTexture(): THREE.CanvasTexture {
 /** How strong the sun and the sky's light are on a clear day, which is what the lamps make up for. */
 const FULL_DAY = 1.5 + 0.5 + 0.6 * 2.2;
 
+/** The office's clock's offset from UTC (minutes), for the wall clock: the server's word once it has spoken. */
+export const officeClock = { utcOffset: -new Date().getTimezoneOffset() };
+
 export interface SkyLights {
   sun: THREE.DirectionalLight;
   hemi: THREE.HemisphereLight;
@@ -525,6 +528,7 @@ export class Sky {
   set(state: SkyState) {
     if (!this.heard || state.lat !== this.state.lat || state.lon !== this.state.lon) this.snap = true;
     this.state = state;
+    officeClock.utcOffset = state.utcOffset;
     this.heard = true;
   }
 
