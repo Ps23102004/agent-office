@@ -218,6 +218,29 @@ function paintPlanks(c: HTMLCanvasElement, p: FloorPalette) {
     g.fillStyle = p.seam;
     g.fillRect(0, row * 64, 512, 3);
   }
+  // Wood grain and a little tone difference from plank to plank, from a fixed sequence so every
+  // floor's boards look the same each time. Painted once into the texture, so it costs nothing to draw.
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let row = 0; row < 8; row++) {
+    for (let col = -1; col < 3; col++) {
+      const x = col * 256 + (row % 2) * 128;
+      g.fillStyle = rnd() < 0.5 ? `rgba(255, 244, 220, ${0.05 + rnd() * 0.07})` : `rgba(70, 40, 20, ${0.03 + rnd() * 0.06})`;
+      g.fillRect(x + 2, row * 64 + 2, 252, 60);
+      g.strokeStyle = 'rgba(90, 55, 25, 0.13)';
+      g.lineWidth = 1;
+      for (let i = 0; i < 4; i++) {
+        const y = row * 64 + 8 + rnd() * 48;
+        g.beginPath();
+        g.moveTo(x + 4, y);
+        g.bezierCurveTo(x + 80, y + (rnd() - 0.5) * 6, x + 170, y + (rnd() - 0.5) * 6, x + 250, y + (rnd() - 0.5) * 3);
+        g.stroke();
+      }
+    }
+    // A lit edge under each seam, so the boards read as boards.
+    g.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    g.fillRect(0, row * 64 + 3, 512, 1);
+  }
 }
 
 function floorTexture(width = FLOOR.maxX - FLOOR.minX, depth = FLOOR.maxZ - FLOOR.minZ): THREE.CanvasTexture {
@@ -1140,6 +1163,11 @@ export function buildDesk(def: DeskDef, index: number, trimMat: THREE.Material):
     books.position.set(width / 2 - 0.26, height, -0.3);
     group.add(books);
   }
+
+  // Every desk gets a notepad at its own angle, so no two look stamped out.
+  const pad = mesh(box(0.2, 0.012, 0.27), toon('#fff7d6'), -0.72, height + 0.006, 0.28, false);
+  pad.rotation.y = 0.35 * Math.sin(index * 2.3);
+  group.add(pad);
 
   const laptopAnchor = new THREE.Object3D();
   laptopAnchor.position.set(0, height, -0.06);

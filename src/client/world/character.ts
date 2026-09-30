@@ -329,6 +329,11 @@ export class Person {
   private head: THREE.Group;
   private smile: THREE.Mesh;
   private mouth: THREE.Mesh;
+  /** The eyes and their glints, squashed shut on a blink. */
+  private lids: THREE.Mesh[] = [];
+  private blinkIn = 1 + Math.random() * 3;
+  /** Where the head is turned while they stand around, and where it's easing to. */
+  private glance = { at: 0, to: 0, next: 2 + Math.random() * 3 };
   private voiceLevel = 0;
   /** 0 = lips together, 1 = wide open. Follows the voice's loudness. */
   private mouthOpen = 0;
@@ -423,7 +428,16 @@ export class Person {
     head.add(this.hair);
     this.buildHair();
     for (const sx of [-1, 1]) {
-      head.add(mesh(new THREE.SphereGeometry(0.055, 10, 8), ink, sx * 0.12, 0.02, 0.3, false));
+      const eye = mesh(new THREE.SphereGeometry(0.055, 10, 8), ink, sx * 0.12, 0.02, 0.3, false);
+      head.add(eye);
+      // A glint in each eye and a brow over it: they're what makes a face look back at you.
+      const glint = mesh(new THREE.SphereGeometry(0.017, 6, 5), toon('#ffffff'), sx * 0.12 + 0.018, 0.045, 0.35, false);
+      head.add(glint);
+      this.lids.push(eye, glint);
+      const brow = mesh(new THREE.CapsuleGeometry(0.012, 0.06, 3, 5), ink, sx * 0.12, 0.115, 0.315, false);
+      brow.rotation.z = Math.PI / 2 - sx * 0.18;
+      brow.rotation.x = -0.25;
+      head.add(brow);
       head.add(mesh(new THREE.SphereGeometry(0.05, 10, 8), toon('#ff9f9f'), sx * 0.2, -0.08, 0.27, false));
     }
     const smile = (this.smile = mesh(new THREE.TorusGeometry(0.06, 0.015, 6, 12, Math.PI), ink, 0, -0.08, 0.32, false));
@@ -449,7 +463,19 @@ export class Person {
     this.legR = limb(0.22, 0.1, pants, 0.12, HIPS);
     this.armL = limb(0.24, 0.08, this.shirt, -0.33, 0.9);
     this.armR = limb(0.24, 0.08, this.shirt, 0.33, 0.9);
-    for (const arm of [this.armL, this.armR]) arm.add(mesh(new THREE.SphereGeometry(0.085, 12, 10), skin, 0, -0.38, 0));
+    for (const arm of [this.armL, this.armR]) {
+      arm.add(mesh(new THREE.SphereGeometry(0.085, 12, 10), skin, 0, -0.38, 0));
+      // A pale cuff at the wrist.
+      arm.add(mesh(new THREE.TorusGeometry(0.083, 0.02, 5, 12).rotateX(Math.PI / 2), toon('#f4f1ea'), 0, -0.3, 0, false));
+    }
+    // Shoes, so the legs don't just stop; and a belt where the shirt meets the trousers.
+    const shoe = toon('#2b2d42');
+    for (const leg of [this.legL, this.legR]) {
+      const s = mesh(new THREE.SphereGeometry(0.1, 10, 8), shoe, 0, -0.36, 0.04, false);
+      s.scale.set(1.05, 0.55, 1.5);
+      leg.add(s);
+    }
+    this.body.add(mesh(new THREE.TorusGeometry(0.262, 0.018, 5, 20).rotateX(Math.PI / 2), toon('#5c4a3a'), 0, 0.61, 0, false));
     // Forward is +z, so the character's left arm is the one on +x. The handle faces the hand.
     const cup = (this.cup = coffeeMug(1.4));
     cup.position.set(0.02, -0.08, 0.1);
@@ -1186,6 +1212,21 @@ export class Person {
     this.head.rotation.x = -this.mouthOpen * 0.08 + (this.book ? 0.32 : 0);
     this.head.rotation.y = this.head.rotation.z = 0;
     this.body.rotation.y = this.body.rotation.z = 0;
+    this.blinkIn -= dt;
+    const blinking = this.blinkIn < 0.12 && this.blinkIn > 0;
+    if (this.blinkIn < 0) this.blinkIn = 2 + Math.random() * 4;
+    for (const l of this.lids) l.scale.y = blinking ? 0.1 : 1;
+    // Standing around they breathe, and look about now and then; walking or sitting, they don't.
+    const still = !moving && !airborne && !sit && !this.book ? 1 : 0;
+    const g = this.glance;
+    g.next -= dt;
+    if (g.next < 0) {
+      g.to = Math.random() < 0.7 ? (Math.random() - 0.5) * 0.9 : 0;
+      g.next = 2 + Math.random() * 4;
+    }
+    g.at += (g.to - g.at) * Math.min(1, dt * 3);
+    this.head.rotation.y = g.at * still;
+    this.body.scale.y = 1 + Math.sin(t * 2.2) * 0.012 * still;
     if (this.emoting) this.emoteStep(dt, moving || airborne ? 0 : 1 - sit);
     if (this.golf && !sit && !airborne) this.golfStep(dt);
     if (this.oche && !sit) this.ocheStep(dt);
