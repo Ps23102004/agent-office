@@ -367,7 +367,7 @@ export function buildBarGames(night: NightParts): BarGamesView {
     const tex = canvasTexture(512, Math.round((512 * h) / w), () => {});
     const g = new THREE.Group();
     g.add(mesh(new THREE.BoxGeometry(w + 0.08, h + 0.08, 0.03), trim, 0, 0, 0.015));
-    const face = mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex }), 0, 0, 0.032, false);
+    const face = mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }), 0, 0, 0.032, false);
     (face.material as THREE.Material).userData.outlineParameters = { visible: false };
     g.add(face);
     return { g, tex };

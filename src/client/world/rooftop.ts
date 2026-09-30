@@ -351,7 +351,7 @@ export function buildRooftop(night: NightParts, floors: number): Rooftop {
     g.fillStyle = '#ffe3fb';
     g.fillText('DJ MERGE CONFLICT', 256, 66);
   });
-  const plateMat = new THREE.MeshBasicMaterial({ map: nameplate });
+  const plateMat = new THREE.MeshBasicMaterial({ map: nameplate, toneMapped: false });
   plateMat.toneMapped = false;
   table.add(mesh(new THREE.PlaneGeometry(3.2, 0.8), plateMat, DJ_BOOTH.x, tableY + TH / 2, tz + 0.352, false));
   const jog = new THREE.MeshBasicMaterial({ color: '#4cc9f0' });
@@ -396,7 +396,7 @@ export function buildRooftop(night: NightParts, floors: number): Rooftop {
 
   // The LED wall behind the DJ.
   const led = canvasTexture(512, 256);
-  const ledMat = new THREE.MeshBasicMaterial({ map: led });
+  const ledMat = new THREE.MeshBasicMaterial({ map: led, toneMapped: false });
   ledMat.toneMapped = false;
   const ledW = 8;
   const ledH = 4;
@@ -582,7 +582,7 @@ export function buildRooftop(night: NightParts, floors: number): Rooftop {
       g.fillText('🍸 SKY BAR', 384, 100);
     }
   });
-  const neonMat = new THREE.MeshBasicMaterial({ map: neon, transparent: true, depthWrite: false });
+  const neonMat = new THREE.MeshBasicMaterial({ map: neon, transparent: true, depthWrite: false, toneMapped: false });
   neonMat.toneMapped = false;
   const sign = mesh(new THREE.PlaneGeometry(3.6, 0.9).rotateY(-Math.PI / 2), neonMat, p0.x - 0.1, roofY - 0.4, bz, false);
   group.add(sign);

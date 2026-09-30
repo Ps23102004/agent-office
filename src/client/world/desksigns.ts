@@ -116,7 +116,7 @@ export function buildDeskSigns(): DeskSigns {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
-    const face = new THREE.Mesh(new THREE.PlaneGeometry(SIGN.width - 0.06, SIGN.height - 0.06), new THREE.MeshBasicMaterial({ map: tex }));
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(SIGN.width - 0.06, SIGN.height - 0.06), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
     face.position.set(0, SIGN.y, z + SIGN.depth / 2 + 0.003);
     root.add(face);
     if (back) {

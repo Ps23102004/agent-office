@@ -5,12 +5,14 @@ import type { CarriedIssue, Theme, WorkerAction, WorkerStatus, WorkerTask } from
 import type { BarGame } from '../../shared/bargames';
 import type { Drink } from '../../shared/rooftop';
 import { isAsleep, type WorkerPr } from '../../shared/status';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HIPS } from '../player';
 import { axeModel, dartModel } from './bargames';
 import { OpenBook } from './book';
 import { HeldCard } from './card';
 import { GRIME, UNDEAD_SKIN, beard, beardColor, elfBoot, elfHat, elfWorker, grime, peasantGarb, santaHat, warlockHat, zombieWorker, type Beard, type PeasantGarb } from './costumes';
-import { cardSprite, disposeSprite, mesh, textSprite, toon, toonUnique } from './toon';
+import { followShadow } from './detail';
+import { cardSprite, disposeSprite, mesh, textSprite, toon, toonUnique, toonVertex } from './toon';
 
 export type Pose = 'stand' | 'walk' | 'sit' | 'type';
 
@@ -308,6 +310,30 @@ function undress(parts: THREE.Object3D[]) {
 }
 
 /** A chibi cartoon person — used for every human in the office. Forward is +z. */
+type Piece = [geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x?: number, y?: number, z?: number];
+
+/** Pieces made into one geometry, each in its own color: `color` is multiplied by the material's, so a piece a bit over 1 is a lighter shade of it. */
+function painted(pieces: Piece[]): THREE.BufferGeometry {
+  const geos = pieces.map(([geo, color, x = 0, y = 0, z = 0]) => {
+    const g = geo.index ? geo.toNonIndexed() : geo.clone();
+    g.deleteAttribute('uv');
+    g.translate(x, y, z);
+    const c = new THREE.Color(color);
+    const rgb = new Float32Array(g.attributes.position.count * 3);
+    for (let i = 0; i < rgb.length; i += 3) c.toArray(rgb, i);
+    g.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+    return g;
+  });
+  const out = mergeGeometries(geos)!;
+  for (const g of geos) g.dispose();
+  return out;
+}
+
+const PANTS = new THREE.Color('#3d405b');
+/** Trousers and shoes in one material (the colors are in the vertices), for both legs of everyone. */
+let legMat: THREE.MeshToonMaterial | null = null;
+const legs = () => (legMat ??= new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }));
+
 export class Person {
   readonly root = new THREE.Group();
   private body = new THREE.Group();
@@ -329,8 +355,10 @@ export class Person {
   private head: THREE.Group;
   private smile: THREE.Mesh;
   private mouth: THREE.Mesh;
-  /** The eyes and their glints, squashed shut on a blink. */
-  private lids: THREE.Mesh[] = [];
+  /** The eyes with their glints, squashed shut on a blink. */
+  private lids!: THREE.Mesh;
+  /** Seconds until the next stretch, and how far into one (-1: not stretching). */
+  private stretch = { next: 8 + Math.random() * 14, t: -1 };
   private blinkIn = 1 + Math.random() * 3;
   /** Where the head is turned while they stand around, and where it's easing to. */
   private glance = { at: 0, to: 0, next: 2 + Math.random() * 3 };
@@ -412,34 +440,44 @@ export class Person {
   ) {
     this.look = { ...look };
     this.shirt = toonUnique(color);
+    // The collar, cuffs and pocket are shades of it: they're painted in the vertices (see painted).
+    this.shirt.vertexColors = true;
     const skin = (this.skin = toonUnique(SKIN_TONES[look.skin]));
     this.hairMat = toonUnique(HAIR_COLORS[look.hair]);
     this.hairMat.side = THREE.DoubleSide;
-    const pants = toon('#3d405b');
     const ink = toon('#1d1d1d');
 
-    this.root.add(this.body);
+    this.root.add(this.body, followShadow(1));
     // Torso
-    this.body.add(mesh(new THREE.CapsuleGeometry(0.26, 0.28, 6, 12), this.shirt, 0, 0.72, 0));
+    this.body.add(
+      mesh(
+        painted([
+          [new THREE.CapsuleGeometry(0.26, 0.28, 6, 12), '#ffffff'],
+          // A collar round the neck, and a breast pocket.
+          [new THREE.TorusGeometry(0.19, 0.035, 5, 20).rotateX(Math.PI / 2), new THREE.Color(1.7, 1.7, 1.7), 0, 0.33, 0],
+          [new THREE.BoxGeometry(0.1, 0.11, 0.03), new THREE.Color(0.8, 0.8, 0.8), 0.11, 0.12, 0.255],
+        ]),
+        this.shirt,
+        0,
+        0.72,
+        0,
+      ),
+    );
     // Head
     const head = (this.head = new THREE.Group());
     head.position.y = 1.32;
     head.add(mesh(new THREE.SphereGeometry(0.34, 20, 16), skin));
     head.add(this.hair);
     this.buildHair();
+    // Eyes with a glint each, which blink together; and the brows and cheeks, which stay put.
+    const eyes: Piece[] = [];
+    const face: Piece[] = [];
     for (const sx of [-1, 1]) {
-      const eye = mesh(new THREE.SphereGeometry(0.055, 10, 8), ink, sx * 0.12, 0.02, 0.3, false);
-      head.add(eye);
-      // A glint in each eye and a brow over it: they're what makes a face look back at you.
-      const glint = mesh(new THREE.SphereGeometry(0.017, 6, 5), toon('#ffffff'), sx * 0.12 + 0.018, 0.045, 0.35, false);
-      head.add(glint);
-      this.lids.push(eye, glint);
-      const brow = mesh(new THREE.CapsuleGeometry(0.012, 0.06, 3, 5), ink, sx * 0.12, 0.115, 0.315, false);
-      brow.rotation.z = Math.PI / 2 - sx * 0.18;
-      brow.rotation.x = -0.25;
-      head.add(brow);
-      head.add(mesh(new THREE.SphereGeometry(0.05, 10, 8), toon('#ff9f9f'), sx * 0.2, -0.08, 0.27, false));
+      eyes.push([new THREE.SphereGeometry(0.055, 10, 8), '#1d1d1d', sx * 0.12, 0, 0], [new THREE.SphereGeometry(0.017, 6, 5), '#ffffff', sx * 0.12 + 0.018, 0.025, 0.05]);
+      face.push([new THREE.CapsuleGeometry(0.012, 0.06, 3, 5).rotateZ(Math.PI / 2 - sx * 0.18).rotateX(-0.25), '#1d1d1d', sx * 0.12, 0.115, 0.315], [new THREE.SphereGeometry(0.05, 10, 8), '#ff9f9f', sx * 0.2, -0.08, 0.27]);
     }
+    this.lids = mesh(painted(eyes), toonVertex(), 0, 0.02, 0.3, false);
+    head.add(this.lids, mesh(painted(face), toonVertex(), 0, 0, 0, false));
     const smile = (this.smile = mesh(new THREE.TorusGeometry(0.06, 0.015, 6, 12, Math.PI), ink, 0, -0.08, 0.32, false));
     smile.rotation.z = Math.PI;
     head.add(smile);
@@ -452,30 +490,32 @@ export class Person {
     head.add(this.mouth);
     this.body.add(head);
 
-    const limb = (len: number, r: number, mat: THREE.Material, x: number, y: number) => {
+    const limb = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number) => {
       const pivot = new THREE.Group();
       pivot.position.set(x, y, 0);
-      pivot.add(mesh(new THREE.CapsuleGeometry(r, len, 4, 8), mat, 0, -len / 2 - r / 2, 0));
+      pivot.add(mesh(geo, mat, 0, 0, 0));
       this.body.add(pivot);
       return pivot;
     };
-    this.legL = limb(0.22, 0.1, pants, -0.12, HIPS);
-    this.legR = limb(0.22, 0.1, pants, 0.12, HIPS);
-    this.armL = limb(0.24, 0.08, this.shirt, -0.33, 0.9);
-    this.armR = limb(0.24, 0.08, this.shirt, 0.33, 0.9);
-    for (const arm of [this.armL, this.armR]) {
-      arm.add(mesh(new THREE.SphereGeometry(0.085, 12, 10), skin, 0, -0.38, 0));
-      // A pale cuff at the wrist.
-      arm.add(mesh(new THREE.TorusGeometry(0.083, 0.02, 5, 12).rotateX(Math.PI / 2), toon('#f4f1ea'), 0, -0.3, 0, false));
-    }
-    // Shoes, so the legs don't just stop; and a belt where the shirt meets the trousers.
-    const shoe = toon('#2b2d42');
-    for (const leg of [this.legL, this.legR]) {
-      const s = mesh(new THREE.SphereGeometry(0.1, 10, 8), shoe, 0, -0.36, 0.04, false);
-      s.scale.set(1.05, 0.55, 1.5);
-      leg.add(s);
-    }
-    this.body.add(mesh(new THREE.TorusGeometry(0.262, 0.018, 5, 20).rotateX(Math.PI / 2), toon('#5c4a3a'), 0, 0.61, 0, false));
+    // A leg is its trousers, a shoe and the sole under it.
+    const leg = () =>
+      painted([
+        [new THREE.CapsuleGeometry(0.1, 0.22, 4, 8), PANTS, 0, -0.16, 0],
+        [new THREE.SphereGeometry(0.1, 8, 6).scale(1.05, 0.55, 1.5), '#2b2d42', 0, -0.36, 0.04],
+        [new THREE.SphereGeometry(0.1, 8, 4).scale(1.1, 0.2, 1.55), '#f1ece2', 0, -0.405, 0.04],
+      ]);
+    // An arm is its sleeve, rolled at the elbow, and a pale cuff at the wrist.
+    const arm = () =>
+      painted([
+        [new THREE.CapsuleGeometry(0.08, 0.24, 4, 8), '#ffffff', 0, -0.18, 0],
+        [new THREE.TorusGeometry(0.084, 0.016, 5, 12).rotateX(Math.PI / 2), new THREE.Color(1.15, 1.15, 1.15), 0, -0.13, 0],
+        [new THREE.TorusGeometry(0.082, 0.016, 5, 12).rotateX(Math.PI / 2), new THREE.Color(1.7, 1.7, 1.7), 0, -0.3, 0],
+      ]);
+    this.legL = limb(leg(), legs(), -0.12, HIPS);
+    this.legR = limb(leg(), legs(), 0.12, HIPS);
+    this.armL = limb(arm(), this.shirt, -0.33, 0.9);
+    this.armR = limb(arm(), this.shirt, 0.33, 0.9);
+    for (const arm of [this.armL, this.armR]) arm.add(mesh(new THREE.SphereGeometry(0.085, 12, 10), skin, 0, -0.38, 0));
     // Forward is +z, so the character's left arm is the one on +x. The handle faces the hand.
     const cup = (this.cup = coffeeMug(1.4));
     cup.position.set(0.02, -0.08, 0.1);
@@ -1215,7 +1255,7 @@ export class Person {
     this.blinkIn -= dt;
     const blinking = this.blinkIn < 0.12 && this.blinkIn > 0;
     if (this.blinkIn < 0) this.blinkIn = 2 + Math.random() * 4;
-    for (const l of this.lids) l.scale.y = blinking ? 0.1 : 1;
+    this.lids.scale.y = blinking ? 0.1 : 1;
     // Standing around they breathe, and look about now and then; walking or sitting, they don't.
     const still = !moving && !airborne && !sit && !this.book ? 1 : 0;
     const g = this.glance;
@@ -1227,6 +1267,23 @@ export class Person {
     g.at += (g.to - g.at) * Math.min(1, dt * 3);
     this.head.rotation.y = g.at * still;
     this.body.scale.y = 1 + Math.sin(t * 2.2) * 0.012 * still;
+    // Now and then, with nothing else on their mind, a good stretch: arms up and out, leaning back.
+    const calm = still && !this.emoting && this.reachT < 0 && this.smokeT < 0 && !this.card.held && !this.ball && this.shootT < 0 && !this.golf && !this.oche && !this.grip && !this.mug.visible && !this.glass && !this.speaking;
+    const st = this.stretch;
+    if (!calm) st.t = -1;
+    else if (st.t < 0 && (st.next -= dt) < 0) st.t = 0;
+    if (st.t >= 0) {
+      st.t += dt;
+      const k = Math.sin(Math.PI * Math.min(st.t / 2, 1));
+      this.armL.rotation.set(-0.3 * k, 0, -2.6 * k);
+      this.armR.rotation.set(-0.3 * k, 0, 2.6 * k);
+      this.body.rotation.x = -0.1 * k;
+      this.head.rotation.x -= 0.25 * k;
+      if (st.t >= 2) {
+        st.t = -1;
+        st.next = 10 + Math.random() * 20;
+      }
+    }
     if (this.emoting) this.emoteStep(dt, moving || airborne ? 0 : 1 - sit);
     if (this.golf && !sit && !airborne) this.golfStep(dt);
     if (this.oche && !sit) this.ocheStep(dt);
@@ -1535,7 +1592,7 @@ export class Worker {
     const white = toon('#ffffff');
     const ink = toon('#1d1d1d');
 
-    this.root.add(this.body);
+    this.root.add(this.body, followShadow(0.95));
     // Bean-shaped body
     const bean = mesh(new THREE.CapsuleGeometry(0.28, 0.3, 8, 16), skin, 0, 0.55, 0);
     this.body.add(bean);

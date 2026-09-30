@@ -93,6 +93,9 @@ float skyInGarage( vec3 p ) {
   return 1.0 - smoothstep( 0.0, 3.0, length( max( p.xz - vec2( ${B.maxX.toFixed(3)}, ${B.maxZ.toFixed(3)} ), 0.0 ) ) );
 }
 
+// Under the office's pendant lamps (see buildOffice), the floor and desks are lit warmer at night than in the corners.
+const vec2 skyPendants[ 5 ] = vec2[ 5 ]( vec2( -10.5, -4.0 ), vec2( -1.5, -4.0 ), vec2( -10.5, 4.0 ), vec2( -1.5, 4.0 ), vec2( 13.0, 0.0 ) );
+
 vec3 skyLampsAt( vec3 p, vec3 n ) {
   vec3 sum = vec3( 0.0 );
   if ( any( lessThan( p, skyLampMin ) ) || any( greaterThan( p, skyLampMax ) ) ) return sum;
@@ -120,7 +123,9 @@ material.diffuseColor = mix( material.diffuseColor, vec3( 0.93, 0.96, 1.0 ), sky
 /** The lamps' light, added to what the sun and the sky give. */
 const LIGHT = /* glsl */ `
 if ( skyOn > 0.0 ) {
-  vec3 skyLight = skyIndoor * skyOffice * ( 0.65 + 0.35 * skyN.y ) + ( 1.0 - skyIndoor ) * ( skyGar * skyGarage + skyLampsAt( vSkyWorld, skyN ) );
+  float skyPool = 0.0;
+  for ( int i = 0; i < 5; i ++ ) skyPool = max( skyPool, smoothstep( 5.5, 0.6, length( vSkyWorld.xz - skyPendants[ i ] ) ) );
+  vec3 skyLight = skyIndoor * skyOffice * ( 0.65 + 0.35 * skyN.y ) * ( 0.62 + 0.6 * skyPool ) + ( 1.0 - skyIndoor ) * ( skyGar * skyGarage + skyLampsAt( vSkyWorld, skyN ) );
   reflectedLight.indirectDiffuse += skyLight * BRDF_Lambert( material.diffuseColor );
 }
 `;
@@ -459,7 +464,7 @@ export class Sky {
     starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
     this.stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: '#ffffff', size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false }));
     const disc = (r: number, color: string) => {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), new THREE.MeshBasicMaterial({ color, transparent: true, fog: false, depthWrite: false }));
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), new THREE.MeshBasicMaterial({ color, transparent: true, fog: false, depthWrite: false, toneMapped: false }));
       m.material.userData.outlineParameters = { visible: false };
       return m;
     };
