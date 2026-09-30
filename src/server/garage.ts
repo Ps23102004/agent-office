@@ -1,4 +1,4 @@
-import { DRIVE, parked, paved, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
+import { CARS, SPECS, DRIVE, parked, paved, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
 
 /** How often one person can honk, at most (ms). */
 const HONK_EVERY = 250;
@@ -31,7 +31,7 @@ export class Garage {
   /** `id` gets into `seat` of car `car`, out of wherever they were: only if it's free. Says whether anything changed. */
   enter(id: string, car: number, seat: CarSeat): boolean {
     const c = this.cars[car];
-    if (!c || (seat !== 'driver' && seat !== 'passenger') || c[seat]) return false;
+    if (!c || (seat !== 'driver' && seat !== 'passenger') || c[seat] || (seat === 'passenger' && SPECS[CARS[car].kind].seats < 2)) return false;
     this.leave(id);
     c[seat] = id;
     return true;
@@ -44,7 +44,7 @@ export class Garage {
     if (!at) return false;
     const c = this.cars[at.car];
     delete c[at.seat];
-    if (at.seat === 'driver') Object.assign(c, { speed: 0, steer: 0 });
+    if (at.seat === 'driver') Object.assign(c, { speed: 0, steer: 0, slip: 0 });
     return true;
   }
 
@@ -56,15 +56,18 @@ export class Garage {
     const c = this.cars[car];
     if (!c || c.driver !== id) return undefined;
     const { x, z, rotY, speed, steer } = pose;
-    if (![x, z, rotY, speed, steer].every(Number.isFinite) || !paved(x, z)) return undefined;
+    const slip = pose.slip ?? 0;
+    const spec = SPECS[CARS[car].kind];
+    if (![x, z, rotY, speed, steer, slip].every(Number.isFinite) || !paved(x, z)) return undefined;
     Object.assign(c, {
       x,
       z,
       rotY: Math.atan2(Math.sin(rotY), Math.cos(rotY)),
-      speed: Math.min(DRIVE.top, Math.max(-DRIVE.reverse, speed)),
+      speed: Math.min(spec.top, Math.max(-spec.reverse, speed)),
+      slip: spec.width < 1 ? 0 : Math.min(spec.top * 0.75, Math.max(-spec.top * 0.75, slip)),
       steer: Math.min(DRIVE.steer, Math.max(-DRIVE.steer, steer)),
     });
-    return { x: c.x, z: c.z, rotY: c.rotY, speed: c.speed, steer: c.steer };
+    return { x: c.x, z: c.z, rotY: c.rotY, speed: c.speed, steer: c.steer, slip: c.slip };
   }
 
   /** `id` leans on the horn: the car they're in, unless they only just did. */

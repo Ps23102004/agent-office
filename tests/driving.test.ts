@@ -40,8 +40,8 @@ function street(t: TestContext, solids: Collider[] = []) {
       win.dispatchEvent(e);
     }
   };
-  const frames = (n: number) => {
-    for (let i = 0; i < n; i++) player.update(1 / 60);
+  const frames = (n: number, dt = 1 / 60) => {
+    for (let i = 0; i < n; i++) player.update(dt);
   };
   return { fleet, player, driver, sent, bumps, keys, frames, car: () => fleet.cars[BLUE].pose };
 }
@@ -82,7 +82,7 @@ test('at an angle into a wall, the car slides along it rather than stopping dead
   s.frames(60);
   const car = s.car();
   assert.ok(car.x > 10 && car.speed > 10, `on along the wall (x ${car.x.toFixed(1)}, ${car.speed.toFixed(1)} m/s)`);
-  assert.ok(Math.abs(car.rotY - Math.PI / 2) < 0.05, 'turned to run along it');
+  assert.ok(Math.abs(car.rotY - Math.PI / 2) < 0.05, `turned to run along it (${car.rotY.toFixed(3)}, slip ${car.slip?.toFixed(3)})`);
   for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
     const c = carPoint(car, (sx * CAR.width) / 2, (sz * CAR.length) / 2);
     assert.ok(c.z >= wall.maxZ - 1e-6, 'not into it');
@@ -123,4 +123,37 @@ test("beside the driver, you ride along but don't drive", (t) => {
   s.frames(1);
   const seat = carPoint(s.car(), SEATS.passenger.x, SEATS.passenger.z);
   assert.ok(Math.hypot(s.player.pos.x - seat.x, s.player.pos.z - seat.z) < 1e-6);
+});
+
+
+test('the fixed physics steps agree at 30, 60 and 144 frames a second', (t) => {
+  const poses: CarPose[] = [];
+  for (const fps of [30, 60, 144]) {
+    const s = street(t);
+    s.driver.enter(BLUE, 'driver');
+    s.keys('KeyW');
+    s.frames(fps, 1 / fps);
+    poses.push({ ...s.car() });
+  }
+  for (const p of poses.slice(1)) {
+    assert.ok(Math.abs(p.x - poses[0].x) < 1e-10);
+    assert.ok(Math.abs(p.speed - poses[0].speed) < 1e-10);
+  }
+});
+
+test('a bicycle rides and gets out beside its saddle, with no passenger seat', (t) => {
+  const s = street(t);
+  const bicycle = 11;
+  s.fleet.place(bicycle, { x: 0, z: ROAD_Z, rotY: Math.PI / 2, speed: 0, steer: 0 });
+  s.driver.enter(bicycle, 'passenger');
+  assert.ok(!s.driver.active);
+  s.driver.enter(bicycle, 'driver');
+  s.keys('KeyW');
+  s.frames(120);
+  assert.ok(s.fleet.cars[bicycle].pose.x > 3);
+  assert.equal(s.fleet.cars[bicycle].pose.slip, 0);
+  assert.ok(s.driver.leave());
+  assert.equal(s.sent.at(-1)?.speed, 0);
+  assert.equal(s.sent.at(-1)?.slip, 0);
+  assert.ok(s.player.pos.z < s.fleet.cars[bicycle].pose.z - 0.8);
 });

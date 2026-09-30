@@ -928,6 +928,17 @@ export class Person {
     }
   }
 
+  /** On a bike: hands out on the bars, knees either side, leaning with it as you turn. */
+  ride(hips: number, lean: number, phase: number, pedaling: boolean) {
+    this.body.position.y = hips - HIPS;
+    this.body.rotation.set(0.18, 0, lean);
+    this.armL.rotation.set(-1.15, 0, -0.12);
+    this.armR.rotation.set(-1.15, 0, 0.12);
+    const pedal = pedaling ? Math.sin(phase) * 0.45 : 0;
+    this.legL.rotation.set(-0.35 + pedal, 0, -0.18);
+    this.legR.rotation.set(-0.35 - pedal, 0, 0.18);
+  }
+
   /** Sits down with the hips `hips` above the feet, on a couch or a chair, or gets up (null). */
   sit(hips: number | null) {
     this.hips = hips;
