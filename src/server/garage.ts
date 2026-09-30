@@ -50,7 +50,8 @@ export class Garage {
 
   /**
    * The driver of car `car` says where it's got to: where the office has it now, to pass on. Nothing
-   * from anyone else, or from off the pavement.
+   * from anyone else, or from out in the sea (anywhere on the island will do, off-road included; a car
+   * that went into the sea comes back as a jump to the road: shared/city.ts shoreRespawn).
    */
   drive(id: string, car: number, pose: CarPose): CarPose | undefined {
     const c = this.cars[car];

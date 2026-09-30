@@ -416,8 +416,10 @@ export function cityStreetscape(): Streetscape {
         const off = s * (ROAD_W / 2 + 0.6);
         const sx = STREET_X + k * PERIOD;
         const sz = STREET_Z + k * PERIOD;
-        if (Math.hypot(sx + off, a) < RADIUS) lamps.push({ x: sx + off, z: a, ax: -s, az: 0, hand: keepClear(sx + off, a) });
-        if (Math.hypot(a, sz + off) < RADIUS) lamps.push({ x: a, z: sz + off, ax: 0, az: -s, hand: keepClear(a, sz + off) });
+        // Not past the ring road (see GRID): that's grass, and then the beach.
+        const inGrid = (x: number, z: number) => x > GRID.minX && x < GRID.maxX && z > GRID.minZ && z < GRID.maxZ;
+        if (Math.hypot(sx + off, a) < RADIUS && inGrid(sx + off, a)) lamps.push({ x: sx + off, z: a, ax: -s, az: 0, hand: keepClear(sx + off, a) });
+        if (Math.hypot(a, sz + off) < RADIUS && inGrid(a, sz + off)) lamps.push({ x: a, z: sz + off, ax: 0, az: -s, hand: keepClear(a, sz + off) });
       }
     }
   }
@@ -504,15 +506,168 @@ const across = (v: number, line: number) => {
 };
 
 /**
- * Whether (x, z) is out on the city's streets or sidewalks, where a car can go (the garage and its
- * lots are garage.ts PAVEMENT): not on anyone's lot or in a park, and not out past RADIUS. The gas
- * station's forecourt counts.
+ * Whether (x, z) is out on the city's streets or sidewalks (the garage and its lots are garage.ts
+ * PAVEMENT): not on anyone's lot, in a park or out past the last street. The gas station's forecourt
+ * and the office's plaza count. A car can go further than this (see surfaceAt): this is what's paved.
  */
 export function cityPaved(x: number, z: number): boolean {
-  if (x * x + z * z > RADIUS * RADIUS) return false;
-  if (across(x, STREET_X) <= BAND || across(z, STREET_Z) <= BAND) return true;
+  const s = surfaceAt(x, z);
+  return s === 'road' || s === 'walk';
+}
+
+// ---- The island ----------------------------------------------------------------------------------
+
+/**
+ * The first and last street each way (the same streets street life drives: client/world/streetlife.ts
+ * crossRange). The outermost ones make a ring road round the whole city, with grass, then a beach,
+ * then the sea beyond it.
+ */
+const lineRange = (origin: number) => [origin + PERIOD * Math.ceil((-RADIUS - origin) / PERIOD), origin + PERIOD * Math.floor((RADIUS - origin) / PERIOD)] as const;
+const [GX0, GX1] = lineRange(STREET_X);
+const [GZ0, GZ1] = lineRange(STREET_Z);
+/** The streets' square, out to the ring road's outer sidewalk. */
+export const GRID: Area = { minX: GX0 - BAND, maxX: GX1 + BAND, minZ: GZ0 - BAND, maxZ: GZ1 + BAND };
+/** The island is a rounded square (a superellipse this big across its middle), wobbling a little. */
+const ISLAND = 390;
+const ROUND = 4;
+/** At least this much grass past the ring road, even at the corners. */
+const VERGE = 12;
+/** How wide the beach is, give or take its wobble. */
+const BEACH = 26;
+
+/** The coast's wobbles: the same every time (seeded), a few long ones and a few short. */
+const WOBBLE = (() => {
+  const r = rng(20261001);
+  return [2, 3, 5, 7, 11].map((k) => ({ k, a: (18 / k) * (0.6 + r() * 0.8), p: r() * Math.PI * 2 }));
+})();
+const SANDS = (() => {
+  const r = rng(20261002);
+  return [3, 4, 9].map((k) => ({ k, a: (9 / Math.sqrt(k)) * (0.6 + r() * 0.8), p: r() * Math.PI * 2 }));
+})();
+
+/** How far out, along the way (cos, sin) points from the middle, the grass ends and the sand starts. */
+function landAt(c: number, s: number, th: number): number {
+  const ac = Math.abs(c);
+  const as = Math.abs(s);
+  const round = ISLAND / (ac ** ROUND + as ** ROUND) ** (1 / ROUND);
+  let w = 0;
+  for (const o of WOBBLE) w += o.a * Math.sin(o.k * th + o.p);
+  // Never over the ring road: the streets' square along this way, and a verge of grass past it.
+  const edge = Math.min(ac > 1e-9 ? (c > 0 ? GRID.maxX : -GRID.minX) / ac : Infinity, as > 1e-9 ? (s > 0 ? GRID.maxZ : -GRID.minZ) / as : Infinity);
+  return Math.max(round + w, edge + VERGE);
+}
+
+function beachAt(th: number): number {
+  let w = BEACH;
+  for (const o of SANDS) w += o.a * Math.sin(o.k * th + o.p);
+  return Math.max(14, w);
+}
+
+/**
+ * The coast along angle `th` (radians, atan2(z, x)): how far out the grass ends (`land`) and the water
+ * starts (`shore`). Pure; the page that draws the island and the physics agree on it.
+ */
+export function coastAt(th: number): { land: number; shore: number } {
+  const land = landAt(Math.cos(th), Math.sin(th), th);
+  return { land, shore: land + beachAt(th) };
+}
+
+/** Everywhere inside this is land for sure (the coast is never nearer), so most asks skip the trigonometry. */
+const SURELY_LAND = Math.min(GRID.maxX, -GRID.minX, GRID.maxZ, -GRID.minZ) + VERGE - 1;
+
+/**
+ * The pier, off the beach at the bottom of the street x = STREET_X, out over the water to the south:
+ * boards you can walk and drive along (and drive off the end of).
+ */
+export const PIER = (() => {
+  const shore = coastAt(-Math.PI / 2).shore;
+  // Where the street's line meets the water, near enough (the coast barely bends over a few metres).
+  const th = Math.atan2(-shore, STREET_X);
+  const at = coastAt(th);
+  const to = -at.shore - 70;
+  // A rail down each side, from just before the water to the end (which is open).
+  return { x: STREET_X, width: 6, from: -at.land - 4, to, rails: [-at.shore + 2, to + 0.3] as const };
+})();
+
+/** The lighthouse, on a point of the beach off the north-east corner, near downtown: its footprint's middle and radius. */
+export const LIGHTHOUSE = (() => {
+  const th = -Math.PI / 4;
+  const { land, shore } = coastAt(th);
+  const r = (land + shore) / 2 + 4;
+  return { x: Math.cos(th) * r, z: Math.sin(th) * r, radius: 2.6 };
+})();
+
+export type Surface = 'road' | 'walk' | 'grass' | 'sand' | 'water';
+
+/**
+ * What's underfoot at (x, z): a road, a sidewalk (or the plaza, or the pier's boards), the grass of a
+ * park or a lawn or the verge, the beach's sand, or the sea. Pure and quick: the physics ask it every
+ * step, for the grip under the tires. Buildings stand on grass here: citySolids has them.
+ */
+export function surfaceAt(x: number, z: number): Surface {
+  if (Math.abs(x) > SURELY_LAND || Math.abs(z) > SURELY_LAND) {
+    if (x >= PIER.x - PIER.width / 2 && x <= PIER.x + PIER.width / 2 && z <= PIER.from && z >= PIER.to) return 'walk';
+    const r = Math.hypot(x, z);
+    if (r > SURELY_LAND) {
+      const th = Math.atan2(z, x);
+      const land = landAt(x / r, z / r, th);
+      if (r > land) return r > land + beachAt(th) ? 'water' : 'sand';
+    }
+  }
+  if (x < GRID.minX || x > GRID.maxX || z < GRID.minZ || z > GRID.maxZ) return 'grass';
+  const ax = across(x, STREET_X);
+  const az = across(z, STREET_Z);
+  if (ax <= ROAD_W / 2 || az <= ROAD_W / 2) return 'road';
+  if (ax <= BAND || az <= BAND) return 'walk';
   const g = cityLayout().gas?.plot;
-  return !!g && x >= g.minX && x <= g.maxX && z >= g.minZ && z <= g.maxZ;
+  if (g && x >= g.minX && x <= g.maxX && z >= g.minZ && z <= g.maxZ) return 'road';
+  // The office's block is its plaza, paved all over.
+  if (Math.abs(x - (STREET_X - PERIOD / 2)) <= INNER / 2 && Math.abs(z - (STREET_Z - PERIOD / 2)) <= INNER / 2) return 'walk';
+  return 'grass';
+}
+
+/**
+ * Where you come back after going into the sea at (x, z): a car on the nearest road, on the cross
+ * street just in from the ring road, in its right-hand lane and facing inland; on foot (`onFoot`),
+ * up the beach from where you went in, facing inland. Pure, so the office can check it too.
+ */
+export function shoreRespawn(x: number, z: number, onFoot = false): { x: number; z: number; rotY: number } {
+  if (onFoot) {
+    const th = Math.atan2(z, x);
+    const { land, shore } = coastAt(th);
+    const r = land + (shore - land) * 0.35;
+    // rotY 0 faces +z: facing the middle.
+    return { x: Math.cos(th) * r, z: Math.sin(th) * r, rotY: Math.atan2(-Math.cos(th), -Math.sin(th)) };
+  }
+  // Which side of the ring road it's off: the one it's furthest past (or nearest to, from inside).
+  const past = [x - GX1, GX0 - x, z - GZ1, GZ0 - z];
+  const side = past.indexOf(Math.max(...past));
+  const IN = 16;
+  const LANE = ROAD_W / 4;
+  const nearest = (v: number, origin: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, origin + PERIOD * Math.round((v - origin) / PERIOD)));
+  // Right-hand traffic: heading +x you keep to +z, -x to -z; heading +z to -x, -z to +x.
+  if (side === 0) return { x: GX1 - IN, z: nearest(z, STREET_Z, GZ0, GZ1) - LANE, rotY: -Math.PI / 2 };
+  if (side === 1) return { x: GX0 + IN, z: nearest(z, STREET_Z, GZ0, GZ1) + LANE, rotY: Math.PI / 2 };
+  if (side === 2) return { x: nearest(x, STREET_X, GX0, GX1) + LANE, z: GZ1 - IN, rotY: Math.PI };
+  return { x: nearest(x, STREET_X, GX0, GX1) - LANE, z: GZ0 + IN, rotY: 0 };
+}
+
+/** How wide the gaps in a park's hedge are, where its two paths come out on each side: room for a car. */
+export const PARK_GATE = 6;
+
+/** A park's hedge, all round it but for a gap at the end of each path: eight boxes. */
+export function parkHedges(p: Park): Area[] {
+  const h = p.size / 2;
+  const k = 0.5;
+  const g = PARK_GATE / 2;
+  const out: Area[] = [];
+  for (const [a0, a1] of [[-h, -g], [g, h]]) {
+    out.push({ minX: p.x + a0, maxX: p.x + a1, minZ: p.z - h, maxZ: p.z - h + k });
+    out.push({ minX: p.x + a0, maxX: p.x + a1, minZ: p.z + h - k, maxZ: p.z + h });
+    out.push({ minX: p.x - h, maxX: p.x - h + k, minZ: p.z + a0, maxZ: p.z + a1 });
+    out.push({ minX: p.x + h - k, maxX: p.x + h, minZ: p.z + a0, maxZ: p.z + a1 });
+  }
+  return out;
 }
 
 const CELL = 24;
@@ -549,14 +704,14 @@ function solids(): Map<number, Area[]> {
     post(gas.sign.x, gas.sign.z, 0.12);
   }
   for (const p of parks) {
-    // A kerb round the park, and the trees' trunks.
-    const h = p.size / 2;
-    const k = 0.5;
-    add({ minX: p.x - h, maxX: p.x + h, minZ: p.z - h, maxZ: p.z - h + k });
-    add({ minX: p.x - h, maxX: p.x + h, minZ: p.z + h - k, maxZ: p.z + h });
-    add({ minX: p.x - h, maxX: p.x - h + k, minZ: p.z - h, maxZ: p.z + h });
-    add({ minX: p.x + h - k, maxX: p.x + h, minZ: p.z - h, maxZ: p.z + h });
+    // A hedge round the park, open where its paths come out, and the trees' trunks.
+    for (const a of parkHedges(p)) add(a);
     for (const t of p.trees) post(t.x, t.z, 0.3 * t.s);
+  }
+  post(LIGHTHOUSE.x, LIGHTHOUSE.z, LIGHTHOUSE.radius);
+  for (const s of [-1, 1]) {
+    const x = PIER.x + s * (PIER.width / 2 - 0.1);
+    add({ minX: x - 0.1, maxX: x + 0.1, minZ: PIER.rails[1], maxZ: PIER.rails[0] });
   }
   const s = cityStreetscape();
   for (const l of s.lamps) if (!l.hand && Math.hypot(l.x, l.z) <= POST_RADIUS) post(l.x, l.z, 0.2);

@@ -924,6 +924,31 @@ export class OfficeSound {
     }
   }
 
+  /** Something going into the sea (world/ocean.ts): a whoosh of spray, and the plunge under it; `size` about 1 for a person, 3 for a car. */
+  splash(at: Pos, size: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.count('splash');
+    const loud = Math.min(1, 0.35 + size * 0.22);
+    const out = this.panner(at, 3, 1);
+    out.connect(this.ambience);
+    const t0 = ctx.currentTime + 0.01;
+    const spray = this.noise(this.buf.white);
+    const tone = biquad(ctx, 'lowpass', 4200, 0.7);
+    tone.frequency.setValueAtTime(4200, t0);
+    tone.frequency.exponentialRampToValueAtTime(500, t0 + 0.9);
+    const g = ctx.createGain();
+    envelope(g.gain, t0, [
+      [0.02, 0.5 * loud],
+      [0.25, 0.22 * loud],
+      [1.1, 0],
+    ]);
+    spray.connect(tone).connect(g).connect(out);
+    spray.start(t0);
+    spray.stop(t0 + 1.2);
+    this.blip(out, t0, 110, 0.45, 0.35, 0.25 * loud);
+  }
+
   // ---- The coffee machine -------------------------------------------------------------------------
 
   /** Grind, gurgle and drip. */

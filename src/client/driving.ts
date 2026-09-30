@@ -1,4 +1,5 @@
-import { SPECS, DRIVE_STEP, seatOffset, carFits, carPoint, drive, impact, overlaps, onPavement, type Box, type CarPose, type CarSeat, type Pedals } from '../shared/garage';
+import { SPECS, DRIVE_STEP, seatOffset, carFits, carPoint, drive, impact, overlaps, type Box, type CarPose, type CarSeat, type Pedals } from '../shared/garage';
+import { shoreRespawn, surfaceAt } from '../shared/city';
 import type { PlayerController } from './player';
 import type { Fleet } from './world/cars';
 
@@ -13,7 +14,14 @@ export interface DriveHooks {
   bump(at: { x: number; z: number }, speed: number): void;
   /** What else is moving about near (x, z): the street's traffic, with its mass and motion. */
   traffic?(x: number, z: number, reach: number): Box[];
+  /** The car you're driving went into the sea at (x, z), `speed` m/s: a splash. */
+  splash?(at: { x: number; z: number }, speed: number): void;
+  /** The screen going dark (and light again) while the car's fished out and put back on the road. */
+  fade?(on: boolean): void;
 }
+
+/** Into the sea: how long the car takes to go under, when the screen goes dark, and when it's back on the road (seconds). */
+const SINK = { fade: 0.7, back: 1.1, up: 1.25 } as const;
 
 /** How often the office hears where your car is, at most (seconds). */
 const SEND_EVERY = 0.066;
@@ -37,6 +45,10 @@ export class Driver {
   /** The way the car pointed last frame, to turn a first-person view along with it. */
   private yaw = 0;
   private remainder = 0;
+  /** Seconds since the car went into the sea, while it's going under; null on land. */
+  private sinking: number | null = null;
+  /** How far under it's gone (m), which takes you down with it. */
+  private depth = 0;
   /** How the third-person camera was before you got in: it pulls back to see the car. */
   private camWas: { dist: number; pitch: number } | null = null;
 
@@ -95,7 +107,8 @@ export class Driver {
   wayOut(): { x: number; y: number; z: number } | null {
     const car = this.car;
     const seat = this.seat;
-    if (car === null || seat === null) return null;
+    // Not while it's going under.
+    if (car === null || seat === null || this.sinking !== null) return null;
     const pose = this.fleet.cars[car].pose;
     const y = this.fleet.seatAt(car, seat)!.y;
     const kind = this.fleet.cars[car].def.kind;
@@ -136,8 +149,17 @@ export class Driver {
   drop() {
     const car = this.car;
     if (car === null) return;
+    // Let go of on its way under: it's back on the road, as it would have been.
+    const under = this.sinking !== null && this.sinking < SINK.back;
+    if (this.sinking !== null) {
+      this.sinking = null;
+      this.depth = 0;
+      this.fleet.cars[car].root.rotation.x = 0;
+      this.hooks.fade?.(false);
+    }
     if (this.driving) {
-      const pose = { ...this.fleet.cars[car].pose, speed: 0, slip: 0, yaw: 0 };
+      const was = this.fleet.cars[car].pose;
+      const pose = { ...was, ...(under ? shoreRespawn(was.x, was.z) : {}), speed: 0, slip: 0, yaw: 0 };
       this.fleet.place(car, pose);
       this.hooks.moved(car, pose);
     }
@@ -166,6 +188,11 @@ export class Driver {
         brake: p.holding('Space'),
       };
       this.gas = pedals.gas;
+      if (this.sinking !== null) {
+        this.sink(car, dt);
+        this.sit(dt);
+        return;
+      }
       // A slow frame carries its fraction over; a paused tab never gets a giant physics step.
       this.remainder += Math.min(0.1, Math.max(0, dt));
       let pose = this.fleet.cars[car].pose;
@@ -178,9 +205,53 @@ export class Driver {
         this.remainder = Math.max(0, this.remainder - DRIVE_STEP);
       }
       this.fleet.place(car, pose);
-      this.send(car, pose);
+      // Its middle's gone off the beach into the sea: a splash, and it goes under (the office never hears it was in the water).
+      if (surfaceAt(pose.x, pose.z) === 'water') {
+        this.sinking = 0;
+        this.remainder = 0;
+        this.hooks.splash?.(pose, Math.hypot(pose.speed, pose.slip ?? 0));
+        this.sink(car, 0);
+      } else this.send(car, pose);
     }
     this.sit(dt);
+  }
+
+  /**
+   * Going under: the car slows, noses down and sinks, the screen goes dark, and it's back on the
+   * nearest road facing inland (shared/city.ts shoreRespawn), which the office hears as a jump.
+   */
+  private sink(car: number, dt: number) {
+    const was = this.sinking!;
+    const t = (this.sinking = was + dt);
+    const v = this.fleet.cars[car];
+    if (t < SINK.back) {
+      const pose = v.pose;
+      const drift = Math.max(0, 1 - t * 2.5);
+      this.fleet.place(car, { ...pose, x: pose.x + Math.sin(pose.rotY) * pose.speed * drift * dt, z: pose.z + Math.cos(pose.rotY) * pose.speed * drift * dt, speed: pose.speed * drift, slip: 0, yaw: 0 });
+      // Down it goes, nose first: the model only (the pose stays on the water, where the office last had it on land).
+      const k = Math.min(1, t / SINK.back);
+      this.depth = k * k * 1.6;
+      v.root.position.y -= this.depth;
+      v.root.rotation.order = 'YXZ';
+      v.root.rotation.x = 0.35 * k;
+      if (was < SINK.fade && t >= SINK.fade) this.hooks.fade?.(true);
+      return;
+    }
+    if (was < SINK.back) {
+      const at = shoreRespawn(v.pose.x, v.pose.z);
+      const pose: CarPose = { x: at.x, z: at.z, rotY: at.rotY, speed: 0, steer: 0, slip: 0, yaw: 0 };
+      v.root.rotation.x = 0;
+      this.depth = 0;
+      this.fleet.place(car, pose);
+      this.yaw = pose.rotY;
+      this.player.camYaw = pose.rotY + Math.PI;
+      this.sent.at = -Infinity;
+      this.send(car, pose);
+    }
+    if (t >= SINK.up) {
+      this.sinking = null;
+      this.hooks.fade?.(false);
+    }
   }
 
   /**
@@ -196,8 +267,9 @@ export class Driver {
     const stuck = !fits(from);
     let pose = from;
     for (let i = 0; i < n; i++) {
-      const next = drive(pose, pedals, h, kind);
-      if (stuck ? onPavement(next, kind) : fits(next)) {
+      // The grip under the tires, where the car is: road, grass, sand (shared/garage.ts GROUND).
+      const next = drive(pose, pedals, h, kind, surfaceAt(pose.x, pose.z));
+      if (stuck || fits(next)) {
         pose = next;
         continue;
       }
@@ -276,7 +348,7 @@ export class Driver {
   private sit(dt: number) {
     const p = this.player;
     const at = this.fleet.seatAt(this.car!, this.seat!)!;
-    p.pos.set(at.x, at.y, at.z);
+    p.pos.set(at.x, at.y - this.depth, at.z);
     p.facing = at.rotY;
     p.moving = false;
     const turned = wrap(at.rotY - this.yaw);
