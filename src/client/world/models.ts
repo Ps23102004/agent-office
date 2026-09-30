@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { tinyForShadow } from './toon';
 import deskPropsUrl from '../models/desk_props.glb?url';
 import dogCorgiUrl from '../models/dog-corgi.glb?url';
 import dogDachshundUrl from '../models/dog-dachshund.glb?url';
@@ -135,7 +136,7 @@ export function paintModel(root: THREE.Object3D, paint: (name: string) => THREE.
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
     m.material = paint((m.material as THREE.Material).name);
-    m.castShadow = castShadow;
+    m.castShadow = castShadow && !tinyForShadow(new THREE.Box3().setFromObject(m));
     m.receiveShadow = true;
   });
 }

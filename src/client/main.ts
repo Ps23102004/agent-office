@@ -44,7 +44,7 @@ import { Holiday } from './world/holiday';
 import { Arrivals, Departures } from './world/leaving';
 import { Confetti, type Area } from './world/confetti';
 import { Hanger } from './hanging';
-import { disposeSprite, textSprite } from './world/toon';
+import { disposeSprite, textSprite, trimShadows } from './world/toon';
 import { Voice } from './voice';
 import { OfficeSound } from './sound';
 import { DesktopNotifier, askNotifyPermission, notifyPermission, waitingOnSomeone } from './notify';
@@ -98,6 +98,7 @@ import { onModelsProgress, preloadModels } from './world/models';
 import { loadingScreen } from './ui/loading';
 import { SlowFrames } from './framerate';
 import { offerLite, touchOnly } from './ui/litesuggest';
+import { decorTicker, pixelRatioFor, quality, setGraphics, tooSoon } from './quality';
 import { openDeskLabel, openExpand } from './ui/floorplan';
 
 // The loading screen stays up until there's an office to see (see boot and whoami at the end).
@@ -115,8 +116,9 @@ await preloadModels();
 // ---- Renderer & scene ---------------------------------------------------------------------------
 const canvas = $('scene') as HTMLCanvasElement;
 const renderer = makeRenderer() ?? (await noWebGL());
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
+// Below Full the shadows are redrawn only when they'd look different (see the frame loop).
+renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 const effect = new OutlineEffect(renderer, { defaultThickness: 0.0032, defaultColor: [0.17, 0.18, 0.26] });
@@ -136,7 +138,6 @@ scene.add(hemi, ambient);
 const sun = new THREE.DirectionalLight('#fff1d6', 2.2);
 sun.position.set(-8, 18, 10);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
 // Wide enough for the office, the garage under it and the balcony and lot out front, from wherever the sun is.
 Object.assign(sun.shadow.camera, { left: -32, right: 32, top: 30, bottom: -30, near: 1, far: 100 });
 sun.shadow.bias = -0.0008;
@@ -144,6 +145,8 @@ sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
 const office = buildOffice();
+// Clutter's shadows aren't worth drawing (see tinyForShadow).
+trimShadows(office.group);
 scene.add(office.group);
 /**
  * The building's map as it's built (see shared/maps and world/world.ts): the office, or a map of
@@ -4438,6 +4441,7 @@ function showSettings(pane?: SettingsPane) {
     (s) => {
       // Switching to push to talk mutes you now; back to an open mic turns it on.
       const talkChanged = s.pushToTalk !== settings.pushToTalk;
+      const graphicsChanged = s.graphics !== settings.graphics;
       Object.assign(settings, s);
       saveSettings(settings);
       if (talkChanged) {
@@ -4445,6 +4449,7 @@ function showSettings(pane?: SettingsPane) {
         hud.refresh();
       }
       player.setView(settings.view);
+      if (graphicsChanged) applyGraphics();
       sound.setVolume(settings.volume, settings.muted);
       sound.setMusicVolume(settings.music, settings.musicMuted);
     },
@@ -4473,15 +4478,40 @@ function editProfile() {
 function resize() {
   const w = window.innerWidth;
   const hgt = window.innerHeight;
+  // The pixel ratio follows the Graphics setting and the screen the window is on.
+  renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio));
   renderer.setSize(w, hgt, false);
   camera.aspect = w / hgt;
   camera.updateProjectionMatrix();
   hands.setAspect(w / hgt);
 }
 window.addEventListener('resize', resize);
-resize();
+/** Brings the renderer to the Graphics setting: how sharp the canvas is and how big the sun's shadow map. */
+function applyGraphics() {
+  setGraphics(settings.graphics);
+  resize();
+  if (sun.shadow.mapSize.x !== quality.shadowSize) {
+    sun.shadow.mapSize.set(quality.shadowSize, quality.shadowSize);
+    // The old map is the wrong size now: dropping it has three.js make a new one.
+    sun.shadow.map?.dispose();
+    sun.shadow.map = null;
+  }
+  renderer.shadowMap.autoUpdate = !quality.shadowEvery;
+  shadowsAt = 0;
+}
 
 const timer = new THREE.Timer();
+/** When (performance.now()) a frame was last drawn, to keep to the Graphics setting's frame rate. */
+let drawnAt = 0;
+/** When the sun's shadows were last redrawn, where the sun was then, and where you were. */
+let shadowsAt = 0;
+const shadowSun = new THREE.Vector3();
+const shadowNow = new THREE.Vector3();
+const shadowMe = new THREE.Vector3();
+/** The dog and the holiday's decorations update only as often as the Graphics setting says. */
+const dogTick = decorTicker();
+const holidayTick = decorTicker();
+applyGraphics();
 let lastSent = { x: 0, y: 0, z: 0, rotY: 0, moving: false, at: 0 };
 let spotSavedAt = 0;
 let speakTick = 0;
@@ -4501,7 +4531,23 @@ const slowFrames = new SlowFrames();
 /** When a car last shoved you out of its way. */
 let shovedAt = 0;
 
+/** The loop stops while the tab is hidden, and this starts it again. */
+let asleep = false;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !asleep) return;
+  asleep = false;
+  requestAnimationFrame(frame);
+});
+
 function frame(ts?: number) {
+  // Nobody's looking: nothing is drawn or updated until the tab is back (dt is capped, so it picks up where it left off).
+  if (document.hidden) {
+    asleep = true;
+    return;
+  }
+  // Skipped frames don't touch the timer, so the next one that's drawn takes the whole time since the last.
+  if (tooSoon(ts ?? performance.now(), drawnAt, quality.fps)) return void requestAnimationFrame(frame);
+  drawnAt = ts ?? performance.now();
   timer.update(ts);
   const delta = timer.getDelta();
   const dt = Math.min(delta, 0.1);
@@ -4679,7 +4725,10 @@ function frame(ts?: number) {
   arrivals.update(dt);
   court?.update(dt);
   // The dog is the office's: on a map of its own it stays at home, quiet.
-  if (inOffice()) dog.update(dt);
+  if (inOffice()) {
+    const dogDt = dogTick(dt);
+    if (dogDt) dog.update(dogDt);
+  }
   if (!upTop && inOffice()) updateBall(now, dt);
   if (!upTop) {
     world.update(t, dt, [player.pos, ...[...remotes.values()].map((r) => r.person.root.position), ...departures.positions(), ...arrivals.positions(), ...(court?.positions() ?? [])]);
@@ -4695,7 +4744,7 @@ function frame(ts?: number) {
   sky.update(dt, t, camera);
   // A map of its own lights itself its own way (the castle's torchlit hall), after the sky's had its say.
   if (!upTop) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
-  if (!upTop && inOffice()) holiday.update(t, sky.lampsOn, camera);
+  if (!upTop && inOffice() && holidayTick(dt)) holiday.update(t, sky.lampsOn, camera);
   sound.setWeather(sky.rain, 1 - sky.daylight);
   if (upTop && roof) {
     // Everything up there moves to the DJ's set; strobes flash the whole roof as a drop lands.
@@ -4740,6 +4789,7 @@ function frame(ts?: number) {
   if (blurry) drunkVision.begin();
   else if (drunkVisionOn) drunkVision.release();
   drunkVisionOn = blurry;
+  if (quality.shadowEvery) refreshShadows(now);
   effect.render(scene, camera);
   pointToWaiting(now);
   // Not while the camera's up at the boss's monitor or the arcade, where they'd cover the screen.
@@ -4755,6 +4805,19 @@ function frame(ts?: number) {
   if (blurry) drunkVision.end(drunk, t, !reduceMotion.matches);
   loading.drew();
   requestAnimationFrame(frame);
+}
+
+/**
+ * Redraws the sun's shadow map only when it would look different: the sun has moved, or you have (what
+ * casts a shadow near you may have), or it's been a while, for the workers and the dog moving about.
+ */
+function refreshShadows(now: number) {
+  shadowNow.copy(sun.position).sub(sun.target.position).normalize();
+  if (shadowNow.dot(shadowSun) > 0.9999 && player.pos.distanceToSquared(shadowMe) < 0.25 && now - shadowsAt < quality.shadowEvery) return;
+  shadowSun.copy(shadowNow);
+  shadowMe.copy(player.pos);
+  shadowsAt = now;
+  renderer.shadowMap.needsUpdate = true;
 }
 
 // ---- Boot ------------------------------------------------------------------------------------------

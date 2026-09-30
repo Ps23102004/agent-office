@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, type Run } from '../../shared/protocol';
 import { mesh, roundedBox, toon } from './toon';
 import { TERM_THEME } from '../ui/termtheme';
+import { quality } from '../quality';
 
 
 const BASE16 = [
@@ -213,7 +214,7 @@ export class Laptop {
     if (this.openT < 1) this.setLid(Math.min(1, this.openT + dt * 1.6));
     const version = screen ? screen.version : -1;
     const now = performance.now();
-    const every = distance < 6 ? 150 : distance < 14 ? 600 : 2000;
+    const every = quality.laptopMs[distance < 6 ? 0 : distance < 14 ? 1 : 2];
     if (version !== this.drawnVersion && (now - this.paintedAt > every || this.drawnVersion < 0)) {
       this.paintedAt = now;
       this.drawnVersion = version;

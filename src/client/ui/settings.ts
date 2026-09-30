@@ -1,5 +1,6 @@
 import type { Net } from '../net';
 import { store, type Settings, type ViewMode } from '../state';
+import type { Graphics } from '../quality';
 import { askNotifyPermission, notifyPermission, type DesktopNotifier } from '../notify';
 import type { ThemePick, WebhookKind } from '../../shared/protocol';
 import { THEME_PICKS } from '../../shared/theme';
@@ -12,6 +13,12 @@ import { openPromptEditor, rewrittenPrompts } from './prompts';
 const VIEWS: [ViewMode, string, string][] = [
   ['first', '👀 First person', 'See through your own eyes. Click the office to look around with the mouse and click things to use them. Esc frees the mouse.'],
   ['third', '🎥 Third person', 'Follow your character from behind. Drag to orbit the camera, scroll to zoom, and click things to use them.'],
+];
+
+const GRAPHICS_LEVELS: [Graphics, string, string][] = [
+  ['battery', '🔋 Battery', 'Easy on the battery and the fan: 30 frames a second, a softer picture on sharp screens, small shadows that update now and then, and calmer weather and background motion.'],
+  ['balanced', '⚖️ Balanced', 'Up to 60 frames a second and a sharper picture, with full-size shadows that update a few times a second.'],
+  ['full', '✨ Full', 'Everything as sharp and smooth as the screen goes. The hardest on the computer.'],
 ];
 
 const THEME_LABEL: Record<ThemePick, string> = { auto: '📅 By the calendar', halloween: '🎃 Halloween', christmas: '🎄 Christmas', off: 'Off' };
@@ -72,6 +79,34 @@ export function openSettings(net: Net, settings: Settings, onChange: (s: Setting
     note.textContent = VIEWS.find(([v]) => v === settings.view)![2];
   };
   paint();
+
+  // How much the 3D draws.
+  const gfxRow = h('div.seg', { role: 'radiogroup', 'aria-label': 'Graphics' });
+  const gfxNote = h('p.setting-note');
+  const paintGfx = () => {
+    gfxRow.replaceChildren(
+      ...GRAPHICS_LEVELS.map(([graphics, label]) =>
+        h(
+          'button.btn',
+          {
+            type: 'button',
+            role: 'radio',
+            'aria-checked': String(settings.graphics === graphics),
+            class: settings.graphics === graphics ? 'on' : '',
+            onclick: () => {
+              if (settings.graphics === graphics) return;
+              settings = { ...settings, graphics };
+              onChange(settings);
+              paintGfx();
+            },
+          },
+          label,
+        ),
+      ),
+    );
+    gfxNote.textContent = GRAPHICS_LEVELS.find(([g]) => g === settings.graphics)![2];
+  };
+  paintGfx();
 
   /** A volume slider with its mute button. Dragging it turns the sound back on; letting go plays `preview`. */
   const volumeRow = (label: string, level: 'volume' | 'music', muted: 'muted' | 'musicMuted', preview?: () => void) => {
@@ -507,6 +542,7 @@ export function openSettings(net: Net, settings: Settings, onChange: (s: Setting
     you: [
       setting('Your character', null, character),
       setting('Camera view', 'you', seg, note),
+      setting('Graphics', 'you', gfxRow, gfxNote),
       setting('Signed in', null, h('div.volume', {}, signOut), h('p.setting-note', {}, account ? `As ${account.name}, with your own account (${account.role}).` : 'With the shared office password.')),
     ],
     sound: [
