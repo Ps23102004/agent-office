@@ -4617,7 +4617,7 @@ function frame(ts?: number) {
     const pose = driver.driving ? driver.pose : null;
     const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
-    office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid);
+    office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid, sky.clockHour()); // W3: people and traffic keep the office's hours
     if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[CARS[driver.car!].kind].length) / 2), Math.abs(pose.speed));
   }
   player.update(dt);

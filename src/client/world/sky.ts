@@ -632,6 +632,11 @@ export class Sky {
     return midnight - off + h * 3_600_000;
   }
 
+  /** The office's hour of the day (0–24), as the clock outside has it (or the hour previewed): what the street's people and traffic keep their day by. */
+  clockHour(): number {
+    return (((this.now() / 3_600_000 + this.state.utcOffset / 60) % 24) + 24) % 24;
+  }
+
   update(dt: number, t: number, camera: THREE.Camera) {
     if (this.night.street !== this.street) this.placeLamps();
     const s = this.state;

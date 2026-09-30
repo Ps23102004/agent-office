@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, lightPhase as signals, rng } from '../../shared/city';
+import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase as signals, rng } from '../../shared/city';
 import { HAIR_COLORS, SKIN_TONES } from '../../shared/avatar';
 import type { Box } from '../../shared/garage';
 import type { NightParts } from './outside';
@@ -351,9 +351,16 @@ export interface Vehicle extends Body {
   seed: number;
   /** Which of the kind's instances, and of the lights' (2 each). */
   slot: number;
+  /** The ghost it follows (an index into ghostCars()), or -1, and how far round that ghost's loop it is. */
+  gj: number;
+  S: number;
+  /** Its acceleration, eased (m/s²), and how it leans into braking and into a turn. */
+  acc: number;
+  pitch: number;
+  roll: number;
 }
 
-export type PedState = 'walk' | 'wait' | 'cross' | 'idle' | 'down';
+export type PedState = 'walk' | 'wait' | 'cross' | 'idle' | 'sit' | 'door' | 'down';
 
 export interface Pedestrian {
   id: number;
@@ -365,20 +372,24 @@ export interface Pedestrian {
   yaw: number;
   axis: Axis;
   dir: Dir;
-  /** The street (index) they're on, and how far along (s) and across (lat) from its middle. */
-  line: number;
-  s: number;
-  lat: number;
-  /** Which side of the street (±1) and where the next stop is. */
-  side: Dir;
-  idleAt: number;
+  /** The ghost they follow (an index into ghostPeds()), or -1; how far round its ring they've got (m, lap on lap); the next stop they'll come to (counting laps too). */
+  gj: number;
+  R: number;
+  stopN: number;
+  /** At a stop: which, and how far they've gone to the door or bench (0–1). */
+  at: Stop | null;
+  dr: number;
+  /** Which side of a pair they are (0 alone, else ±1). */
+  pairSide: number;
+  /** Their head's turn to the side, and their fidget (eased). */
+  look: number;
   /** The state that a tumble came out of. */
   prev: PedState;
   timer: number;
   speed: number;
   phase: number;
-  /** How many decisions they've made; with `seed` it's what makes the next one. A pair share a seed, so they choose together. */
-  n: number;
+  /** When to try for a ghost again. */
+  retry: number;
   seed: number;
   pair: number;
   /** Jumped or knocked out of place, and the way they're going, until they come back. */
@@ -390,6 +401,11 @@ export interface Pedestrian {
   hop: number;
   tilt: number;
   cool: number;
+  /** A dog on a lead, where it is. */
+  dog: boolean;
+  dogX: number;
+  dogZ: number;
+  dogYaw: number;
   /** Colors (indexes) and height. */
   skin: number;
   hair: number;
@@ -417,7 +433,7 @@ export interface StreetLife {
   /** Put its y at the street's height, like the city's street group. */
   group: THREE.Group;
   /** `t` is shared time (s), `night` 0–1; `near` is where you are (what's far from it isn't kept up), `avoid` your car if you're in one (else it's you). */
-  update(t: number, dt: number, night: number, near: { x: number; z: number }, avoid?: readonly Avoid[]): void;
+  update(t: number, dt: number, night: number, near: { x: number; z: number }, avoid?: readonly Avoid[], hour?: number): void;
   /** The moving vehicles within `reach` of (x, z), as boxes to collide with. */
   obstacles(x: number, z: number, reach: number): Obstacle[];
   /** Something of yours hit at `at` at `speed`: a person tumbles, a car stops. Says what it was (null: nothing there). */
@@ -444,6 +460,413 @@ function onRoad(axis: Axis, line: number, s: number, off: number): { x: number; 
   return axis === 'x' ? { x: s, z: m } : { x: m, z: s };
 }
 
+// --- Shared days: everybody's routes are a function of the clock ---------------------------------------------
+//
+// Nothing out here is dealt out at random per page. There is a fixed population of ghosts, cars on
+// rectangular loops of streets and people on rings of sidewalk, each with a seed: where a ghost is, and what
+// it's doing, is a pure function of shared time (t, Date.now() / 1000) and the office's hour. The things
+// you see are slots that pick up ghosts near you and follow them: a red light or a queue holds a car back,
+// and it speeds up to catch its ghost afterwards, so two pages show the same street within a few metres.
+
+/** The office's hour of the day (0–24) at shared time `t` (s), for a clock `offsetMin` minutes from UTC. */
+export const hourAt = (t: number, offsetMin: number): number => ((((t / 3600 + offsetMin / 60) % 24) + 24) % 24);
+
+const bump = (h: number, at: number, w: number) => {
+  let d = Math.abs(h - at);
+  d = Math.min(d, 24 - d);
+  return Math.exp(-((d / w) ** 2));
+};
+
+/** How busy the roads are (0–1): rush hours either side of the working day, a lull at lunch, empty at night. */
+export const trafficDensity = (hour: number): number => clamp(0.12 + 0.75 * bump(hour, 8.2, 1.4) + 0.85 * bump(hour, 17.6, 1.7) + 0.45 * bump(hour, 12.6, 2.4) + 0.25 * bump(hour, 21, 2), 0, 1);
+
+export type Role = 'commuter' | 'lunch' | 'shopper' | 'evening' | 'jogger' | 'dog' | 'late';
+
+/** How likely a person of this kind is to be out at `hour`: a day for each of them. */
+export function activity(role: Role, hour: number): number {
+  switch (role) {
+    case 'commuter': return Math.max(bump(hour, 8.2, 1.3), bump(hour, 17.8, 1.5)) + 0.12 * bump(hour, 13, 3);
+    case 'lunch': return bump(hour, 12.8, 1.1);
+    case 'shopper': return 0.9 * bump(hour, 13.5, 3.4);
+    case 'evening': return bump(hour, 20, 2.2);
+    case 'jogger': return Math.max(bump(hour, 6.9, 1.1), bump(hour, 18.3, 1.3));
+    case 'dog': return Math.max(bump(hour, 7.6, 1), bump(hour, 18, 1.6), 0.3 * bump(hour, 13, 2));
+    case 'late': return 0.9 * bump(hour, 23.6, 2.4);
+  }
+}
+
+/** A loop of streets a car goes round for ever: crossings ix a..b, iz c..d. `cw` goes +x first (right turns all the way), else +z first (lefts). */
+export interface Loop {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  cw: boolean;
+}
+interface Side extends Road {
+  from: number;
+  to: number;
+  len: number;
+  start: number;
+}
+const sidesOf = (l: Loop): Side[] => {
+  const raw: Omit<Side, 'len' | 'start'>[] = l.cw
+    ? [{ axis: 'x', dir: 1, line: l.c, from: l.a, to: l.b }, { axis: 'z', dir: 1, line: l.b, from: l.c, to: l.d }, { axis: 'x', dir: -1, line: l.d, from: l.b, to: l.a }, { axis: 'z', dir: -1, line: l.a, from: l.d, to: l.c }]
+    : [{ axis: 'z', dir: 1, line: l.a, from: l.c, to: l.d }, { axis: 'x', dir: 1, line: l.d, from: l.a, to: l.b }, { axis: 'z', dir: -1, line: l.b, from: l.d, to: l.c }, { axis: 'x', dir: -1, line: l.c, from: l.b, to: l.a }];
+  let start = 0;
+  return raw.map((r) => {
+    const len = Math.abs(r.to - r.from) * PERIOD;
+    const side = { ...r, len, start };
+    start += len;
+    return side;
+  });
+};
+export const loopLength = (l: Loop) => 2 * (l.b - l.a + l.d - l.c) * PERIOD;
+
+/** Where `S` metres round a loop is: which road, and how far along it (x or z). */
+export function loopAt(l: Loop, S: number): Road & { s: number } {
+  const P = loopLength(l);
+  S = ((S % P) + P) % P;
+  const sides = sidesOf(l);
+  const side = sides.find((x) => S < x.start + x.len) ?? sides[3];
+  return { axis: side.axis, dir: side.dir, line: side.line, s: crossAt(alongO(side.axis), side.from) + side.dir * (S - side.start) };
+}
+
+/** How far round the loop a car on this road at `s` is, or null if it isn't on the loop. */
+export function loopProgress(l: Loop, r: Road, s: number): number | null {
+  const side = sidesOf(l).find((x) => x.axis === r.axis && x.dir === r.dir && x.line === r.line);
+  if (!side) return null;
+  const off = (s - crossAt(alongO(side.axis), side.from)) * side.dir;
+  return off < -1 || off > side.len + 1 ? null : side.start + clamp(off, 0, side.len);
+}
+
+/** Which way to go at crossing `k` of road `r` on a loop: on round it, turning at its corners; null if `r` isn't on it. */
+export function loopRoute(l: Loop, r: Road, k: number): { turn: Turn; to: Road } | null {
+  const sides = sidesOf(l);
+  const i = sides.findIndex((x) => x.axis === r.axis && x.dir === r.dir && x.line === r.line);
+  if (i < 0) return null;
+  const side = sides[i];
+  if (k !== side.to) return { turn: 'straight', to: r };
+  const n = sides[(i + 1) % 4];
+  const [dx, dz] = r.axis === 'x' ? [r.dir, 0] : [0, r.dir];
+  const [nx, nz] = n.axis === 'x' ? [n.dir, 0] : [0, n.dir];
+  const cross = dx * nz - dz * nx;
+  return { turn: cross > 0 ? 'right' : 'left', to: { axis: n.axis, dir: n.dir, line: n.line } };
+}
+
+/** A car that's always out there: its kind, loop, where it was at time 0, and its cruising speed. */
+export interface CarGhost {
+  j: number;
+  kind: VKind;
+  loop: Loop;
+  phase: number;
+  speed: number;
+  /** Out at all when the roads are this busy or more. */
+  u: number;
+}
+export const CAR_GHOSTS = 200;
+let carGhosts: CarGhost[] | null = null;
+/** The kinds in a run of MAX_VEHICLES, so the ghosts have the mix the slots do. */
+const KIND_RUN = (Object.keys(SPECS) as VKind[]).flatMap((k) => Array<VKind>(SPECS[k].count).fill(k));
+export function ghostCars(): CarGhost[] {
+  if (carGhosts) return carGhosts;
+  const [xlo, xhi] = crossRange(STREET_X);
+  const [zlo, zhi] = crossRange(STREET_Z);
+  return (carGhosts = Array.from({ length: CAR_GHOSTS }, (_, j) => {
+    const r = rng(31000 + j * 101);
+    const kind = KIND_RUN[j % KIND_RUN.length];
+    const w = 1 + Math.floor(r() * 3);
+    const h = 1 + Math.floor(r() * 3);
+    const a = xlo + Math.floor(r() * Math.max(1, xhi - xlo - w + 1));
+    const c = zlo + Math.floor(r() * Math.max(1, zhi - zlo - h + 1));
+    const loop: Loop = { a, b: Math.min(xhi, a + w), c, d: Math.min(zhi, c + h), cw: r() < 0.6 };
+    return { j, kind, loop, phase: r() * loopLength(loop), speed: SPECS[kind].vmax * (0.3 + r() * 0.08), u: r() };
+  }));
+}
+/** Where ghost car `g` is round its loop at shared time `t`. */
+export const carProgress = (g: CarGhost, t: number) => (g.phase + g.speed * t) % loopLength(g.loop);
+
+/** A ring of sidewalk round blocks: x crossings a..b, z c..d, walked along the middle of the sidewalk on the block side. */
+export interface Ring {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  cw: boolean;
+  pts: [number, number][];
+  P: number;
+  /** Start of each side along the ring, and the crossings of streets it walks over. */
+  starts: number[];
+  crossings: { o0: number; o1: number; axis: Axis; line: number; k: number }[];
+}
+/** How far from a street's middle the walkers keep (the sidewalk's outer part: benches, lamps and bins are inboard). */
+const LAT = 5.65;
+export function makeRing(a: number, b: number, c: number, d: number, cw: boolean): Ring {
+  const x0 = crossAt(STREET_X, a) + LAT, x1 = crossAt(STREET_X, b) - LAT, z0 = crossAt(STREET_Z, c) + LAT, z1 = crossAt(STREET_Z, d) - LAT;
+  const pts: [number, number][] = cw ? [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] : [[x0, z0], [x0, z1], [x1, z1], [x1, z0]];
+  const starts: number[] = [];
+  let P = 0;
+  const crossings: Ring['crossings'] = [];
+  for (let i = 0; i < 4; i++) {
+    const [px, pz] = pts[i];
+    const [qx, qz] = pts[(i + 1) % 4];
+    starts.push(P);
+    const alongX = pz === qz;
+    const dir = Math.sign(alongX ? qx - px : qz - pz);
+    const len = Math.abs(alongX ? qx - px : qz - pz);
+    // The streets it walks across: the ones strictly between its ends.
+    const [lo, hi] = alongX ? [a, b] : [c, d];
+    const line = alongX ? (pz < (z0 + z1) / 2 ? c : d) : px < (x0 + x1) / 2 ? a : b;
+    for (let k = lo + 1; k < hi; k++) {
+      const mid = crossAt(alongX ? STREET_X : STREET_Z, k);
+      const start = alongX ? px : pz;
+      const u = [(mid - CURB - start) * dir, (mid + CURB - start) * dir];
+      crossings.push({ o0: P + Math.min(...u), o1: P + Math.max(...u), axis: alongX ? 'x' : 'z', line, k });
+    }
+    P += len;
+  }
+  return { a, b, c, d, cw, pts, P, starts, crossings };
+}
+/** Where `S` metres round a ring is, and which way it's heading there. */
+export function ringAt(r: Ring, S: number): { x: number; z: number; dx: number; dz: number; side: number; axis: Axis } {
+  S = ((S % r.P) + r.P) % r.P;
+  let i = 3;
+  for (let k = 0; k < 3; k++) if (S < r.starts[k + 1]) { i = k; break; }
+  const [px, pz] = r.pts[i];
+  const [qx, qz] = r.pts[(i + 1) % 4];
+  const len = Math.hypot(qx - px, qz - pz);
+  const dx = (qx - px) / len, dz = (qz - pz) / len;
+  const o = S - r.starts[i];
+  return { x: px + dx * o, z: pz + dz * o, dx, dz, side: i, axis: dx ? 'x' : 'z' };
+}
+
+/** A place on a ring where someone stops for a while. */
+export interface Stop {
+  /** How far round the ring it is. */
+  off: number;
+  dwell: number;
+  kind: 'door' | 'bench' | 'bus' | 'look';
+  /** Where they go from the sidewalk (into the door, onto the bench, to the shelter), if anywhere. */
+  x?: number;
+  z?: number;
+  /** The way they face there. */
+  face: number;
+}
+
+export interface PedGhost {
+  j: number;
+  role: Role;
+  pair: boolean;
+  dog: boolean;
+  ring: Ring;
+  speed: number;
+  phase: number;
+  stops: Stop[];
+  /** Seconds for a whole lap, stops and all. */
+  cycle: number;
+  u: number;
+}
+
+/** Places to stop along the sidewalks: doors on the building fronts, the benches, the bus shelters. Keyed by the street side they're on. */
+interface Poi {
+  kind: Stop['kind'];
+  along: number;
+  x: number;
+  z: number;
+  face: number;
+}
+/** Which side of which street a sidewalk line is: its street, and ±1 for the side of the street's middle. */
+const sideOf = (axis: Axis, coord: number): { k: number; sign: number } => {
+  const c0 = axis === 'x' ? STREET_Z : STREET_X;
+  const k = Math.round((coord - c0) / PERIOD);
+  return { k, sign: Math.sign(coord - c0 - k * PERIOD) };
+};
+const sideKey = (axis: Axis, coord: number): string => {
+  const { k, sign } = sideOf(axis, coord);
+  return `${axis}:${k}:${sign}`;
+};
+/** Bus shelters: on some of the blocks' sidewalks, away from the benches and bins. */
+export function busStops(): { x: number; z: number; face: number; axis: Axis; coord: number; along: number }[] {
+  const out: ReturnType<typeof busStops> = [];
+  const R = Math.ceil(PROP_R / PERIOD);
+  for (let i = -R; i <= R; i++) {
+    for (let j = -R; j <= R; j++) {
+      const bx = STREET_X - PERIOD / 2 + i * PERIOD;
+      const bz = STREET_Z - PERIOD / 2 + j * PERIOD;
+      if (Math.hypot(bx, bz) > PROP_R - 20 || Math.hypot(bx, bz) < 75) continue;
+      const k = rng((i * 7919 + j * 104729 + 55) >>> 0);
+      for (const [alongX, sgn] of [[true, -1], [true, 1], [false, -1], [false, 1]] as const) {
+        if (k() > 0.07) continue;
+        const line = (alongX ? bz : bx) + sgn * (PERIOD / 2 - 5);
+        const u = 14 + k() * 3;
+        out.push({ x: alongX ? bx + u : line, z: alongX ? line : bz + u, face: alongX ? (sgn < 0 ? Math.PI : 0) : sgn < 0 ? -Math.PI / 2 : Math.PI / 2, axis: alongX ? 'x' : 'z', coord: line, along: alongX ? bx + u : bz + u });
+      }
+    }
+  }
+  return out;
+}
+const PROP_R = 200;
+let poiMap: Map<string, Poi[]> | null = null;
+function pois(): Map<string, Poi[]> {
+  if (poiMap) return poiMap;
+  const map = new Map<string, Poi[]>();
+  const add = (axis: Axis, coord: number, p: Poi) => {
+    const key = sideKey(axis, coord);
+    const list = map.get(key);
+    if (list) list.push(p);
+    else map.set(key, [p]);
+  };
+  for (const l of cityLayout().lots) {
+    if (l.hand || l.kind === 'glass' || l.kind === 'deck' || l.kind === 'gas') continue;
+    const dx = l.x + l.fx * (l.w / 2 + 0.15);
+    const dz = l.z + l.fz * (l.d / 2 + 0.15);
+    const axis: Axis = l.fx ? 'z' : 'x';
+    const street = l.fx ? STREET_X + PERIOD * Math.round((dx - STREET_X) / PERIOD) : STREET_Z + PERIOD * Math.round((dz - STREET_Z) / PERIOD);
+    const coord = street - (l.fx || l.fz) * 5;
+    const along = l.fx ? dz : dx;
+    add(axis, coord, { kind: 'door', along, x: dx, z: dz, face: Math.atan2(l.fx, l.fz) });
+  }
+  for (const p of cityStreetscape().props) {
+    if (p.kind !== 'bench') continue;
+    const axis: Axis = Math.abs(Math.sin(p.rot)) < 0.5 ? 'x' : 'z';
+    add(axis, axis === 'x' ? p.z : p.x, { kind: 'bench', along: axis === 'x' ? p.x : p.z, x: p.x, z: p.z, face: p.rot });
+  }
+  for (const b of busStops()) {
+    // Stand back in the shelter, looking out at the road.
+    add(b.axis, b.coord, { kind: 'bus', along: b.along, x: b.x - Math.sin(b.face) * 0.9, z: b.z - Math.cos(b.face) * 0.9, face: b.face });
+  }
+  return (poiMap = map);
+}
+
+/** The stops along a ring: what's on its sides (not at a corner or in a crossing), in the order they come. */
+function stopsFor(ring: Ring, want: Stop['kind'][], r: () => number, dwell: [number, number]): Stop[] {
+  const candidates: Stop[] = [];
+  for (let i = 0; i < 4; i++) {
+    const [px, pz] = ring.pts[i];
+    const [qx, qz] = ring.pts[(i + 1) % 4];
+    const alongX = pz === qz;
+    const dir = Math.sign(alongX ? qx - px : qz - pz);
+    const start = alongX ? px : pz;
+    const coord = alongX ? pz : px;
+    const len = Math.abs(alongX ? qx - px : qz - pz);
+    for (const p of pois().get(sideKey(alongX ? 'x' : 'z', coord)) ?? []) {
+      const o = (p.along - start) * dir;
+      if (!want.includes(p.kind) || o < 3 || o > len - 3) continue;
+      const off = ring.starts[i] + o;
+      if (ring.crossings.some((c) => off > c.o0 - 2 && off < c.o1 + 2)) continue;
+      candidates.push({ off, dwell: 0, kind: p.kind, x: p.x, z: p.z, face: p.face });
+    }
+  }
+  const picked: Stop[] = [];
+  for (const kind of want) {
+    const pool = candidates.filter((c) => c.kind === kind && picked.every((s) => Math.abs(s.off - c.off) > 12));
+    if (!pool.length) continue;
+    const c = pool[Math.floor(r() * pool.length)];
+    picked.push({ ...c, dwell: dwell[0] + r() * (dwell[1] - dwell[0]) });
+  }
+  return picked.sort((p, q) => p.off - q.off);
+}
+
+export const PED_GHOSTS = 480;
+let pedGhosts: PedGhost[] | null = null;
+const ROLES: Role[] = ['commuter', 'commuter', 'commuter', 'lunch', 'shopper', 'shopper', 'evening', 'jogger', 'dog', 'late'];
+/** Which blocks have parks, as a ring of crossings round each: where joggers run and dogs are walked. */
+const parkRings = (): [number, number, number, number][] =>
+  cityLayout().parks.map((p) => {
+    const i = Math.round((p.x - (STREET_X - PERIOD / 2)) / PERIOD);
+    const j = Math.round((p.z - (STREET_Z - PERIOD / 2)) / PERIOD);
+    return [i - 1, i, j - 1, j] as [number, number, number, number];
+  });
+export function ghostPeds(): PedGhost[] {
+  if (pedGhosts) return pedGhosts;
+  const [xlo, xhi] = crossRange(STREET_X);
+  const [zlo, zhi] = crossRange(STREET_Z);
+  const parks = parkRings().filter(([a, b, c, d]) => a >= xlo && b <= xhi && c >= zlo && d <= zhi);
+  return (pedGhosts = Array.from({ length: PED_GHOSTS }, (_, j) => {
+    const r = rng(52000 + j * 131);
+    const pair = j % 5 === 0;
+    const role: Role = pair ? (r() < 0.5 ? 'shopper' : 'evening') : ROLES[Math.floor(r() * ROLES.length)];
+    const park = (role === 'jogger' || role === 'dog') && parks.length ? parks[Math.floor(r() * parks.length)] : null;
+    const w = park || r() < 0.65 ? 1 : 2;
+    const h = park || r() < 0.65 ? 1 : 2;
+    const a = park ? park[0] : xlo + Math.floor(r() * Math.max(1, xhi - xlo - w + 1));
+    const c = park ? park[2] : zlo + Math.floor(r() * Math.max(1, zhi - zlo - h + 1));
+    const ring = makeRing(a, park ? park[1] : Math.min(xhi, a + w), c, park ? park[3] : Math.min(zhi, c + h), r() < 0.5);
+    const speed = role === 'jogger' ? 2.6 + r() * 0.8 : pair ? 1.15 + r() * 0.5 : 1.2 + r() * 0.55;
+    const plan: Record<Role, [Stop['kind'][], [number, number]]> = {
+      commuter: [['bus', 'door'], [50, 110]],
+      lunch: [['door', 'bench'], [40, 90]],
+      shopper: [['door', 'door', 'bench'], [30, 70]],
+      evening: [['door', 'bench'], [40, 100]],
+      jogger: [[], [0, 0]],
+      dog: [['bench'], [20, 50]],
+      late: [['bench', 'door'], [30, 80]],
+    };
+    const [kinds, dwell] = plan[role];
+    const stops = stopsFor(ring, kinds, r, dwell);
+    // A glance in a window somewhere, for a good many of them.
+    if (role !== 'jogger' && r() < 0.4) {
+      const off = r() * ring.P;
+      if (!ring.crossings.some((c) => off > c.o0 - 3 && off < c.o1 + 3) && stops.every((s) => Math.abs(s.off - off) > 10)) {
+        stops.push({ off, dwell: 4 + r() * 6, kind: 'look', face: 0 });
+        stops.sort((p, q) => p.off - q.off);
+      }
+    }
+    // What a look is at: the building, across the walker's left or right.
+    for (const s of stops) if (s.kind === 'look') {
+      const at = ringAt(ring, s.off);
+      const m = ring.cw ? 1 : -1;
+      s.face = Math.atan2(-at.dz * m, at.dx * m);
+    }
+    const cycle = ring.P / speed + stops.reduce((n, s) => n + s.dwell, 0);
+    return { j, role, pair, dog: role === 'dog', ring, speed, phase: r() * cycle, stops, cycle, u: r() };
+  }));
+}
+
+/** What ghost `g` is doing at shared time `t`: how far it's got (metres, adding up lap after lap), how many stops it's done, and the stop it's at, if any. */
+export function pedAt(g: PedGhost, t: number): { R: number; done: number; at: number; since: number } {
+  const T = t + g.phase;
+  const n = Math.floor(T / g.cycle);
+  let u = T - n * g.cycle;
+  const R0 = n * g.ring.P;
+  const done0 = n * g.stops.length;
+  let prev = 0;
+  for (let i = 0; i < g.stops.length; i++) {
+    const s = g.stops[i];
+    const walk = (s.off - prev) / g.speed;
+    if (u < walk) return { R: R0 + prev + u * g.speed, done: done0 + i, at: -1, since: 0 };
+    u -= walk;
+    if (u < s.dwell) return { R: R0 + s.off, done: done0 + i, at: i, since: u };
+    u -= s.dwell;
+    prev = s.off;
+  }
+  return { R: R0 + prev + u * g.speed, done: done0 + g.stops.length, at: -1, since: 0 };
+}
+
+/** Whether this ghost is out at this hour: each has its own chance, so the crowd thickens and thins smoothly. */
+export const pedOut = (g: PedGhost, hour: number): boolean => g.u < activity(g.role, hour);
+export const carOut = (g: CarGhost, hour: number): boolean => g.u < trafficDensity(hour);
+
+
+/** A glass-backed shelter with a roof and a bench at each bus stop, and a sign on a pole: one geometry. */
+function busShelters(): THREE.BufferGeometry | null {
+  const parts: Part[] = [];
+  for (const b of busStops()) {
+    // In the shelter's own frame +z is toward the road, +x along the sidewalk; the building's behind it (-z).
+    const local: Part[] = [
+      box(3, 2.1, 0.06, 0, 1.15, -1.6, GLASS),
+      box(3.2, 0.12, 1.7, 0, 2.3, -1.15, TRIM),
+      box(0.1, 2.2, 0.1, -1.5, 1.1, -0.4, TRIM),
+      box(0.1, 2.2, 0.1, 1.5, 1.1, -0.4, TRIM),
+      box(2.2, 0.08, 0.5, 0, 0.5, -1.3, '#9a6b3f'),
+      box(0.08, 2.6, 0.08, 2.1, 1.3, 0.2, TRIM),
+      box(0.5, 0.5, 0.06, 2.1, 2.45, 0.2, '#2a6fdb'),
+    ];
+    for (const [g, c] of local) parts.push([g.rotateY(b.face).translate(b.x, 0, b.z), c]);
+  }
+  return parts.length ? merged(parts) : null;
+}
+
 export function buildStreetLife(_night?: NightParts): StreetLife {
   const group = new THREE.Group();
   const mat = toonVertex();
@@ -465,7 +888,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       const r = rng(9000 + id);
       const paint = SPECS[k].paints[Math.floor(r() * SPECS[k].paints.length)];
       meshes[k].setColorAt(i, new THREE.Color(paint));
-      vehicles.push({ id, kind: k, paint, on: false, v: 0, axis: 'x', dir: 1, line: 0, s: 0, path: null, plan: null, braking: false, hold: 0, stuck: 0, seed: id * 7919 + 13, slot: i, x: 0, z: 0, yaw: 0, len: SPECS[k].len, wid: SPECS[k].wid });
+      vehicles.push({ id, kind: k, paint, on: false, v: 0, axis: 'x', dir: 1, line: 0, s: 0, path: null, plan: null, braking: false, hold: 0, stuck: 0, seed: id * 7919 + 13, slot: i, gj: -1, S: 0, acc: 0, pitch: 0, roll: 0, x: 0, z: 0, yaw: 0, len: SPECS[k].len, wid: SPECS[k].wid });
     }
   }
   // Their lights, all in one mesh: a head strip and a tail strip each.
@@ -490,6 +913,28 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const hairM = partMesh(new THREE.SphereGeometry(0.2, 10, 8).scale(1, 0.75, 1).translate(0, 1.72, -0.02), 1);
   const arms = partMesh(new THREE.BoxGeometry(0.11, 0.55, 0.12).translate(0, -0.25, 0), 2);
   const legs = partMesh(new THREE.BoxGeometry(0.17, 0.82, 0.19).translate(0, -0.41, 0), 2);
+  // A dog on a lead for some of them: one mesh, tinted a coat each.
+  const dogs = new THREE.InstancedMesh(
+    merged([
+      [new THREE.BoxGeometry(0.22, 0.24, 0.52).translate(0, 0.36, 0), W],
+      [new THREE.BoxGeometry(0.17, 0.17, 0.2).translate(0, 0.5, 0.33), W],
+      [new THREE.BoxGeometry(0.05, 0.05, 0.22).rotateX(0.7).translate(0, 0.47, -0.36), W],
+      ...[[-1, 1], [1, 1], [-1, -1], [1, -1]].map(([sx, sz]): Part => [new THREE.BoxGeometry(0.06, 0.26, 0.06).translate(sx * 0.07, 0.13, sz * 0.18), W]),
+    ]),
+    mat,
+    MAX_PEOPLE,
+  );
+  dogs.frustumCulled = false;
+  dogs.castShadow = false;
+  group.add(dogs);
+  // The bus shelters, all of them as one static mesh.
+  const shelter = busShelters();
+  if (shelter) {
+    const m = new THREE.Mesh(shelter, mat);
+    m.frustumCulled = false;
+    m.castShadow = false;
+    group.add(m);
+  }
   const people: Pedestrian[] = [];
   const tmp = new THREE.Color();
   for (let i = 0; i < MAX_PEOPLE; i++) {
@@ -497,105 +942,140 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     // The first forty are twenty pairs, out together.
     const pair = i < 40 ? i ^ 1 : -1;
     const seed = 4000 + (pair >= 0 ? Math.min(i, pair) : i);
-    const p: Pedestrian = { id: i, on: false, state: 'walk', x: 0, z: 0, yaw: 0, axis: 'x', dir: 1, line: 0, s: 0, lat: 0, side: 1, idleAt: NaN, prev: 'walk', timer: 0, speed: 1.4, phase: r() * 6, n: 0, seed, pair, dx: 0, dz: 0, jx: 0, jz: 0, hop: 0, tilt: 0, cool: 0, skin: Math.floor(r() * SKIN_TONES.length), hair: Math.floor(r() * HAIR_COLORS.length), shirt: Math.floor(r() * SHIRTS.length), pants: Math.floor(r() * PANTS.length), h: 0.92 + r() * 0.14 };
+    const p: Pedestrian = { id: i, on: false, state: 'walk', x: 0, z: 0, yaw: 0, axis: 'x', dir: 1, gj: -1, R: 0, stopN: 0, at: null, dr: 0, pairSide: pair < 0 ? 0 : i % 2 ? 1 : -1, look: 0, prev: 'walk', timer: 0, speed: 1.4, phase: r() * 6, retry: 0, seed, pair, dx: 0, dz: 0, jx: 0, jz: 0, hop: 0, tilt: 0, cool: 0, dog: false, dogX: 0, dogZ: 0, dogYaw: 0, skin: Math.floor(r() * SKIN_TONES.length), hair: Math.floor(r() * HAIR_COLORS.length), shirt: Math.floor(r() * SHIRTS.length), pants: Math.floor(r() * PANTS.length), h: 0.92 + r() * 0.14 };
     people.push(p);
     torso.setColorAt(i, tmp.set(SHIRTS[p.shirt]));
     head.setColorAt(i, tmp.set(SKIN_TONES[p.skin]));
     // One in eight has no hair to show.
     hairM.setColorAt(i, tmp.set(r() < 0.125 ? SKIN_TONES[p.skin] : HAIR_COLORS[p.hair]));
+    dogs.setColorAt(i, tmp.set(['#c68642', '#f1dcb7', '#4a3222', '#d9d9d9', '#e0a96d'][Math.floor(r() * 5)]));
     for (let a = 0; a < 2; a++) {
       arms.setColorAt(i * 2 + a, tmp.set(SHIRTS[p.shirt]));
       legs.setColorAt(i * 2 + a, tmp.set(PANTS[p.pants]));
     }
   }
-  // People walking together walk at the same pace.
-  for (const p of people) if (p.pair >= 0) p.speed = 1.15 + roll(p.seed, 5) * 0.5;
-  for (const p of people) if (p.pair < 0) p.speed = 1.2 + roll(p.seed, 5) * 0.55;
 
   // --- Placing things -------------------------------------------------------------------------------------
 
   let epoch = 0;
+  const hourNow = { v: 12 };
   const others = (v: Vehicle, d: number) => vehicles.some((o) => o !== v && o.on && Math.hypot(o.x - v.x, o.z - v.z) < d);
+  /** Which slot has each ghost, so no two show the same one. */
+  const carTaken = new Map<number, number>();
+  const pedTaken = new Map<number, number>();
+  const vRetry = vehicles.map(() => 0);
+  const release = (v: Vehicle) => {
+    v.on = false;
+    if (carTaken.get(v.gj) === v.id) carTaken.delete(v.gj);
+    v.gj = -1;
+  };
 
-  /** Puts `v` on some road between `minR` and `maxR` from `at`, and off any crossing: false if there's nowhere. */
-  function place(v: Vehicle, at: { x: number; z: number }, minR: number, maxR: number): boolean {
-    const r = rng(v.seed + ++epoch * 104729);
-    for (let tries = 0; tries < 12; tries++) {
-      const axis: Axis = r() < 0.5 ? 'x' : 'z';
-      const dir: Dir = r() < 0.5 ? 1 : -1;
-      const [lo, hi] = crossRange(lineO(axis));
-      const lat = axis === 'x' ? at.z : at.x;
-      const along = axis === 'x' ? at.x : at.z;
-      const l0 = Math.max(lo, Math.ceil((lat - maxR - lineO(axis)) / PERIOD));
-      const l1 = Math.min(hi, Math.floor((lat + maxR - lineO(axis)) / PERIOD));
-      if (l1 < l0) continue;
-      const line = l0 + Math.floor(r() * (l1 - l0 + 1));
-      const [clo, chi] = crossRange(alongO(axis));
-      let s = clamp(along + (r() * 2 - 1) * maxR, crossAt(alongO(axis), clo) + 9, crossAt(alongO(axis), chi) - 9);
-      // Between crossings, not in one.
-      const q = (((s - alongO(axis)) % PERIOD) + PERIOD) % PERIOD;
-      s += clamp(q, 9, PERIOD - 9) - q;
-      const at2 = onRoad(axis, line, s, laneOffset(axis, dir));
-      const d = Math.hypot(at2.x - at.x, at2.z - at.z);
-      if (d < minR || d > maxR) continue;
-      Object.assign(v, { axis, dir, line, s, x: at2.x, z: at2.z, yaw: yawOf(axis, dir), v: SPECS[v.kind].vmax * 0.25 * (0.5 + r()), path: null, plan: null, hold: 0, stuck: 0, braking: false });
-      if (others(v, 9)) continue;
-      v.on = true;
-      return true;
-    }
-    return false;
-  }
-
-  function placePerson(p: Pedestrian, at: { x: number; z: number }, minR: number, maxR: number): boolean {
-    const r = rng(p.seed + ++epoch * 7919);
-    for (let tries = 0; tries < 12; tries++) {
-      const axis: Axis = r() < 0.5 ? 'x' : 'z';
-      const dir: Dir = r() < 0.5 ? 1 : -1;
-      const side: Dir = r() < 0.5 ? 1 : -1;
-      const [lo, hi] = crossRange(lineO(axis));
-      const lat = axis === 'x' ? at.z : at.x;
-      const along = axis === 'x' ? at.x : at.z;
-      const l0 = Math.max(lo, Math.ceil((lat - maxR - lineO(axis)) / PERIOD));
-      const l1 = Math.min(hi, Math.floor((lat + maxR - lineO(axis)) / PERIOD));
-      if (l1 < l0) continue;
-      const line = l0 + Math.floor(r() * (l1 - l0 + 1));
-      const [clo, chi] = crossRange(alongO(axis));
-      let s = clamp(along + (r() * 2 - 1) * maxR, crossAt(alongO(axis), clo) + CURB + 2, crossAt(alongO(axis), chi) - CURB - 2);
-      const q = (((s - alongO(axis)) % PERIOD) + PERIOD) % PERIOD;
-      s += clamp(q, CURB + 2, PERIOD - CURB - 2) - q;
-      const w = onRoad(axis, line, s, side * WALK_OFF);
+  /** Puts `v` where some ghost of its kind is now (one that's out at this hour), between `minR` and `maxR` from `at` and out of a crossing: false if there's none. */
+  function place(v: Vehicle, at: { x: number; z: number }, minR: number, maxR: number, t: number): boolean {
+    const gs = ghostCars();
+    const first = (v.seed + ++epoch * 37) % gs.length;
+    for (let n = 0; n < gs.length; n++) {
+      const g = gs[(first + n) % gs.length];
+      if (g.kind !== v.kind || carTaken.has(g.j) || !carOut(g, hourNow.v)) continue;
+      const S = carProgress(g, t);
+      const r = loopAt(g.loop, S);
+      const q = (((r.s - alongO(r.axis)) % PERIOD) + PERIOD) % PERIOD;
+      if (q < 12 || q > PERIOD - 12) continue;
+      const w = onRoad(r.axis, r.line, r.s, laneOffset(r.axis, r.dir));
       const d = Math.hypot(w.x - at.x, w.z - at.z);
       if (d < minR || d > maxR) continue;
-      for (const q of [p, p.pair === p.id + 1 ? people[p.pair] : null]) {
-        if (!q) continue;
-        // A pair side by side, a stride apart across the sidewalk.
-        const off = q === p ? -0.45 : 0.45;
-        Object.assign(q, { axis, dir, side, line, s, lat: side * WALK_OFF + off, on: true, state: 'walk', timer: 0, dx: 0, dz: 0, jx: 0, jz: 0, hop: 0, tilt: 0, cool: 0, n: 0 });
-        q.yaw = yawOf(axis, dir);
-        schedule(q);
-        ground(q);
-      }
+      Object.assign(v, { axis: r.axis, dir: r.dir, line: r.line, s: r.s, x: w.x, z: w.z, yaw: yawOf(r.axis, r.dir), v: g.speed, path: null, plan: null, hold: 0, stuck: 0, braking: false, gj: g.j, S, acc: 0, pitch: 0, roll: 0 });
+      if (others(v, 9)) continue;
+      v.on = true;
+      carTaken.set(g.j, v.id);
+      return true;
+    }
+    v.gj = -1;
+    return false;
+  }
+
+  /** Where a person on a ghost's ring is, and on the sidewalk or at their stop. */
+  function ground(p: Pedestrian) {
+    const g = ghostPeds()[p.gj];
+    const at = ringAt(g.ring, p.R);
+    let x = at.x;
+    let z = at.z;
+    // Two together walk a stride apart.
+    if (p.pairSide) {
+      x += -at.dz * 0.32 * p.pairSide;
+      z += at.dx * 0.32 * p.pairSide;
+    }
+    const s = p.at;
+    if (s && p.dr > 0 && s.x !== undefined && s.z !== undefined) {
+      // Two on a bench sit along it.
+      const tx = s.x + (p.pairSide && s.kind === 'bench' ? Math.cos(s.face) * 0.4 * p.pairSide : 0);
+      const tz = s.z + (p.pairSide && s.kind === 'bench' ? -Math.sin(s.face) * 0.4 * p.pairSide : 0);
+      x += (tx - x) * p.dr;
+      z += (tz - z) * p.dr;
+    }
+    p.x = x;
+    p.z = z;
+    p.axis = at.axis;
+    p.dir = (at.axis === 'x' ? at.dx : at.dz) > 0 ? 1 : -1;
+  }
+
+  const stopAt = (g: PedGhost, n: number): { stop: Stop; abs: number } => {
+    const ns = g.stops.length;
+    return { stop: g.stops[n % ns], abs: Math.floor(n / ns) * g.ring.P + g.stops[n % ns].off };
+  };
+
+  /** Starts `q` off on ghost `g` as it is at time `t`: walking, or already at a stop. */
+  function start(q: Pedestrian, g: PedGhost, t: number) {
+    const a = pedAt(g, t);
+    Object.assign(q, { on: true, gj: g.j, R: a.R, stopN: a.done, at: null, dr: 0, state: 'walk', dx: 0, dz: 0, jx: 0, jz: 0, hop: 0, tilt: 0, cool: 0, look: 0, speed: g.speed, dog: g.dog, prev: 'walk' });
+    if (a.at >= 0) enter(q, g.stops[a.at], a.since > 4 ? 1 : 0);
+    ground(q);
+    q.yaw = ringHeading(g, q.R);
+    q.dogX = q.x + 0.9;
+    q.dogZ = q.z;
+  }
+  const ringHeading = (g: PedGhost, R: number) => {
+    const at = ringAt(g.ring, R);
+    return Math.atan2(at.dx, at.dz);
+  };
+
+  function placePerson(p: Pedestrian, at: { x: number; z: number }, minR: number, maxR: number, t: number): boolean {
+    const gs = ghostPeds();
+    const first = (p.seed + ++epoch * 13) % gs.length;
+    const partner = p.pair >= 0 ? people[p.pair] : null;
+    for (let n = 0; n < gs.length; n++) {
+      const g = gs[(first + n) % gs.length];
+      if (g.pair !== (p.pair >= 0) || pedTaken.has(g.j) || !pedOut(g, hourNow.v)) continue;
+      const a = pedAt(g, t);
+      const w = ringAt(g.ring, a.R);
+      const d = Math.hypot(w.x - at.x, w.z - at.z);
+      if (d < minR || d > maxR) continue;
+      for (const q of [p, partner]) if (q) start(q, g, t);
+      pedTaken.set(g.j, p.id);
       return true;
     }
     return false;
   }
 
-  /** Where they'll stop for a look in a window, maybe. */
-  function schedule(p: Pedestrian) {
-    p.idleAt = roll(p.seed, p.n++, 1) < 0.35 ? p.s + p.dir * (4 + roll(p.seed, p.n, 2) * 30) : NaN;
-  }
-  function ground(p: Pedestrian) {
-    const w = onRoad(p.axis, p.line, p.s, p.lat);
-    p.x = w.x;
-    p.z = w.z;
+  /** Off the street for good (in through a door, or too far to be missed): the ghost is free for someone else. */
+  function retire(p: Pedestrian) {
+    const lead = p.pair >= 0 && p.id % 2 ? people[p.pair] : p;
+    for (const q of [lead, lead.pair >= 0 ? people[lead.pair] : null]) if (q) q.on = false;
+    if (pedTaken.get(lead.gj) === lead.id) pedTaken.delete(lead.gj);
   }
 
-  // --- Stepping -------------------------------------------------------------------------------------------
+  /** Comes to a stop: the door, the bench, a look in the window, the bus shelter. */
+  function enter(p: Pedestrian, s: Stop, dr = 0) {
+    p.at = s;
+    p.dr = s.x === undefined ? 0 : dr;
+    p.state = s.kind === 'door' ? 'door' : s.kind === 'bench' ? 'sit' : 'idle';
+  }
 
   const avoidBody = (a: Avoid): Body => ({ x: a.x, z: a.z, yaw: 0, len: 3, wid: 3 });
 
   function stepVehicle(v: Vehicle, dt: number, t: number, avoidBodies: Body[]) {
     const K = SPECS[v.kind];
+    const gh = v.gj >= 0 ? ghostCars()[v.gj] : null;
     v.hold = Math.max(0, v.hold - dt);
     let target = K.vmax;
     let carAhead = false;
@@ -605,7 +1085,8 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       const o = alongO(v.axis);
       const k = nextCrossing(v.s, v.dir, o);
       const c = crossingOf(v.axis, v.line, k);
-      plan = v.plan?.k === k ? v.plan : (v.plan = { k, ...route({ axis: v.axis, dir: v.dir, line: v.line }, k, roll(v.seed, c.ix, c.iz)) });
+      const road = { axis: v.axis, dir: v.dir, line: v.line };
+      plan = v.plan?.k === k ? v.plan : (v.plan = { k, ...((gh && loopRoute(gh.loop, road, k)) || route(road, k, roll(v.seed, c.ix, c.iz))) });
       const dist = (crossAt(o, k) - v.s) * v.dir - STOP - v.len / 2;
       if (dist < 14 && plan.turn !== 'straight') target = Math.min(target, TURN_SPEED + 2);
       const light = lightPhase(t, c);
@@ -648,10 +1129,20 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       const g = gapAhead(v, b);
       if (g !== null) target = Math.min(target, safeSpeed(g, 0, K.vmax));
     }
+    // Its ghost is where it should be by now: behind it, it hurries (up to the top speed); ahead, it eases off.
+    if (gh) {
+      const P = loopLength(gh.loop);
+      const lag = ((carProgress(gh, t) - v.S + P * 1.5) % P) - P / 2;
+      target = Math.min(target, clamp(gh.speed + 0.5 * lag, K.vmax * 0.12, K.vmax));
+    }
     if (v.hold > 0) target = 0;
     v.stuck = v.v < 0.3 && carAhead ? v.stuck + dt : 0;
     v.braking = target < v.v - 0.3;
-    v.v += clamp(target - v.v, -(BRAKE + 3) * dt, ACC * dt);
+    // Ease the pedal: no jolt from gas to brake (a hard stop still bites at once).
+    const want = clamp((target - v.v) / dt, -(BRAKE + 3), ACC);
+    v.acc = want < -6 ? want : v.acc + (want - v.acc) * Math.min(1, dt * 10);
+    v.v = Math.max(0, v.v + v.acc * dt);
+    const yaw0 = v.yaw;
     if (v.path) {
       const p = v.path;
       p.u = Math.min(1, p.u + (v.v * dt) / p.len);
@@ -674,6 +1165,11 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       v.x = w.x;
       v.z = w.z;
     }
+    if (gh) v.S = (v.path ? null : loopProgress(gh.loop, { axis: v.axis, dir: v.dir, line: v.line }, v.s)) ?? v.S + v.v * dt;
+    // Nose down under braking, a lean out of a bend.
+    const k = Math.min(1, dt * 6);
+    v.pitch += (clamp(-v.acc * 0.0045, -0.03, 0.05) - v.pitch) * k;
+    v.roll += (clamp((-wrap(v.yaw - yaw0) / dt) * v.v * 0.004, -0.05, 0.05) - v.roll) * k;
   }
 
   /** At the line and cleared to go: the curve through the crossing. */
@@ -690,9 +1186,12 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     return { p0, c: ctl, p1, len: Math.max(1, len), u: 0, to, turn: plan.turn };
   }
 
-  const walkers = (p: Pedestrian) => p.on && p.state !== 'down';
 
-  function stepPerson(p: Pedestrian, dt: number, t: number, cars: Avoid[]) {
+  const hidden = (p: Pedestrian) => p.state === 'door' && p.dr >= 1;
+  const walkers = (p: Pedestrian) => p.on && p.state !== 'down' && !hidden(p);
+
+  /** Tumbling, and jumping clear of what's coming: true while they're down (and nothing else about them moves). */
+  function reactions(p: Pedestrian, dt: number, cars: Avoid[]): boolean {
     p.cool = Math.max(0, p.cool - dt);
     // Tumbling: skid along, lie there, get up where they were.
     if (p.state === 'down') {
@@ -711,10 +1210,10 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
         p.hop = 0;
         p.timer = 0;
       }
-      return;
+      return true;
     }
     // Jump from what's coming, once in a while.
-    if (p.cool === 0) {
+    if (p.cool === 0 && !hidden(p)) {
       for (const c of cars) {
         if (Math.abs(c.x - p.x) > 30 || Math.abs(c.z - p.z) > 30) continue;
         const d = dodge({ x: p.x + p.dx, z: p.z + p.dz }, c);
@@ -741,70 +1240,100 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       p.dx *= back;
       p.dz *= back;
     }
-    const swing = p.state === 'walk' || p.state === 'cross';
-    if (swing) p.phase += dt * p.speed * 4.6;
-    const o = alongO(p.axis);
-    if (p.state === 'walk') {
-      p.s += p.dir * p.speed * dt;
-      // A look in the window.
-      if (!Number.isNaN(p.idleAt) && (p.s - p.idleAt) * p.dir >= 0) {
-        p.state = 'idle';
-        p.timer = 3 + roll(p.seed, p.n++, 3) * 5;
-        p.idleAt = NaN;
-      }
-      const k = nextCrossing(p.s, p.dir, o);
-      const [lo, hi] = crossRange(o);
-      if (p.state !== 'walk') {
-        // Stopped for a look.
-      } else if (k < lo || k > hi) {
-        // The edge of the city.
-        if ((p.s - crossAt(o, p.dir > 0 ? hi : lo)) * p.dir > CURB + 2) p.dir = -p.dir as Dir;
-      } else if ((crossAt(o, k) - p.s) * p.dir - CURB <= 0) {
-        const u = roll(p.seed, p.n++, k, p.line);
-        if (u < 0.55) p.state = 'wait';
-        else if (u < 0.9) turnCorner(p, k);
-        else {
-          p.dir = -p.dir as Dir;
-          schedule(p);
-        }
-      }
-    } else if (p.state === 'wait') {
-      const k = nextCrossing(p.s, p.dir, o);
-      if (canWalk(p.axis, lightPhase(t, crossingOf(p.axis, p.line, k)))) p.state = 'cross';
-    } else if (p.state === 'cross') {
-      p.s += p.dir * 1.7 * dt;
-      if ((p.s - crossAt(o, Math.round((p.s - o) / PERIOD))) * p.dir >= CURB + 0.2) {
-        p.state = 'walk';
-        schedule(p);
-      }
+    return false;
+  }
+
+  /** A person (or one of a pair, the other copies them) on a ghost's ring: walking it, waiting for the walk sign, stopping where it stops. */
+  function stepPerson(p: Pedestrian, dt: number, t: number, cars: Avoid[], near: { x: number; z: number }) {
+    if (reactions(p, dt, cars)) return;
+    const g = ghostPeds()[p.gj];
+    if (!g) return retire(p);
+    const lead = p.pair >= 0 && p.id % 2 ? people[p.pair] : null;
+    if (lead) {
+      // The second of a pair does what the first does.
+      Object.assign(p, { R: lead.R, stopN: lead.stopN, at: lead.at, dr: lead.dr, speed: lead.speed, phase: lead.phase + 0.5, state: lead.state === 'down' ? lead.prev : lead.state });
     } else {
-      p.timer -= dt;
-      if (p.timer <= 0) {
-        p.state = 'walk';
-        schedule(p);
+      const a = pedAt(g, t);
+      const out = pedOut(g, hourNow.v);
+      // Out of hours: in at the next door, or gone once they're too far to see go.
+      if (!out && (hidden(p) || Math.hypot(p.x - near.x, p.z - near.z) > 45)) return retire(p);
+      if (p.at) {
+        const s = p.at;
+        const over = a.done > p.stopN;
+        if (s.x !== undefined && s.z !== undefined) {
+          const at = ringAt(g.ring, p.R);
+          const dist = Math.max(0.4, Math.hypot(s.x - at.x, s.z - at.z));
+          p.dr = clamp(p.dr + ((over ? -1 : 1) * (s.kind === 'door' ? 1.3 : 1.8) * dt) / dist, 0, 1);
+        }
+        if (over && p.dr === 0) {
+          p.at = null;
+          p.stopN++;
+          p.state = 'walk';
+        }
+      } else {
+        // Whoever's ahead has done with a stop: it's not one to wait for.
+        if (a.done > p.stopN) p.stopN = a.done;
+        const lag = a.R - p.R;
+        const cruise = g.role === 'jogger' ? g.speed : p.speed;
+        let v = clamp(cruise + 0.9 * lag, cruise * 0.3, cruise * 2.2);
+        const P = g.ring.P;
+        const base = Math.floor(p.R / P) * P;
+        const o = p.R - base;
+        let next = p.R + v * dt;
+        let state: PedState = 'walk';
+        for (const c of g.ring.crossings) {
+          if (o < c.o0 && next - base >= c.o0 && next - base < c.o1 + 1) {
+            if (!canWalk(c.axis, lightPhase(t, crossingOf(c.axis, c.line, c.k)))) {
+              // Wait at the kerb for the walk sign.
+              next = base + c.o0 - 0.01;
+              state = 'wait';
+            }
+          } else if (o >= c.o0 && o < c.o1) {
+            // Halfway over: across at a brisk pace, whatever the lights do now.
+            state = 'cross';
+            v = Math.max(1.7, cruise);
+            next = p.R + v * dt;
+          }
+        }
+        const s = g.stops.length ? stopAt(g, p.stopN) : null;
+        if (s && next >= s.abs) {
+          p.R = s.abs;
+          enter(p, s.stop);
+        } else {
+          p.phase += dt * (state === 'wait' ? 0 : v) * 4.6;
+          p.R = next;
+          p.state = state;
+        }
       }
     }
     ground(p);
-    // Which way they face: where they're going, at a window the window, in a chat each other.
-    let want = yawOf(p.axis, p.dir);
-    if (p.state === 'idle') {
+    // Which way they face: where they're going; at a stop, what it's for; in a chat each other.
+    const heading = ringHeading(g, p.R);
+    let want = heading;
+    if (p.state === 'idle' || p.state === 'sit' || p.state === 'door') {
       const q = p.pair >= 0 ? people[p.pair] : null;
-      want = q?.on ? Math.atan2(q.x - p.x, q.z - p.z) : yawOf(other(p.axis), p.side);
+      want = p.at?.kind === 'look' || p.at?.kind === 'bus' || p.at?.kind === 'bench' || p.at?.kind === 'door' ? p.at.face : heading;
+      if (p.state === 'idle' && q?.on && p.at?.kind !== 'bus') want = Math.atan2(q.x - p.x, q.z - p.z);
     }
-    p.yaw += wrap(want - p.yaw) * Math.min(1, dt * 10);
-  }
-
-  /** At a corner: on down the cross street, away from the road they came to, not crossing anything. */
-  function turnCorner(p: Pedestrian, k: number) {
-    const side = Math.sign(p.lat) as Dir;
-    const across = crossAt(lineO(p.axis), p.line) + p.lat;
-    p.axis = other(p.axis);
-    p.side = -p.dir as Dir;
-    p.lat = p.side * WALK_OFF + (p.lat - side * WALK_OFF);
-    p.s = across;
-    p.dir = side;
-    p.line = k;
-    schedule(p);
+    p.yaw += wrap(want - p.yaw) * Math.min(1, dt * (p.state === 'walk' || p.state === 'cross' ? 7 : 4));
+    // A glance at whoever's close by (you), a turn of the head and no more.
+    const dxp = near.x - p.x, dzp = near.z - p.z;
+    const turn = wrap(Math.atan2(dxp, dzp) - p.yaw);
+    const look = Math.hypot(dxp, dzp) < 7 && Math.abs(turn) < 2.2 && !hidden(p) ? clamp(turn, -1.1, 1.1) : 0;
+    p.look += (look - p.look) * Math.min(1, dt * 5);
+    // The dog trots on its lead ahead and to one side, nosing about when they stop.
+    if (p.dog) {
+      const sx = Math.sin(p.yaw), sz = Math.cos(p.yaw);
+      const still = p.state !== 'walk' && p.state !== 'cross';
+      const sniff = still ? Math.sin(t * 0.9 + p.id) * 0.5 : 0;
+      const tx = p.x + sx * 0.95 + sz * (0.55 + sniff);
+      const tz = p.z + sz * 0.95 - sx * (0.55 + sniff);
+      const k = Math.min(1, dt * 5);
+      const mx = (tx - p.dogX) * k, mz = (tz - p.dogZ) * k;
+      p.dogX += mx;
+      p.dogZ += mz;
+      if (Math.hypot(mx, mz) > 0.002) p.dogYaw += wrap(Math.atan2(mx, mz) - p.dogYaw) * Math.min(1, dt * 8);
+    }
   }
 
   // --- Frame ----------------------------------------------------------------------------------------------
@@ -818,9 +1347,11 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const qt = new THREE.Quaternion();
   const UP = new THREE.Vector3(0, 1, 0);
   const RIGHT = new THREE.Vector3(1, 0, 0);
+  const FWD = new THREE.Vector3(0, 0, 1);
   const pos = new THREE.Vector3();
   const sc = new THREE.Vector3();
   let started = false;
+  let clock = 0;
 
   function writeVehicle(v: Vehicle) {
     const m = meshes[v.kind];
@@ -831,7 +1362,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       lamps.setMatrixAt(hi + 1, ZERO);
       return;
     }
-    q.setFromAxisAngle(UP, v.yaw);
+    q.setFromAxisAngle(UP, v.yaw).multiply(qt.setFromAxisAngle(RIGHT, v.pitch)).multiply(new THREE.Quaternion().setFromAxisAngle(FWD, v.roll));
     P.compose(pos.set(v.x, 0, v.z), q, sc.set(1, 1, 1));
     m.setMatrixAt(v.slot, P);
     const [ly, lw] = SPECS[v.kind].lamp;
@@ -841,70 +1372,111 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     }
   }
 
+  const smooth = (x: number) => x * x * (3 - 2 * x);
+
   function writePerson(p: Pedestrian) {
     const i = p.id;
-    if (!p.on) {
-      for (const [m, per] of [[torso, 1], [head, 1], [hairM, 1], [arms, 2], [legs, 2]] as [THREE.InstancedMesh, number][]) for (let a = 0; a < per; a++) m.setMatrixAt(i * per + a, ZERO);
+    if (!p.on || hidden(p)) {
+      for (const [m, per] of [[torso, 1], [head, 1], [hairM, 1], [arms, 2], [legs, 2], [dogs, 1]] as [THREE.InstancedMesh, number][]) for (let a = 0; a < per; a++) m.setMatrixAt(i * per + a, ZERO);
       return;
     }
     const flail = p.state === 'down';
+    const moving = p.state === 'walk' || p.state === 'cross';
+    const jog = p.speed > 2.4;
+    // Going in at a door (or out of it) they shrink into it; on a bench they sit.
+    const fade = p.state === 'door' ? (p.dr < 0.7 ? 1 : (1 - p.dr) / 0.3) : 1;
+    const sit = p.state === 'sit' ? smooth(clamp((p.dr - 0.4) / 0.6, 0, 1)) : 0;
+    // On the way to a door or a bench they're still walking.
+    const stepping = moving || ((p.state === 'door' || p.state === 'sit') && p.dr > 0 && p.dr < 1);
+    const w0 = moving ? p.phase : p.dr * 26;
+    const t = clock + p.id * 1.7;
+    const swing = Math.sin(w0);
+    // Standing still they sway a little, and shift their weight now and then.
+    const sway = !stepping && !flail ? Math.sin(t * 0.8) * 0.025 + Math.max(0, Math.sin(t * 0.31 + 2) - 0.85) * 0.25 : stepping ? swing * 0.03 : 0;
+    const bob = stepping ? Math.abs(swing) * (jog ? 0.07 : 0.035) : 0;
     // On their back the body's laid along the ground, a little up off it.
-    q.setFromAxisAngle(UP, p.yaw).multiply(qt.setFromAxisAngle(RIGHT, p.tilt));
-    P.compose(pos.set(p.x + p.dx, (flail ? p.hop : Math.sin((Math.PI * p.hop) / 0.5) * 0.45) + Math.abs(p.tilt) * 0.12, p.z + p.dz), q, sc.set(p.h, p.h, p.h));
+    q.setFromAxisAngle(UP, p.yaw).multiply(qt.setFromAxisAngle(RIGHT, p.tilt + (jog && moving ? 0.12 : 0) + sit * -0.05)).multiply(new THREE.Quaternion().setFromAxisAngle(FWD, sway));
+    P.compose(pos.set(p.x + p.dx, (flail ? p.hop : Math.sin((Math.PI * p.hop) / 0.5) * 0.45) + Math.abs(p.tilt) * 0.12 + bob - sit * 0.4 * p.h, p.z + p.dz), q, sc.set(p.h, p.h * fade, p.h));
     torso.setMatrixAt(i, P);
-    head.setMatrixAt(i, P);
-    hairM.setMatrixAt(i, P);
-    const chat = p.state === 'idle';
+    // Their head turns to look (at you, at a window) about the neck.
+    M.multiplyMatrices(P, T.makeTranslation(0, 1.5, 0)).multiply(R.makeRotationY(p.look + (p.at?.kind === 'look' ? Math.sin(t * 0.5) * 0.3 : 0))).multiply(T.makeTranslation(0, -1.5, 0));
+    head.setMatrixAt(i, M);
+    hairM.setMatrixAt(i, M);
+    const chat = p.state === 'idle' && p.pair >= 0 && p.at?.kind !== 'bus';
+    const phone = p.state === 'idle' && p.at?.kind === 'bus';
     for (let a = 0; a < 2; a++) {
       const sd = a ? -1 : 1;
-      const w = Math.sin(p.phase + (a ? Math.PI : 0));
-      const leg = flail ? Math.sin(p.phase * 3 + a * 2) * 0.9 : w * 0.65;
-      const arm = flail ? Math.sin(p.phase * 4 + a) * 1.4 : chat ? (a ? -1.1 + Math.sin(p.phase * 2) * 0.35 : 0.05) : -w * 0.7;
+      const w = Math.sin(w0 + (a ? Math.PI : 0));
+      const leg = flail ? Math.sin(p.phase * 3 + a * 2) * 0.9 : sit > 0 ? -1.3 * sit + (stepping ? w * 0.65 * (1 - sit) : 0) : stepping ? w * (jog ? 0.95 : 0.65) : 0;
+      let arm = flail ? Math.sin(p.phase * 4 + a) * 1.4 : stepping ? -w * (jog ? 1.0 : 0.7) - (jog ? 0.6 : 0) : 0;
+      if (!flail && !stepping) {
+        if (chat) arm = a ? -1.1 + Math.sin(t * 2 + p.id) * 0.35 : 0.05;
+        else if (phone) arm = a ? -1.5 : 0.05;
+        else if (p.state === 'wait') arm = -0.25 + Math.sin(t * 1.3 + a) * 0.06;
+        else if (sit > 0) arm = -0.7 * sit;
+      }
       M.multiplyMatrices(P, T.makeTranslation(sd * 0.12, 0.82, 0)).multiply(R.makeRotationX(leg));
       legs.setMatrixAt(i * 2 + a, M);
       M.multiplyMatrices(P, T.makeTranslation(sd * 0.28, 1.36, 0)).multiply(R.makeRotationX(arm));
       arms.setMatrixAt(i * 2 + a, M);
     }
+    if (p.dog) {
+      qt.setFromAxisAngle(UP, p.dogYaw);
+      dogs.setMatrixAt(i, M.compose(pos.set(p.dogX, moving ? Math.abs(Math.sin(t * 9)) * 0.03 : 0, p.dogZ), qt, sc.set(1, 1, 1)));
+    } else dogs.setMatrixAt(i, ZERO);
   }
 
   const life: StreetLife = {
     group,
     vehicles,
     people,
-    update(t, dt, night, near, avoid = []) {
+    update(t, dt, night, near, avoid = [], hour = hourAt(t, -new Date().getTimezoneOffset())) {
       dt = Math.min(dt, 0.2);
+      clock = t;
+      hourNow.v = hour;
       const far = Math.min(tick(dt), 0.25);
       // Lights are on all day but only show at night.
       lampMat.color.setScalar(0.7 + 0.3 * night);
       const keepClear: Body[] = (avoid.length ? avoid : [{ x: near.x, z: near.z, vx: 0, vz: 0 }]).map(avoidBody);
       const cars: Avoid[] = [...avoid];
-      if (!started) {
+      const first = !started;
+      if (first) {
         // First time: the streets are already busy.
         started = true;
-        for (const v of vehicles) place(v, near, 15, SPAWN_R);
-        for (const p of people) if (p.pair < 0 || p.id % 2 === 0) placePerson(p, near, 12, SPAWN_R);
+        for (const v of vehicles) place(v, near, 15, SPAWN_R, t);
+        for (const p of people) if (p.pair < 0 || p.id % 2 === 0) placePerson(p, near, 12, SPAWN_R, t);
       }
       for (const v of vehicles) {
-        if (v.on && Math.hypot(v.x - near.x, v.z - near.z) > CULL_R) v.on = false;
-        if (!v.on) place(v, near, SPAWN_MIN, SPAWN_R);
-        if (!v.on) continue;
+        const gh = v.gj >= 0 ? ghostCars()[v.gj] : null;
+        const away = Math.hypot(v.x - near.x, v.z - near.z);
+        // Gone from the road when it's too far, or (out of your sight) when it's not a busy hour for it, or when it's so far behind its ghost that someone else's street has a car there now.
+        if (v.on && (away > CULL_R || (gh && away > SPAWN_MIN && (!carOut(gh, hour) || Math.abs(((carProgress(gh, t) - v.S + loopLength(gh.loop) * 1.5) % loopLength(gh.loop)) - loopLength(gh.loop) / 2) > 40)))) release(v);
+        if (!v.on) {
+          // Looking for a ghost is a scan of them all: not every frame.
+          if ((vRetry[v.id] -= dt) > 0 || !place(v, near, SPAWN_MIN, SPAWN_R, t)) {
+            if (vRetry[v.id] <= 0) vRetry[v.id] = 0.5 + (v.id % 5) * 0.1;
+            continue;
+          }
+        }
         if (v.v > 3) cars.push({ x: v.x, z: v.z, vx: Math.sin(v.yaw) * v.v, vz: Math.cos(v.yaw) * v.v });
         const step = Math.hypot(v.x - near.x, v.z - near.z) < NEAR_R ? dt : far;
         if (step > 0) stepVehicle(v, step, t, keepClear);
       }
       for (const p of people) {
         if (p.pair >= 0 && p.id % 2 === 1) continue;
-        if (p.on && Math.hypot(p.x - near.x, p.z - near.z) > CULL_R) {
-          p.on = false;
-          if (p.pair >= 0) people[p.pair].on = false;
+        if (p.on && Math.hypot(p.x - near.x, p.z - near.z) > CULL_R) retire(p);
+        if (!p.on) {
+          if ((p.retry -= dt) > 0) continue;
+          if (!placePerson(p, near, SPAWN_MIN, SPAWN_R, t)) p.retry = 0.6 + (p.id % 7) * 0.1;
         }
-        if (!p.on && !placePerson(p, near, SPAWN_MIN, SPAWN_R)) continue;
       }
       // Cars that are stopped or slow don't scare anyone; the ones going fast do.
-      for (const p of people) {
-        if (!p.on) continue;
-        const step = Math.hypot(p.x - near.x, p.z - near.z) < NEAR_R ? dt : far;
-        if (step > 0) stepPerson(p, step, t, cars);
+      for (const lead of [true, false]) {
+        for (const p of people) {
+          if (!p.on || (p.pair >= 0 && p.id % 2 === 1) === lead) continue;
+          const step = Math.hypot(p.x - near.x, p.z - near.z) < NEAR_R ? dt : far;
+          if (step > 0) stepPerson(p, step, t, cars, near);
+        }
       }
       for (const v of vehicles) writeVehicle(v);
       for (const v of vehicles) {
@@ -912,7 +1484,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
         lamps.setColorAt(v.id * 2 + 1, TAIL.set(v.braking ? '#ff3030' : night > 0.3 ? '#c81e1e' : '#8a2a2a'));
       }
       for (const p of people) writePerson(p);
-      for (const m of [...KINDS.map((k) => meshes[k]), lamps, torso, head, hairM, arms, legs]) {
+      for (const m of [...KINDS.map((k) => meshes[k]), lamps, torso, head, hairM, arms, legs, dogs]) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       }
@@ -944,8 +1516,8 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
         const p = best;
         const d = Math.hypot(p.x + p.dx - at.x, p.z + p.dz - at.z) || 1;
         // Thrown away from the car, or wherever if it's right on them.
-        const ax = d > 0.05 ? (p.x + p.dx - at.x) / d : Math.sin(roll(p.seed, p.n));
-        const az = d > 0.05 ? (p.z + p.dz - at.z) / d : Math.cos(roll(p.seed, p.n));
+        const ax = d > 0.05 ? (p.x + p.dx - at.x) / d : Math.sin(roll(p.seed, p.id));
+        const az = d > 0.05 ? (p.z + p.dz - at.z) / d : Math.cos(roll(p.seed, p.id));
         const sp = clamp(speed * 0.7, 3, 11);
         p.prev = p.state === 'idle' ? 'walk' : p.state;
         p.state = 'down';
