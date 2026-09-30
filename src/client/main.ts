@@ -139,6 +139,8 @@ scene.background = new THREE.Color('#bfe3ff');
 scene.fog = new THREE.Fog('#bfe3ff', 40, 90);
 /** How far the camera sees in the office: as far as the haze ever is, from the top floor. */
 const FAR = HAZE_MAX + 20;
+/** W1 island: down on the street, out to the sea's horizon. */
+const SHORE_FAR = 600;
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, FAR);
 
 const hemi = new THREE.HemisphereLight('#fff5e6', '#c9a27a', 1.5);
@@ -4856,11 +4858,22 @@ function frame(ts?: number) {
     splashes.burst(x, player.street - 0.3, z, 1);
     sound.splash({ x, y: player.street, z }, 1);
     fade(true);
+    // Only if you're still where you went in: a trip or a gate since then is somewhere else, with its own fade.
+    const here = `${store.floor}|${upTop}|${atCircuit}|${player.street}`;
     setTimeout(() => {
-      if (!driver.active && !upTop && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
-      fade(false);
       wadedAt = 0;
+      if (trip || gateTrip) return;
+      if (`${store.floor}|${upTop}|${atCircuit}|${player.street}` === here && !driver.active && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
+      fade(false);
     }, 700);
+  }
+  // W1 island: down on the street the camera sees out past the haze to the sea's horizon (world/ocean.ts fades the sea out before it).
+  if (!upTop && !atCircuit) {
+    const far = inOffice() && Math.abs(player.pos.y - player.street) < 3 ? SHORE_FAR : FAR;
+    if (camera.far !== far) {
+      camera.far = far;
+      camera.updateProjectionMatrix();
+    }
   }
   // Walked into a pole's hole: you grab the pole on your way down it.
   const hole = inOffice() && office.stack.polesGoDown() ? office.stack.poles().find((s) => Math.hypot(player.pos.x - s.x, player.pos.z - s.z) < POLE.hole - 0.15) : undefined;
