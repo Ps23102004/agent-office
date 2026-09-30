@@ -32,10 +32,15 @@ export type WorkerKind = 'agent' | 'shell';
  */
 export type WorkerAction = 'read' | 'edit' | 'test' | 'web' | 'failing';
 
-export type AgentProvider = 'claude' | 'opencode' | 'codex' | 'grok' | 'muse' | 'custom';
+export type AgentProvider = 'claude' | 'opencode' | 'codex' | 'grok' | 'muse' | 'omni' | 'custom';
 
 export function isAgentProvider(value: unknown): value is AgentProvider {
-  return value === 'claude' || value === 'opencode' || value === 'codex' || value === 'grok' || value === 'muse' || value === 'custom';
+  return value === 'claude' || value === 'opencode' || value === 'codex' || value === 'grok' || value === 'muse' || value === 'omni' || value === 'custom';
+}
+
+/** Omni is Claude Code pointed at a local model proxy, so it shares Claude's hooks, transcripts and terminal signals. */
+export function runsClaudeCode(provider: AgentProvider | undefined): boolean {
+  return provider === 'claude' || provider === 'omni';
 }
 
 /** A Claude model alias the hire dialog and queue can request explicitly (see server/agents.ts). */

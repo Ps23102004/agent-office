@@ -7,7 +7,7 @@ import { DESK_BY_ID } from '../shared/layout.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
 import { agentProviders, configuredProvider } from './agents.js';
-import { WorkerManager, type HookEnv, type RunAs } from './workers.js';
+import { WorkerManager, resolveCommand, type HookEnv, type RunAs } from './workers.js';
 import { GitHub, MergeWatch } from './github.js';
 import type { GhAs } from './signins.js';
 import { TaskQueue } from './queue.js';
@@ -95,7 +95,7 @@ export function projectInfo(dir: string, name: string, agentCmd: string, agentAr
     remote: git(['remote', 'get-url', 'origin']),
     agentCmd: [agentCmd, ...agentArgs].join(' '),
     defaultProvider: configuredProvider(agentCmd),
-    agentProviders: agentProviders(configuredProvider(agentCmd)),
+    agentProviders: agentProviders(configuredProvider(agentCmd), !!resolveCommand('omni')),
   };
 }
 

@@ -12,7 +12,7 @@ import { Accounts } from './accounts.js';
 import { MAX_REPOS, childEnv, resolveCommand, type RepoSource } from './workers.js';
 import { SignIns, type GhAs } from './signins.js';
 import { agentProviders, configuredProvider, OPEN_CODE_MODEL_MAX } from './agents.js';
-import { createGrokModelCatalogue, createOpenCodeModelCatalogue } from './models.js';
+import { createGrokModelCatalogue, createOmniModelCatalogue, createOpenCodeModelCatalogue } from './models.js';
 import { Tailnet } from './tailnet.js';
 import { Team } from './team.js';
 import { Upgrader } from './upgrade.js';
@@ -230,6 +230,8 @@ export async function startServer(cfg: Config) {
     cfg.dir,
   );
 
+  const omniModels = createOmniModelCatalogue();
+
   const sendTo = (c: Client, msg: ServerMsg) => {
     if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
   };
@@ -410,7 +412,7 @@ export async function startServer(cfg: Config) {
   };
   // The prompts the office writes for workers by itself, and the worker everyone starts on (⚙️ Settings).
   const configured = configuredProvider(cfg.agentCmd);
-  const prompts = new OfficePrompts(cfg.dataDir, { list: agentProviders(configured), configured }, (state) => broadcast({ t: 'prompts', state }));
+  const prompts = new OfficePrompts(cfg.dataDir, { list: agentProviders(configured, !!resolveCommand('omni')), configured }, (state) => broadcast({ t: 'prompts', state }));
   // Whether a worker whose pull request merged goes home by itself, on every floor (⚙️ Settings).
   const leaveOnMerge = new LeaveOnMerge(cfg.dataDir, (state) => broadcast({ t: 'leaveOnMerge', state }));
 
@@ -824,6 +826,13 @@ export async function startServer(cfg: Config) {
           return send(res, 200, { models: await grokModels.get() });
         } catch {
           return send(res, 502, { error: 'Could not load Grok models' });
+        }
+      }
+      if (p === '/api/agents/omni/models' && req.method === 'GET') {
+        try {
+          return send(res, 200, { models: await omniModels.get() });
+        } catch {
+          return send(res, 502, { error: 'Could not load Omni models' });
         }
       }
       if (p === '/api/image' && req.method === 'GET') {

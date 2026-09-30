@@ -27,6 +27,8 @@ export function addUsage(a: Usage, b: Usage, sign = 1): Usage {
     cacheRead: a.cacheRead + sign * b.cacheRead,
     cost: a.cost + sign * b.cost,
     calls: a.calls + sign * b.calls,
+    // One message priced without a rate (see usageOfMessage) makes the whole total unpriced.
+    ...(a.costKnown === false || b.costKnown === false ? { costKnown: false } : {}),
   };
 }
 
@@ -35,8 +37,9 @@ const isZero = (u: Usage) => !u.input && !u.output && !u.cacheWrite && !u.cacheR
 /**
  * USD per million tokens — [input, output, cache read] — from the Claude pricing page, checked
  * 2026-09-26. A 5-minute cache write costs 1.25x input, a 1-hour write 2x. First match wins, so
- * newer generations come before the family they belong to. A model not listed gets Opus rates:
- * a budget warning that comes early beats one that comes late.
+ * newer generations come before the family they belong to. A Claude model not listed gets Opus rates:
+ * a budget warning that comes early beats one that comes late. A model that isn't Claude at all
+ * (Omni routes to GPT, Gemini and local models) has no rate here, so its cost is left unavailable.
  */
 const PRICES: [RegExp, [number, number, number]][] = [
   [/fable-5-1|mythos-5-1/, [10, 50, 0.25]],
@@ -58,6 +61,9 @@ export function priceOf(model: string): [number, number, number] {
   return PRICES.find(([re]) => re.test(m))?.[1] ?? OPUS;
 }
 
+/** A named model that isn't a Claude one has no price here; a missing or synthetic name keeps the Opus fallback. */
+const isForeignModel = (model: string) => /^[a-z0-9]/i.test(model) && !/claude|fable|mythos|opus|sonnet|haiku/i.test(model);
+
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
 
 /** One assistant message's tokens, priced. */
@@ -67,6 +73,7 @@ export function usageOfMessage(model: string, u: any): Usage {
   const cacheWrite = num(u?.cache_creation_input_tokens);
   const hour = Math.min(cacheWrite, num(u?.cache_creation?.ephemeral_1h_input_tokens));
   const cacheRead = num(u?.cache_read_input_tokens);
+  if (isForeignModel(model)) return { input, output, cacheWrite, cacheRead, cost: 0, calls: 1, costKnown: false };
   const [pin, pout, pread] = priceOf(model);
   const cost = (input * pin + output * pout + (cacheWrite - hour) * pin * 1.25 + hour * pin * 2 + cacheRead * pread) / 1e6 + num(u?.server_tool_use?.web_search_requests) * WEB_SEARCH_USD;
   return { input, output, cacheWrite, cacheRead, cost, calls: 1 };
@@ -104,7 +111,7 @@ export function trackerUsage(t: UsageTracker): Usage {
 }
 
 const asUsage = (v: any): Usage | undefined =>
-  v && typeof v === 'object' ? { input: num(v.input), output: num(v.output), cacheWrite: num(v.cacheWrite), cacheRead: num(v.cacheRead), cost: num(v.cost), calls: num(v.calls) } : undefined;
+  v && typeof v === 'object' ? { input: num(v.input), output: num(v.output), cacheWrite: num(v.cacheWrite), cacheRead: num(v.cacheRead), cost: num(v.cost), calls: num(v.calls), ...(v.costKnown === false ? { costKnown: false } : {}) } : undefined;
 
 /** Rebuilds a tracker saved by a previous run; anything odd falls back to starting over. */
 export function restoreTracker(saved: any): UsageTracker {

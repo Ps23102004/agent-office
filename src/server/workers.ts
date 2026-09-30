@@ -9,7 +9,7 @@ import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
 import type { AgentChoice, AgentEffort, AgentProvider, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerRepo, WorkerStatus, WorkerTask } from '../shared/protocol.js';
 import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js';
-import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
+import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel, runsClaudeCode } from '../shared/protocol.js';
 import { WORKSPACE_FILES, WORKTREES_DIR, Worktrees, describeWork, workspaceOf, type WorktreeCleanup, type WorktreeRef, type WorktreeState } from './worktrees.js';
 import { normalizeRepo } from '../shared/floors.js';
 import { DESK_BY_ID, STATION_AGENT, deskBuilt } from '../shared/layout.js';
@@ -26,7 +26,7 @@ import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
 import { normalizeGrokHook, withoutGrokLaunchArgs, writeGrokHome } from './grok.js';
 import { normalizeMuseHook, withoutMuseLaunchArgs, writeMuseHome } from './muse.js';
 import { reportedUsage } from './reported-usage.js';
-import { configuredProvider, isValidGrokModel, isValidMuseModel, isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
+import { configuredProvider, isValidGrokModel, isValidMuseModel, isValidOmniModel, isValidOpenCodeModel, omniModelFirst, validateWorkerEffort, validateWorkerModel } from './agents.js';
 import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 import { DropStore } from './drops.js';
@@ -412,8 +412,8 @@ export class WorkerManager {
       id,
       kind,
       provider: selectedProvider,
-      model: selectedProvider === 'opencode' || selectedProvider === 'claude' || selectedProvider === 'grok' || selectedProvider === 'muse' ? model : undefined,
-      effort: selectedProvider === 'claude' || selectedProvider === 'grok' || selectedProvider === 'muse' ? effort : undefined,
+      model: selectedProvider === 'opencode' || selectedProvider === 'claude' || selectedProvider === 'grok' || selectedProvider === 'muse' || selectedProvider === 'omni' ? model : undefined,
+      effort: selectedProvider === 'claude' || selectedProvider === 'grok' || selectedProvider === 'muse' || selectedProvider === 'omni' ? effort : undefined,
       deskId,
       name: kind === 'shell' ? `${name} 🐚` : name,
       color: kind === 'shell' ? '#8d99ae' : agent ? agent.color : COLORS[Math.floor(Math.random() * COLORS.length)],
@@ -957,7 +957,7 @@ export class WorkerManager {
   /** Claude Code hook callback. */
   handleHook(workerId: string, token: string, event: string, payload: any): boolean {
     const w = this.workers.get(workerId);
-    if (!w || !w.pty || w.info.kind !== 'agent' || (w.info.provider !== 'claude' && w.info.provider !== 'custom') || !safeEq(token, w.hookToken)) return false;
+    if (!w || !w.pty || w.info.kind !== 'agent' || (!runsClaudeCode(w.info.provider) && w.info.provider !== 'custom') || !safeEq(token, w.hookToken)) return false;
     const now = Date.now();
     if (payload?.session_id && typeof payload.session_id === 'string' && payload.session_id !== w.info.sessionId) {
       w.info.sessionId = payload.session_id;
@@ -1288,14 +1288,14 @@ export class WorkerManager {
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
     if (!hadTask) w.info.task = fallbackTask(clean);
-    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
+    if (!runsClaudeCode(w.info.provider) && w.info.provider !== 'custom') return;
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
     this.nameTask(w);
   }
 
   private noteTool(w: Worker, tool: string) {
-    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
+    if (!runsClaudeCode(w.info.provider) && w.info.provider !== 'custom') return;
     w.tools = [...w.tools, tool].slice(-TASK_TOOLS);
     w.toolsSinceNamed++;
     if (w.info.task && w.toolsSinceNamed >= TASK_REFRESH_TOOLS && Date.now() - w.namedAt > TASK_REFRESH_MS) this.nameTask(w);
@@ -1320,7 +1320,7 @@ export class WorkerManager {
   }
 
   private nameTask(w: Worker) {
-    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
+    if (!runsClaudeCode(w.info.provider) && w.info.provider !== 'custom') return;
     w.toolsSinceNamed = 0;
     w.namedAt = Date.now();
     const previous = w.info.task && w.prompts.length > 1 ? w.info.task : undefined;
@@ -1388,7 +1388,8 @@ export class WorkerManager {
     const shell = defaultShell();
     const isShell = info.kind === 'shell';
     const provider = info.provider;
-    const isClaude = !isShell && provider === 'claude';
+    const isClaude = !isShell && runsClaudeCode(provider);
+    const isOmni = !isShell && provider === 'omni';
     const isOpenCode = !isShell && provider === 'opencode';
     const isCodex = !isShell && provider === 'codex';
     const isGrok = !isShell && provider === 'grok';
@@ -1401,7 +1402,12 @@ export class WorkerManager {
     if (isClaude) {
       args.unshift('--settings', this.settingsPath);
       // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
-      if (info.model) args.push('--model', info.model);
+      // Omni takes the model as its first positional argument, before any flag, and passes its own --model.
+      if (isOmni) {
+        args = omniModelFirst(args, info.model);
+      } else if (info.model) {
+        args.push('--model', info.model);
+      }
       if (info.effort) args.push('--effort', info.effort);
       // The queue agent only ever adds to the queue: without these it can't touch the checkout's files.
       if (station === 'queue') args.push('--disallowedTools', ...QUEUE_AGENT_DISALLOWED_TOOLS);
@@ -1479,13 +1485,15 @@ export class WorkerManager {
     // find that checkout (and switch its branch, say) instead of saying it's no repository.
     if (info.repos?.length) env.GIT_CEILING_DIRECTORIES = [path.dirname(cwd), env.GIT_CEILING_DIRECTORIES].filter(Boolean).join(path.delimiter);
     if (w.owner && this.runAs) {
-      if (isClaude && !this.runAs.claudeReady(w.owner)) {
+      if (provider === 'claude' && !this.runAs.claudeReady(w.owner)) {
         this.startFailed(w, `whoever hired ${info.name} (${info.createdBy}) isn't signed in to Claude — they can sign in under ☰ → 🔐 Your sign-ins, then press R here`);
         return;
       }
       this.runAs.apply(w.owner, env, [this.dir, cwd]);
     }
     if (isCodex) w.codexHome = codexHome(cwd, env);
+    // Omni would otherwise move a projectless launch to its own folder, or silently swap a model that fails its probe.
+    if (isOmni) Object.assign(env, { OMNI_WORKDIR: cwd, OMNI_STRICT: '1' });
     // The host keeps its own copy of the screen for the next office: it starts with the same history.
     const where = { cwd, env, cols: info.cols, rows: info.rows, prelude };
     let proc: Pty;
@@ -1542,7 +1550,7 @@ export class WorkerManager {
     this.follow(w, adopted.pty, term, undefined);
     // A turn that ended while the office was down says so with its Stop hook, which retries until
     // the office is back. Claude's progress report, where it gives one, says a turn is still going.
-    if (adopted.busy && info.provider === 'claude') this.onProgress(w, true);
+    if (adopted.busy && runsClaudeCode(info.provider)) this.onProgress(w, true);
     this.emitUpdate(w);
   }
 
@@ -1553,7 +1561,7 @@ export class WorkerManager {
     term.loadAddon(ser as any);
     // OSC 9;4 progress (Claude Code emits it): 0 = idle, anything else = busy. Catches Esc-cancel,
     // which fires no Stop hook.
-    if (w.info.provider === 'claude') {
+    if (runsClaudeCode(w.info.provider)) {
       term.parser.registerOscHandler(9, (data: string) => {
         const m = /^4;(\d)/.exec(data);
         if (m) this.onProgress(w, m[1] !== '0');
@@ -1582,7 +1590,7 @@ export class WorkerManager {
   /** Shows a worker's terminal output as it comes, and deals with the process ending. */
   private follow(w: Worker, proc: Pty, term: HeadlessTerminal, resumeSessionId: string | undefined) {
     const { info } = w;
-    const isClaude = info.kind === 'agent' && info.provider === 'claude';
+    const isClaude = info.kind === 'agent' && runsClaudeCode(info.provider);
     const isCodex = info.kind === 'agent' && info.provider === 'codex';
     const isGrok = info.kind === 'agent' && info.provider === 'grok';
     const isMuse = info.kind === 'agent' && info.provider === 'muse';
@@ -1692,7 +1700,7 @@ export class WorkerManager {
       }
       return;
     }
-    if (w.info.kind !== 'agent' || (w.info.provider !== 'claude' && w.info.provider !== 'custom') || !w.tracker.transcript || this.workers.get(w.info.id) !== w) return;
+    if (w.info.kind !== 'agent' || (!runsClaudeCode(w.info.provider) && w.info.provider !== 'custom') || !w.tracker.transcript || this.workers.get(w.info.id) !== w) return;
     try {
       if (!scanTracker(w.tracker)) return;
     } catch {
@@ -1782,7 +1790,7 @@ export class WorkerManager {
    * in on this machine. Flag that as needing a human, and clear it once the screen moves on.
    */
   private checkBlocked(w: Worker) {
-    if (w.info.kind !== 'agent' || !w.term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
+    if (w.info.kind !== 'agent' || !w.term || (!runsClaudeCode(w.info.provider) && w.info.provider !== 'custom')) return;
     const s = w.info.status;
     if (s !== 'starting' && s !== 'idle' && !(w.bootBlocked && s === 'needs_input')) return;
     // Only this run's output counts: a "Not logged in" in the scrollback from before is old news.
@@ -1924,7 +1932,7 @@ process.stdin.on('end', () => {
         const tracker = restoreTracker(s.tracker);
         const provider = s.kind === 'shell'
           ? undefined
-          : s.provider === 'claude' || s.provider === 'opencode' || s.provider === 'codex' || s.provider === 'grok' || s.provider === 'muse' || s.provider === 'custom'
+          : s.provider === 'claude' || s.provider === 'opencode' || s.provider === 'codex' || s.provider === 'grok' || s.provider === 'muse' || s.provider === 'omni' || s.provider === 'custom'
             ? s.provider
             : tracker.transcript
               ? 'claude'
@@ -1933,8 +1941,8 @@ process.stdin.on('end', () => {
           id: s.id,
           kind: s.kind === 'shell' ? 'shell' : 'agent',
           provider,
-          model: provider === 'opencode' && isValidOpenCodeModel(s.model) ? s.model : provider === 'claude' && isClaudeModel(s.model) ? s.model : provider === 'grok' && isValidGrokModel(s.model) ? s.model : provider === 'muse' && isValidMuseModel(s.model) ? s.model : undefined,
-          effort: (provider === 'claude' || provider === 'grok' || provider === 'muse') && isAgentEffort(s.effort) ? s.effort : undefined,
+          model: provider === 'opencode' && isValidOpenCodeModel(s.model) ? s.model : provider === 'claude' && isClaudeModel(s.model) ? s.model : provider === 'grok' && isValidGrokModel(s.model) ? s.model : provider === 'muse' && isValidMuseModel(s.model) ? s.model : provider === 'omni' && isValidOmniModel(s.model) ? s.model : undefined,
+          effort: (provider === 'claude' || provider === 'grok' || provider === 'muse' || provider === 'omni') && isAgentEffort(s.effort) ? s.effort : undefined,
           deskId: s.deskId,
           name: s.name ?? 'Worker',
           color: s.color ?? COLORS[0],
@@ -1950,7 +1958,7 @@ process.stdin.on('end', () => {
           activity: s.activity,
           task: validTask(s.task),
           pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url } : undefined,
-          usage: provider === 'opencode' || provider === 'codex' ? reportedUsage(s.usage) : (provider === 'claude' || provider === 'custom') && tracker.transcript ? trackerUsage(tracker) : undefined,
+          usage: provider === 'opencode' || provider === 'codex' ? reportedUsage(s.usage) : (runsClaudeCode(provider) || provider === 'custom') && tracker.transcript ? trackerUsage(tracker) : undefined,
           cols: 100,
           rows: 30,
           viewers: [],

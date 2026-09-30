@@ -4,6 +4,7 @@ import { isAgentEffort, isClaudeModel, type AgentProvider } from '../shared/prot
 export const OPEN_CODE_MODEL_MAX = 256;
 export const GROK_MODEL_MAX = 64;
 export const MUSE_MODEL_MAX = 128;
+export const OMNI_MODEL_MAX = 128;
 
 /**
  * Finds the provider represented by the configured executable.  Keep this deliberately based on
@@ -17,12 +18,17 @@ export function configuredProvider(command: string): AgentProvider {
   if (base === 'codex') return 'codex';
   if (base === 'grok') return 'grok';
   if (base === 'muse') return 'muse';
+  if (base === 'omni') return 'omni';
   return 'custom';
 }
 
 /** The providers an office started with `configured` can hire: the ones it knows, and a custom --agent only when that's what it was started with. */
-export function agentProviders(configured: AgentProvider): AgentProvider[] {
-  return configured === 'custom' ? ['claude', 'opencode', 'codex', 'grok', 'muse', 'custom'] : ['claude', 'opencode', 'codex', 'grok', 'muse'];
+export function agentProviders(configured: AgentProvider, omniAvailable = false): AgentProvider[] {
+  const list: AgentProvider[] = ['claude', 'opencode', 'codex', 'grok', 'muse'];
+  // Omni is a local wrapper script, so it is only offered where the `omni` command actually exists.
+  if (omniAvailable || configured === 'omni') list.push('omni');
+  if (configured === 'custom') list.push('custom');
+  return list;
 }
 
 /** OpenCode model ids are argv values, so reject anything that could be ambiguous or unsafe. */
@@ -47,21 +53,36 @@ export function isValidMuseModel(value: unknown): value is string {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
 }
 
+/**
+ * Omni model ids are the first positional argument of `omni`, which only treats it as a model when
+ * it doesn't start with '-'. Ids such as `gemma4:e4b-mlx` carry a colon, so allow that too.
+ */
+export function isValidOmniModel(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > OMNI_MODEL_MAX) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$/.test(value);
+}
+
+/** `omni` only reads the model from its first argument, and only when it doesn't start with '-', so it goes before every flag. */
+export function omniModelFirst(args: string[], model: string | undefined): string[] {
+  return model ? [model, ...args] : args;
+}
+
 export function validateWorkerModel(kind: 'agent' | 'shell', provider: AgentProvider | undefined, model: unknown): string | undefined {
   if (model === undefined) return undefined;
   if (kind === 'shell') return 'Shell workers do not have an agent model';
   if (provider === 'claude') return isClaudeModel(model) ? undefined : 'Invalid Claude model (expected fable, opus, sonnet or haiku)';
   if (provider === 'grok') return isValidGrokModel(model) ? undefined : 'Invalid Grok model';
   if (provider === 'muse') return isValidMuseModel(model) ? undefined : 'Invalid Muse model';
-  if (provider !== 'opencode') return 'Models can only be selected for Claude Code, OpenCode, Grok or Muse workers';
+  if (provider === 'omni') return isValidOmniModel(model) ? undefined : 'Invalid Omni model';
+  if (provider !== 'opencode') return 'Models can only be selected for Claude Code, OpenCode, Grok, Muse or Omni workers';
   if (!isValidOpenCodeModel(model)) return 'Invalid OpenCode model (expected provider/model without whitespace)';
   return undefined;
 }
 
-/** Claude Code, Grok and Muse reasoning-effort flags. */
+/** Claude Code, Grok, Muse and Omni reasoning-effort flags. */
 export function validateWorkerEffort(kind: 'agent' | 'shell', provider: AgentProvider | undefined, effort: unknown): string | undefined {
   if (effort === undefined) return undefined;
   if (kind === 'shell') return 'Shell workers do not have a reasoning effort';
-  if (provider !== 'claude' && provider !== 'grok' && provider !== 'muse') return 'Reasoning effort can only be selected for Claude Code, Grok or Muse workers';
+  if (provider !== 'claude' && provider !== 'grok' && provider !== 'muse' && provider !== 'omni') return 'Reasoning effort can only be selected for Claude Code, Grok, Muse or Omni workers';
   return isAgentEffort(effort) ? undefined : 'Invalid effort (expected low, medium, high, xhigh or max)';
 }

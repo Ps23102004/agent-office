@@ -9,6 +9,7 @@ export const PROVIDER_LABEL: Record<AgentProvider, string> = {
   codex: 'Codex',
   grok: 'Grok',
   muse: 'Muse Code',
+  omni: 'Omni',
   custom: 'Custom',
 };
 
@@ -30,7 +31,7 @@ export const EFFORT_LABEL: Record<AgentEffort, string> = {
 /** A short badge for the task card / sidebar: "Opus", "Opus · High", or the raw OpenCode/Grok/Muse model id. */
 export function modelBadge(provider: AgentProvider | undefined, model: string | undefined, effort: AgentEffort | undefined): string | undefined {
   if (!model && !effort) return undefined;
-  if (provider === 'claude' || provider === 'grok' || provider === 'muse') {
+  if (provider === 'claude' || provider === 'grok' || provider === 'muse' || provider === 'omni') {
     const label = provider === 'claude' && model && model in CLAUDE_MODEL_LABEL ? CLAUDE_MODEL_LABEL[model as ClaudeModel] : model;
     const parts = [label, effort ? EFFORT_LABEL[effort] : undefined].filter((v): v is string => !!v);
     return parts.length ? parts.join(' · ') : undefined;
@@ -40,7 +41,7 @@ export function modelBadge(provider: AgentProvider | undefined, model: string | 
 
 /** Providers the server says this project can start. */
 export function supportedProviders(project: ProjectInfo | null): AgentProvider[] {
-  const values = project?.agentProviders?.filter((p): p is AgentProvider => p === 'claude' || p === 'opencode' || p === 'codex' || p === 'grok' || p === 'muse' || p === 'custom') ?? [];
+  const values = project?.agentProviders?.filter((p): p is AgentProvider => p === 'claude' || p === 'opencode' || p === 'codex' || p === 'grok' || p === 'muse' || p === 'omni' || p === 'custom') ?? [];
   if (values.length) return [...new Set(values)];
   return project?.defaultProvider && PROVIDER_LABEL[project.defaultProvider] ? [project.defaultProvider] : ['claude'];
 }
@@ -60,7 +61,7 @@ export function providerLabel(provider: AgentProvider | undefined, project: Proj
 
 export function providerUsageTracked(provider: AgentProvider | undefined, project: ProjectInfo | null, usage?: Usage): boolean {
   const selected = resolvedProvider(provider, project);
-  return selected === 'claude' || ((selected === 'opencode' || selected === 'codex' || selected === 'grok' || selected === 'muse' || selected === 'custom') && usage !== undefined);
+  return selected === 'claude' || selected === 'omni' || ((selected === 'opencode' || selected === 'codex' || selected === 'grok' || selected === 'muse' || selected === 'custom') && usage !== undefined);
 }
 
 export type ProviderUsageState = 'tracked' | 'waiting' | 'untracked';
@@ -68,7 +69,7 @@ export type ProviderUsageState = 'tracked' | 'waiting' | 'untracked';
 /** Distinguishes a provider with no first report from one whose metrics are intentionally unavailable. */
 export function providerUsageState(provider: AgentProvider | undefined, project: ProjectInfo | null, usage?: Usage): ProviderUsageState {
   const selected = resolvedProvider(provider, project);
-  if (selected === 'claude') return usage ? 'tracked' : 'waiting';
+  if (selected === 'claude' || selected === 'omni') return usage ? 'tracked' : 'waiting';
   if (selected === 'opencode') return usage ? 'tracked' : 'waiting';
   if (selected === 'codex') return usage ? 'tracked' : 'waiting';
   if (selected === 'grok') return usage ? 'tracked' : 'untracked';
@@ -80,6 +81,7 @@ export function providerUsageState(provider: AgentProvider | undefined, project:
 export function providerUsageNote(provider: AgentProvider): string {
   if (provider === 'claude') return 'Office usage and budget track Claude Code.';
   if (provider === 'codex') return 'Review Office hooks in /hooks to enable tracking. Codex reports root-session tokens; subagents are excluded and cost is unavailable.';
+  if (provider === 'omni') return 'Omni runs Claude Code on a local model proxy: tokens are tracked, but cost is unavailable for non-Claude models.';
   if (provider === 'grok') return 'Grok spend is not metered by the office; token totals stay in the worker terminal.';
   if (provider === 'muse') return 'Muse spend is not metered by the office; token totals stay in the worker terminal.';
   if (provider === 'custom') return 'Usage is untracked unless compatible Claude Code hooks report it.';
@@ -125,12 +127,16 @@ export interface AgentFields extends ProviderPicker {
 const MODEL_MAX = 256;
 const GROK_MODEL_MAX = 64;
 const MUSE_MODEL_MAX = 128;
+const OMNI_MODEL_MAX = 128;
 let modelList: string[] | null = null;
 let modelListAt = 0;
 let modelRequest: Promise<string[]> | null = null;
 let grokModelList: string[] | null = null;
 let grokModelListAt = 0;
 let grokModelRequest: Promise<string[]> | null = null;
+let omniModelList: string[] | null = null;
+let omniModelListAt = 0;
+let omniModelRequest: Promise<string[]> | null = null;
 
 function validModel(value: string): boolean {
   if (value.length === 0 || value.length > MODEL_MAX || /[\s\p{Cc}\p{Cf}]/u.test(value)) return false;
@@ -144,6 +150,28 @@ function validGrokModel(value: string): boolean {
 
 function validMuseModel(value: string): boolean {
   return value.length > 0 && value.length <= MUSE_MODEL_MAX && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && !/[\s\p{Cc}\p{Cf}]/u.test(value);
+}
+
+function validOmniModel(value: string): boolean {
+  return value.length > 0 && value.length <= OMNI_MODEL_MAX && /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/.test(value);
+}
+
+function fetchOmniModels(): Promise<string[]> {
+  if (omniModelList && Date.now() - omniModelListAt < 60_000) return Promise.resolve(omniModelList);
+  if (omniModelRequest) return omniModelRequest;
+  omniModelRequest = fetch('/api/agents/omni/models', { credentials: 'same-origin', cache: 'no-store' })
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as { models?: unknown };
+      const models = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === 'string' && validOmniModel(m)) : [];
+      omniModelList = [...new Set(models)];
+      omniModelListAt = Date.now();
+      return omniModelList;
+    })
+    .finally(() => {
+      omniModelRequest = null;
+    });
+  return omniModelRequest;
 }
 
 function fetchGrokModels(): Promise<string[]> {
@@ -258,7 +286,32 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
     h('small.provider-model-hint', {}, 'Optional model id (for example muse-spark-1.3-contributor) and effort for this worker.'),
   );
 
-  const element = h('div.provider-choice', {}, h('label', { for: id }, label), select, note, modelChoice, claudeChoice, grokChoice, museChoice);
+  const omniModelInput = h('input', {
+    type: 'text',
+    id: `${id}-omni-model`,
+    list: `${id}-omni-models`,
+    placeholder: 'Default (omni picks)',
+    'aria-label': 'Omni model',
+    autocomplete: 'off',
+    maxlength: OMNI_MODEL_MAX,
+  }) as HTMLInputElement;
+  const omniModelListEl = h('datalist', { id: `${id}-omni-models` });
+  const omniEffortSelect = h('select', { id: `${id}-omni-effort`, 'aria-label': 'Omni reasoning effort' }) as HTMLSelectElement;
+  omniEffortSelect.append(h('option', { value: '' }, 'Default'));
+  for (const e of AGENT_EFFORTS) omniEffortSelect.append(h('option', { value: e }, EFFORT_LABEL[e]));
+  const omniHint = h('small.provider-model-hint', {}, 'Suggestions load from the local model proxy; you can also type a model id.');
+  const omniChoice = h(
+    'div.provider-model.omni-model',
+    {},
+    h('label', { for: `${id}-omni-model` }, 'Model'),
+    omniModelInput,
+    omniModelListEl,
+    h('label', { for: `${id}-omni-effort` }, 'Effort'),
+    omniEffortSelect,
+    omniHint,
+  );
+
+  const element = h('div.provider-choice', {}, h('label', { for: id }, label), select, note, modelChoice, claudeChoice, grokChoice, museChoice, omniChoice);
   const fillGrokModels = (models: string[], selected?: string) => {
     const keep = selected && validGrokModel(selected) ? selected : '';
     grokModelSelect.replaceChildren(h('option', { value: '' }, 'Default (Grok settings)'));
@@ -286,6 +339,18 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
         });
       return;
     }
+    if (select.value === 'omni') {
+      if (!element.isConnected || element.closest('.hidden')) return;
+      void fetchOmniModels()
+        .then((models) => {
+          omniModelListEl.replaceChildren(...models.map((model) => h('option', { value: model })));
+          omniHint.textContent = 'Choose a suggestion or type a model id.';
+        })
+        .catch(() => {
+          omniHint.textContent = 'Model suggestions unavailable (is the proxy running?); type a model id or leave Default.';
+        });
+      return;
+    }
     if (select.value !== 'opencode' || !element.isConnected || element.closest('.hidden')) return;
     modelHint.textContent = modelList ? 'Optional provider/model override; choose a suggestion or enter one manually.' : 'Loading OpenCode models… You can enter a provider/model manually.';
     void fetchOpenCodeModels()
@@ -305,6 +370,7 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
     claudeChoice.classList.toggle('hidden', provider !== 'claude');
     grokChoice.classList.toggle('hidden', provider !== 'grok');
     museChoice.classList.toggle('hidden', provider !== 'muse');
+    omniChoice.classList.toggle('hidden', provider !== 'omni');
     loadModels();
   };
   const set = (c: AgentChoice) => {
@@ -312,12 +378,16 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
     const claude = select.value === 'claude';
     const grok = select.value === 'grok';
     const muse = select.value === 'muse';
+    const omni = select.value === 'omni';
     claudeModelSelect.value = claude && c.model && (CLAUDE_MODELS as readonly string[]).includes(c.model) ? c.model : '';
     effortSelect.value = claude && c.effort ? c.effort : '';
     fillGrokModels(grokModelList ?? [], grok ? c.model : undefined);
     grokEffortSelect.value = grok && c.effort ? c.effort : '';
     museModelInput.value = muse && c.model ? c.model : '';
     museEffortSelect.value = muse && c.effort ? c.effort : '';
+    omniModelInput.value = omni && c.model ? c.model : '';
+    omniEffortSelect.value = omni && c.effort ? c.effort : '';
+    omniModelInput.setCustomValidity('');
     modelInput.value = select.value === 'opencode' && c.model ? c.model : '';
     modelInput.setCustomValidity('');
     museModelInput.setCustomValidity('');
@@ -328,11 +398,13 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
   modelInput.addEventListener('focus', loadModels);
   modelInput.addEventListener('input', () => modelInput.setCustomValidity(''));
   museModelInput.addEventListener('input', () => museModelInput.setCustomValidity(''));
+  omniModelInput.addEventListener('input', () => omniModelInput.setCustomValidity(''));
   const value = () => (options.includes(select.value as AgentProvider) ? (select.value as AgentProvider) : fallback);
   const effort = () => {
     if (select.value === 'claude' && effortSelect.value) return effortSelect.value as AgentEffort;
     if (select.value === 'grok' && grokEffortSelect.value) return grokEffortSelect.value as AgentEffort;
     if (select.value === 'muse' && museEffortSelect.value) return museEffortSelect.value as AgentEffort;
+    if (select.value === 'omni' && omniEffortSelect.value) return omniEffortSelect.value as AgentEffort;
     return undefined;
   };
   const model = () => {
@@ -341,6 +413,10 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
     if (select.value === 'muse') {
       const v = museModelInput.value;
       return validMuseModel(v) ? v : undefined;
+    }
+    if (select.value === 'omni') {
+      const v = omniModelInput.value;
+      return validOmniModel(v) ? v : undefined;
     }
     if (select.value !== 'opencode') return undefined;
     const v = modelInput.value;
@@ -354,6 +430,12 @@ export function agentFields(project: ProjectInfo | null, id: string, initial: Ag
     set,
     choice: () => ({ provider: value(), ...(model() ? { model: model() } : {}), ...(effort() ? { effort: effort() } : {}) }),
     valid: () => {
+      if (select.value === 'omni') {
+        const okay = !omniModelInput.value || validOmniModel(omniModelInput.value);
+        omniModelInput.setCustomValidity(okay ? '' : 'Use a model id without spaces that does not start with "-" (up to 128 characters).');
+        if (!okay) omniModelInput.reportValidity();
+        return okay;
+      }
       if (select.value === 'muse') {
         if (!museModelInput.value) {
           museModelInput.setCustomValidity('');
