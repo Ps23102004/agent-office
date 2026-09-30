@@ -27,8 +27,9 @@ export function addUsage(a: Usage, b: Usage, sign = 1): Usage {
     cacheRead: a.cacheRead + sign * b.cacheRead,
     cost: a.cost + sign * b.cost,
     calls: a.calls + sign * b.calls,
-    // One message priced without a rate (see usageOfMessage) makes the whole total unpriced.
+    // A message priced without a rate (see usageOfMessage) makes a worker's own total unpriced; the office ledger drops the flag and keeps unpricedTokens.
     ...(a.costKnown === false || b.costKnown === false ? { costKnown: false } : {}),
+    ...(a.unpricedTokens || b.unpricedTokens ? { unpricedTokens: (a.unpricedTokens ?? 0) + sign * (b.unpricedTokens ?? 0) } : {}),
   };
 }
 
@@ -62,7 +63,11 @@ export function priceOf(model: string): [number, number, number] {
 }
 
 /** A named model that isn't a Claude one has no price here; a missing or synthetic name keeps the Opus fallback. */
-const isForeignModel = (model: string) => /^[a-z0-9]/i.test(model) && !/claude|fable|mythos|opus|sonnet|haiku/i.test(model);
+const isForeignModel = (model: string) => {
+  // Proxies add a provider prefix (`anthropic/…`, `us.anthropic.…`) and a window suffix (`[1m]`).
+  const id = model.toLowerCase().replace(/\[.*\]$/, '').replace(/^.*\//, '').replace(/^(?:[a-z]{2}\.)?anthropic\./, '');
+  return /^[a-z0-9]/.test(id) && !/^(claude-|fable|mythos|opus|sonnet|haiku)/.test(id);
+};
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
 
@@ -73,7 +78,7 @@ export function usageOfMessage(model: string, u: any): Usage {
   const cacheWrite = num(u?.cache_creation_input_tokens);
   const hour = Math.min(cacheWrite, num(u?.cache_creation?.ephemeral_1h_input_tokens));
   const cacheRead = num(u?.cache_read_input_tokens);
-  if (isForeignModel(model)) return { input, output, cacheWrite, cacheRead, cost: 0, calls: 1, costKnown: false };
+  if (isForeignModel(model)) return { input, output, cacheWrite, cacheRead, cost: 0, calls: 1, costKnown: false, unpricedTokens: input + output + cacheWrite + cacheRead };
   const [pin, pout, pread] = priceOf(model);
   const cost = (input * pin + output * pout + (cacheWrite - hour) * pin * 1.25 + hour * pin * 2 + cacheRead * pread) / 1e6 + num(u?.server_tool_use?.web_search_requests) * WEB_SEARCH_USD;
   return { input, output, cacheWrite, cacheRead, cost, calls: 1 };
@@ -111,7 +116,7 @@ export function trackerUsage(t: UsageTracker): Usage {
 }
 
 const asUsage = (v: any): Usage | undefined =>
-  v && typeof v === 'object' ? { input: num(v.input), output: num(v.output), cacheWrite: num(v.cacheWrite), cacheRead: num(v.cacheRead), cost: num(v.cost), calls: num(v.calls), ...(v.costKnown === false ? { costKnown: false } : {}) } : undefined;
+  v && typeof v === 'object' ? { input: num(v.input), output: num(v.output), cacheWrite: num(v.cacheWrite), cacheRead: num(v.cacheRead), cost: num(v.cost), calls: num(v.calls), ...(v.costKnown === false ? { costKnown: false } : {}), ...(num(v.unpricedTokens) ? { unpricedTokens: num(v.unpricedTokens) } : {}) } : undefined;
 
 /** Rebuilds a tracker saved by a previous run; anything odd falls back to starting over. */
 export function restoreTracker(saved: any): UsageTracker {

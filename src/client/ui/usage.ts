@@ -6,7 +6,8 @@ import { providerUsageState, providerUsageTracked, resolvedProvider } from './pr
 export { fmtCost, fmtTokens, tokensOf };
 
 function displayedCost(u: Usage): string {
-  return u.costKnown === false ? 'cost unavailable' : fmtCost(u.cost);
+  // An office total keeps its known spend; a + marks that some tokens (Omni's non-Claude models) have no price.
+  return u.costKnown === false ? 'cost unavailable' : `${fmtCost(u.cost)}${u.unpricedTokens ? '+' : ''}`;
 }
 
 /** e.g. "$0.42 · 38k tokens"; OpenCode's amount is explicitly an estimate. */

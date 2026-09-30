@@ -62,9 +62,21 @@ export function isValidOmniModel(value: unknown): value is string {
   return /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$/.test(value);
 }
 
-/** `omni` only reads the model from its first argument, and only when it doesn't start with '-', so it goes before every flag. */
-export function omniModelFirst(args: string[], model: string | undefined): string[] {
-  return model ? [model, ...args] : args;
+/**
+ * Arranges argv for `omni`. It reads --fast/--full-context, then a model, only from the very front, so
+ * those go first and the model right after. A `--model` in the office's agent args is dropped: omni
+ * passes its own to Claude Code, and a stray one would override the model omni probed under OMNI_STRICT.
+ */
+export function omniLaunchArgs(args: string[], model: string | undefined): string[] {
+  let window: string | undefined;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--fast' || a === '--full-context') window ??= a;
+    else if (a === '--model') i++;
+    else if (!a.startsWith('--model=')) rest.push(a);
+  }
+  return [...(window ? [window] : []), ...(model ? [model] : []), ...rest];
 }
 
 export function validateWorkerModel(kind: 'agent' | 'shell', provider: AgentProvider | undefined, model: unknown): string | undefined {

@@ -183,6 +183,8 @@ export interface Usage {
   reasoning?: number;
   /** False when the provider supplies tokens without usable pricing. Omitted for legacy Claude usage. */
   costKnown?: boolean;
+  /** Tokens from models with no price here (Omni's non-Claude models); their cost is left out of `cost`. */
+  unpricedTokens?: number;
   /** Provider history is still loading, failed to load, or reached a traversal limit. */
   incomplete?: boolean;
   /** Tokens written to the prompt cache. */

@@ -26,7 +26,7 @@ import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
 import { normalizeGrokHook, withoutGrokLaunchArgs, writeGrokHome } from './grok.js';
 import { normalizeMuseHook, withoutMuseLaunchArgs, writeMuseHome } from './muse.js';
 import { reportedUsage } from './reported-usage.js';
-import { configuredProvider, isValidGrokModel, isValidMuseModel, isValidOmniModel, isValidOpenCodeModel, omniModelFirst, validateWorkerEffort, validateWorkerModel } from './agents.js';
+import { configuredProvider, isValidGrokModel, isValidMuseModel, isValidOmniModel, isValidOpenCodeModel, omniLaunchArgs, validateWorkerEffort, validateWorkerModel } from './agents.js';
 import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 import { DropStore } from './drops.js';
@@ -1404,7 +1404,7 @@ export class WorkerManager {
       // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
       // Omni takes the model as its first positional argument, before any flag, and passes its own --model.
       if (isOmni) {
-        args = omniModelFirst(args, info.model);
+        args = omniLaunchArgs(args, info.model);
       } else if (info.model) {
         args.push('--model', info.model);
       }
@@ -1709,7 +1709,9 @@ export class WorkerManager {
     const before = w.info.usage ?? zeroUsage();
     const after = trackerUsage(w.tracker);
     w.info.usage = after;
-    this.ledger.add(addUsage(after, before, -1));
+    // The office ledger sums known spend; a worker whose model has no price only adds unpricedTokens.
+    const { costKnown: _unpriced, ...delta } = addUsage(after, before, -1);
+    this.ledger.add(delta);
     this.emitUpdate(w);
     this.persist();
   }
