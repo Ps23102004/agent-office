@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, roofDrop } from '../../shared/layout';
 import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
-import { mergeByMaterial, mesh, toon } from './toon';
+import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, rng } from '../../shared/city';
+import { INNER, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, rng, type Light, type Lot } from '../../shared/city';
 
 // The city around the rooftop bar: the building's own floors going down to the street (as the tower
 // looks from outside, world/tower.ts), a grid of streets with cars running along them, parks, and
@@ -43,7 +43,7 @@ function canvasTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D)
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
+  t.anisotropy = 16;
   return t;
 }
 
@@ -54,6 +54,9 @@ interface Paint {
   /** The window's share of a bay across and of a storey up. */
   wide: number;
   tall: number;
+  /** Brick, with the mortar showing (walk-ups); or `open`: dark openings and no glass shine (a parking structure). */
+  brick?: boolean;
+  open?: boolean;
 }
 
 const PAINTS: Paint[] = [
@@ -67,8 +70,13 @@ const PAINTS: Paint[] = [
   // Glass towers.
   { wall: '#4f6d8a', glass: '#7fb8d8', wide: 0.9, tall: 0.82 },
   { wall: '#3e7c7c', glass: '#8fd3d0', wide: 0.9, tall: 0.82 },
+  // Brick walk-ups, and a parking structure (only the street sees these).
+  { wall: '#b5573f', glass: '#a9d6f5', wide: 0.42, tall: 0.55, brick: true },
+  { wall: '#9c4a3a', glass: '#bfe3ff', wide: 0.46, tall: 0.55, brick: true },
+  { wall: '#b7b6ae', glass: '#2f323b', wide: 0.92, tall: 0.5, open: true },
 ];
-const GLASS_TOWERS = [7, 8];
+const BRICKS = [9, 10];
+const DECK = 11;
 
 /** One bay of one storey: the wall with a window in it. */
 function bayTexture(p: Paint): THREE.CanvasTexture {
@@ -76,12 +84,20 @@ function bayTexture(p: Paint): THREE.CanvasTexture {
   return canvasTexture(S, S, (g) => {
     g.fillStyle = p.wall;
     g.fillRect(0, 0, S, S);
+    if (p.brick) {
+      g.fillStyle = 'rgba(255,240,220,0.22)';
+      for (let y = 0; y < S; y += 8) {
+        g.fillRect(0, y, S, 1);
+        for (let x = (y / 8) % 2 ? 0 : 8; x < S; x += 16) g.fillRect(x, y, 1, 8);
+      }
+    }
     const w = S * p.wide;
     const h = S * p.tall;
     const x = (S - w) / 2;
     const y = S * 0.18;
     g.fillStyle = p.glass;
     g.fillRect(x, y, w, h);
+    if (p.open) return;
     g.fillStyle = 'rgba(255,255,255,0.45)';
     g.fillRect(x + w * 0.12, y, w * 0.1, h);
     // A sill under it.
@@ -130,8 +146,8 @@ class Walls {
     this.index.push(i, i + 1, i + 2, i, i + 2, i + 3);
   }
 
-  /** The four walls of a box from y0 to y1, windows a bay across and a storey up, lit windows from (ou, ov) of the pattern. */
-  box(cx: number, cz: number, w: number, d: number, y0: number, y1: number, ou: number, ov: number) {
+  /** The four walls of a box from y0 to y1, windows a bay across and a storey up, lit windows from (ou, ov) of the pattern. `sides` are the ones to do: 1 is +z, 2 -z, 4 +x, 8 -x. */
+  box(cx: number, cz: number, w: number, d: number, y0: number, y1: number, ou: number, ov: number, sides = 15) {
     const hw = w / 2;
     const hd = d / 2;
     const floors = Math.max(1, Math.round((y1 - y0) / STOREY));
@@ -139,10 +155,10 @@ class Walls {
     const across = (span: number) => Math.max(1, Math.round(span / BAY));
     const cw = across(w);
     const cd = across(d);
-    this.quad([cx - hw, y0, cz + hd], [w, 0, 0], h, [0, 0, 1], [ou, ov, ou + cw, ov + floors]);
-    this.quad([cx + hw, y0, cz - hd], [-w, 0, 0], h, [0, 0, -1], [ou + 3, ov, ou + 3 + cw, ov + floors]);
-    this.quad([cx + hw, y0, cz + hd], [0, 0, -d], h, [1, 0, 0], [ou + 7, ov, ou + 7 + cd, ov + floors]);
-    this.quad([cx - hw, y0, cz - hd], [0, 0, d], h, [-1, 0, 0], [ou + 11, ov, ou + 11 + cd, ov + floors]);
+    if (sides & 1) this.quad([cx - hw, y0, cz + hd], [w, 0, 0], h, [0, 0, 1], [ou, ov, ou + cw, ov + floors]);
+    if (sides & 2) this.quad([cx + hw, y0, cz - hd], [-w, 0, 0], h, [0, 0, -1], [ou + 3, ov, ou + 3 + cw, ov + floors]);
+    if (sides & 4) this.quad([cx + hw, y0, cz + hd], [0, 0, -d], h, [1, 0, 0], [ou + 7, ov, ou + 7 + cd, ov + floors]);
+    if (sides & 8) this.quad([cx - hw, y0, cz - hd], [0, 0, d], h, [-1, 0, 0], [ou + 11, ov, ou + 11 + cd, ov + floors]);
   }
 
   /** A flat top at y. */
@@ -195,11 +211,12 @@ function groundTexture(): THREE.CanvasTexture {
   });
 }
 
-function tree(r: () => number): THREE.Group {
+/** A tree of size `s` (0.8 to 1.5), with one of two greens. */
+const TREE_GREENS = ['#5fb760', '#4ea657'];
+function tree(s: number, tone: number): THREE.Group {
   const t = new THREE.Group();
-  const s = 0.8 + r() * 0.7;
   t.add(mesh(new THREE.CylinderGeometry(0.25 * s, 0.32 * s, 2.4 * s, 6), toon('#8a5a3b'), 0, 1.2 * s, 0, false));
-  t.add(mesh(new THREE.SphereGeometry(1.9 * s, 8, 6), toon(r() < 0.5 ? '#5fb760' : '#4ea657'), 0, 3.4 * s, 0, false));
+  t.add(mesh(new THREE.SphereGeometry(1.9 * s, 8, 6), toon(TREE_GREENS[tone]), 0, 3.4 * s, 0, false));
   return t;
 }
 
@@ -216,28 +233,6 @@ function glowTexture(): THREE.CanvasTexture {
 }
 
 /**
- * A building on a lot, as it was laid out round a roof LAID_OUT up. How much of that height it
- * stands depends on how far out it is (`ring`: close by, further out, or on the skyline) and on how
- * tall the office's building is (see rise).
- */
-interface Lot {
-  x: number;
-  z: number;
-  w: number;
-  d: number;
-  h: number;
-  paint: number;
-  /** Where its lit windows start in the pattern. */
-  ou: number;
-  ov: number;
-  ring: 0 | 1 | 2;
-  /** Tall ones step back on the way up: the top part's footprint, and how much taller it goes. */
-  step?: { w: number; d: number; up: number };
-  /** On its roof: a mast with a red light, a water tower, or a box of air conditioning. */
-  top?: { kind: 'mast' } | { kind: 'tank'; x: number; z: number } | { kind: 'plant'; x: number; z: number; w: number; d: number };
-}
-
-/**
  * How much of its laid-out height a building in `ring` stands with the street `drop` below the roof.
  * Close by they come down with the roof, to stay under it; further out a bit less, and the skyline
  * stays the skyline. Up to six floors, where they were laid out; no taller past that.
@@ -245,6 +240,40 @@ interface Lot {
 function rise(ring: number, drop: number): number {
   const k = Math.min(1, drop / LAID_OUT);
   return ring === 0 ? k : ring === 1 ? Math.sqrt(k) : 1;
+}
+
+/** Walls, roofs and beacons piling up for a set of buildings, to be a mesh per paint. */
+interface Batch {
+  walls: Map<number, Walls>;
+  tops: Walls;
+  /** Where the masts' red lights go (x, y, z each). */
+  beacons: number[];
+}
+const newBatch = (): Batch => ({ walls: new Map(), tops: new Walls(), beacons: [] });
+
+/**
+ * Stacks a lot's building into `b`, `k` of its laid-out height (see rise), in `paint` (the lot's own
+ * unless said), from `y0` (a shop's storey of its own goes under it); `sides` are the ground band's walls
+ * to do (see Walls.box) and `flat`: whether to put a flat roof on. Returns how high its top ended up.
+ */
+function stack(b: Batch, lot: Lot, k: number, o: { paint?: number; y0?: number; flat?: boolean } = {}): number {
+  const paint = o.paint ?? lot.paint;
+  let bucket = b.walls.get(paint);
+  if (!bucket) b.walls.set(paint, (bucket = new Walls()));
+  const y0 = o.y0 ?? 0;
+  let topY = lot.h * k;
+  bucket.box(lot.x, lot.z, lot.w, lot.d, y0, topY, lot.ou, lot.ov);
+  let tw = lot.w;
+  let td = lot.d;
+  if (lot.step) {
+    b.tops.top(lot.x, lot.z, lot.w, lot.d, topY);
+    tw = lot.step.w;
+    td = lot.step.d;
+    bucket.box(lot.x, lot.z, tw, td, topY, topY + lot.step.up * k, lot.ou + 5, lot.ov + 3);
+    topY += lot.step.up * k;
+  }
+  if (o.flat !== false) b.tops.top(lot.x, lot.z, tw, td, topY);
+  return topY;
 }
 
 interface Car {
@@ -276,81 +305,21 @@ export function buildCity(night: NightParts): City {
   ground.receiveShadow = false;
   street.add(ground);
 
-  // The blocks: parks now and then, and lots with a building on each, laid out once. How tall the
-  // buildings stand depends on the roof (see raise, below).
-  const lots: Lot[] = [];
+  // The blocks: parks now and then, and lots with a building on each, laid out once (shared/city.ts,
+  // which the street's cars and the office's checks use too). How tall the buildings stand depends on
+  // the roof (see raise, below).
+  const { lots, parks: parkAt, draws } = cityLayout();
+  // The dice go on from where the layout left them, so the trees and clouds below fall as they always did.
+  for (let k = 0; k < draws; k++) r();
   const parks = new THREE.Group();
   const blockAt = (i: number, j: number) => ({ x: STREET_X - PERIOD / 2 + i * PERIOD, z: STREET_Z - PERIOD / 2 + j * PERIOD });
-  const inner = PERIOD - ROAD - WALK * 2;
-  const n = Math.ceil(RADIUS / PERIOD) + 1;
-  for (let i = -n; i <= n; i++) {
-    for (let j = -n; j <= n; j++) {
-      const { x: bx, z: bz } = blockAt(i, j);
-      const dist = Math.hypot(bx, bz);
-      if (dist > RADIUS) continue;
-      // The block the office stands on: a plaza round it.
-      if (i === 0 && j === 0) continue;
-      // Now and then a park, with trees.
-      if (r() < 0.1 && dist > 60) {
-        const park = mesh(new THREE.PlaneGeometry(inner, inner).rotateX(-Math.PI / 2), toon('#8fcf7a'), bx, 0.03, bz, false);
-        parks.add(park);
-        for (let k = 0; k < 7; k++) {
-          const t = tree(r);
-          t.position.set(bx + (r() - 0.5) * (inner - 6), 0, bz + (r() - 0.5) * (inner - 6));
-          parks.add(t);
-        }
-        continue;
-      }
-      // The block split into lots: one big one, two halves or four quarters.
-      const split = r();
-      const plots: [number, number, number, number][] = [];
-      const gap = 2;
-      if (split < 0.25) plots.push([bx, bz, inner, inner]);
-      else if (split < 0.6) {
-        const w = (inner - gap) / 2;
-        const alongX = r() < 0.5;
-        for (const s of [-1, 1]) plots.push(alongX ? [bx + (s * (w + gap)) / 2, bz, w, inner] : [bx, bz + (s * (w + gap)) / 2, inner, w]);
-      } else {
-        const w = (inner - gap) / 2;
-        for (const sx of [-1, 1]) for (const sz of [-1, 1]) plots.push([bx + (sx * (w + gap)) / 2, bz + (sz * (w + gap)) / 2, w, w]);
-      }
-      // Lower than the roof round about, so you see out over them; taller further out, and tallest
-      // downtown, off to the north-east, where the skyline is.
-      const downtown = Math.max(0, 1 - Math.hypot(bx - 210, bz + 220) / 150);
-      for (const [lx, lz, lw, ld] of plots) {
-        const back = 1 + r() * 3;
-        const w = lw - back * 2;
-        const d = ld - back * 2;
-        if (w < 6 || d < 6) continue;
-        let h: number;
-        if (dist < 100) h = 9 + r() * 24 + (r() < 0.1 ? 8 : 0);
-        else if (dist < 190) h = r() < 0.1 ? 50 + r() * 40 : 12 + r() * 28;
-        else h = r() < 0.2 ? 65 + r() * 95 : 20 + r() * 30;
-        h *= 1 + downtown * 1.3;
-        const glassy = h > 70 && r() < 0.6;
-        const paint = glassy ? GLASS_TOWERS[Math.floor(r() * GLASS_TOWERS.length)] : Math.floor(r() * 7);
-        const lot: Lot = { x: lx, z: lz, w, d, h, paint, ou: Math.floor(r() * 16), ov: Math.floor(r() * 16), ring: dist < 100 ? 0 : dist < 190 ? 1 : 2 };
-        let tall = h;
-        let tw = w;
-        let td = d;
-        // Tall ones step back once on the way up.
-        if (h > 55 && r() < 0.6) {
-          tw = w * (0.55 + r() * 0.25);
-          td = d * (0.55 + r() * 0.25);
-          lot.step = { w: tw, d: td, up: 12 + r() * h * 0.5 };
-          tall += lot.step.up;
-        }
-        // On the roof: a water tower, a box of air conditioning, or a mast with a red light.
-        const what = r();
-        if (tall > 90) lot.top = { kind: 'mast' };
-        else if (what < 0.3) lot.top = { kind: 'tank', x: lx + (r() - 0.5) * tw * 0.4, z: lz + (r() - 0.5) * td * 0.4 };
-        else if (what < 0.65) {
-          const pw = 3 + r() * 3;
-          const pd = 2 + r() * 2;
-          lot.top = { kind: 'plant', w: pw, d: pd, x: lx + (r() - 0.5) * tw * 0.4, z: lz + (r() - 0.5) * td * 0.4 };
-        }
-        lots.push(lot);
-      }
+  const inner = INNER;
+  for (const p of parkAt) {
+    parks.add(mesh(new THREE.PlaneGeometry(p.size, p.size).rotateX(-Math.PI / 2), toon('#8fcf7a'), p.x, 0.03, p.z, false));
+    for (const t of p.trees) {
+      const tr = tree(t.s, t.tone);
+      tr.position.set(t.x, 0, t.z);
+      parks.add(tr);
     }
   }
 
@@ -379,7 +348,8 @@ export function buildCity(night: NightParts): City {
     // Clear of the back office, when a floor's built out into one (see WING).
     [21, -20],
   ]) {
-    const t = tree(r);
+    const s = 0.8 + r() * 0.7;
+    const t = tree(s, r() < 0.5 ? 0 : 1);
     t.position.set(x, 0, z);
     parks.add(t);
   }
@@ -421,26 +391,13 @@ export function buildCity(night: NightParts): City {
       });
     }
     raised = [];
-    const walls = new Map<number, Walls>();
-    const tops = new Walls();
+    const batch = newBatch();
+    const tops = batch.tops;
     const extras = new THREE.Group();
-    const beacons: number[] = [];
+    const beacons = batch.beacons;
     for (const lot of lots) {
       const k = rise(lot.ring, drop);
-      let bucket = walls.get(lot.paint);
-      if (!bucket) walls.set(lot.paint, (bucket = new Walls()));
-      let topY = lot.h * k;
-      bucket.box(lot.x, lot.z, lot.w, lot.d, 0, topY, lot.ou, lot.ov);
-      let tw = lot.w;
-      let td = lot.d;
-      if (lot.step) {
-        tops.top(lot.x, lot.z, lot.w, lot.d, topY);
-        tw = lot.step.w;
-        td = lot.step.d;
-        bucket.box(lot.x, lot.z, tw, td, topY, topY + lot.step.up * k, lot.ou + 5, lot.ov + 3);
-        topY += lot.step.up * k;
-      }
-      tops.top(lot.x, lot.z, tw, td, topY);
+      const topY = stack(batch, lot, k);
       const top = lot.top;
       if (top?.kind === 'mast') {
         extras.add(mesh(mastGeo, toon('#8d99ae'), lot.x, topY + 6, lot.z, false));
@@ -464,6 +421,7 @@ export function buildCity(night: NightParts): City {
         extras.add(unit);
       }
     }
+    const walls = batch.walls;
     for (const [paint, w] of walls) raised.push(new THREE.Mesh(w.geometry(), paintOf(paint)));
     raised.push(new THREE.Mesh(tops.geometry(), roofs), mergeByMaterial(extras));
     street.add(...raised);
@@ -474,17 +432,7 @@ export function buildCity(night: NightParts): City {
 
   // Street lamps down both sides of every street, and red lights blinking on the masts.
   const lampPos: number[] = [];
-  for (let k = -n; k <= n; k++) {
-    for (let a = -RADIUS; a <= RADIUS; a += 28) {
-      for (const s of [-1, 1]) {
-        const off = s * (ROAD / 2 + 0.6);
-        const sx = STREET_X + k * PERIOD;
-        const sz = STREET_Z + k * PERIOD;
-        if (Math.hypot(sx, a) < RADIUS) lampPos.push(sx + off, 5, a);
-        if (Math.hypot(a, sz) < RADIUS) lampPos.push(a, 5, sz + off);
-      }
-    }
-  }
+  for (const l of cityStreetscape().lamps) lampPos.push(l.x, 5, l.z);
   const lampGeo = new THREE.BufferGeometry();
   lampGeo.setAttribute('position', new THREE.Float32BufferAttribute(lampPos, 3));
   const lamps = new THREE.Points(lampGeo, new THREE.PointsMaterial({ size: 4, map: glow, color: '#ffcf8a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
@@ -614,4 +562,557 @@ function mergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
   return out;
+}
+
+// ---- The city at street level ---------------------------------------------------------------------
+
+/** Vertex-colored geometry piling up out of shared shapes, to be one mesh: street furniture, trees, roofs. */
+class Soup {
+  private pos: number[] = [];
+  private norm: number[] = [];
+  private col: number[] = [];
+  private flat = new Map<THREE.BufferGeometry, { p: ArrayLike<number>; n: ArrayLike<number> }>();
+  private m = new THREE.Matrix4();
+  private q = new THREE.Quaternion();
+  private e = new THREE.Euler();
+  private v = new THREE.Vector3();
+  private sc = new THREE.Vector3();
+  private c = new THREE.Color();
+
+  /** `geo` (centered, a unit big) put at (x, y, z), scaled, turned `ry` about the vertical and `rx` about its own x. */
+  add(geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1, ry = 0, rx = 0) {
+    let f = this.flat.get(geo);
+    if (!f) {
+      const g = geo.index ? geo.toNonIndexed() : geo;
+      f = { p: g.getAttribute('position').array, n: g.getAttribute('normal').array };
+      this.flat.set(geo, f);
+    }
+    this.e.set(rx, ry, 0, 'YXZ');
+    this.m.compose(this.v.set(x, y, z), this.q.setFromEuler(this.e), this.sc.set(sx, sy, sz));
+    const m = this.m.elements;
+    this.c.set(color);
+    for (let i = 0; i < f.p.length; i += 3) {
+      const px = f.p[i];
+      const py = f.p[i + 1];
+      const pz = f.p[i + 2];
+      this.pos.push(m[0] * px + m[4] * py + m[8] * pz + m[12], m[1] * px + m[5] * py + m[9] * pz + m[13], m[2] * px + m[6] * py + m[10] * pz + m[14]);
+      const nx = f.n[i];
+      const ny = f.n[i + 1];
+      const nz = f.n[i + 2];
+      const ax = m[0] * nx + m[4] * ny + m[8] * nz;
+      const ay = m[1] * nx + m[5] * ny + m[9] * nz;
+      const az = m[2] * nx + m[6] * ny + m[10] * nz;
+      const len = Math.hypot(ax, ay, az) || 1;
+      this.norm.push(ax / len, ay / len, az / len);
+      this.col.push(this.c.r, this.c.g, this.c.b);
+    }
+  }
+
+  /** A flat triangle. */
+  tri(a: number[], b: number[], c: number[], color: THREE.ColorRepresentation) {
+    const ux = b[0] - a[0];
+    const uy = b[1] - a[1];
+    const uz = b[2] - a[2];
+    const vx = c[0] - a[0];
+    const vy = c[1] - a[1];
+    const vz = c[2] - a[2];
+    let nx = uy * vz - uz * vy;
+    let ny = uz * vx - ux * vz;
+    let nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len;
+    ny /= len;
+    nz /= len;
+    this.c.set(color);
+    for (const p of [a, b, c]) {
+      this.pos.push(p[0], p[1], p[2]);
+      this.norm.push(nx, ny, nz);
+      this.col.push(this.c.r, this.c.g, this.c.b);
+    }
+  }
+
+  mesh(): THREE.Mesh {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.norm, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
+    g.computeBoundingSphere();
+    return new THREE.Mesh(g, toonVertex());
+  }
+}
+
+/** The shop fronts: names, walls, sign and lettering colors. Sixteen of them make up the atlas. */
+const SHOPS: [name: string, wall: string, sign: string, ink: string][] = [
+  ['CAFE', '#e9d8c0', '#6f4e37', '#fff3d6'],
+  ['PIZZA', '#f2c9a0', '#c1272d', '#ffffff'],
+  ['BOOKS', '#c9d6e8', '#2b4c7e', '#ffe9a8'],
+  ['PHARMACY', '#e8f1ee', '#1e9e6b', '#ffffff'],
+  ['FLOWERS', '#f3d1dc', '#d1477a', '#ffffff'],
+  ['BAKERY', '#f6e3b4', '#b5651d', '#fff8e1'],
+  ['TACOS', '#f5d27a', '#2e8b57', '#fff3b0'],
+  ['RAMEN', '#d9c7b0', '#8b1e2d', '#ffe8b0'],
+  ['BARBER', '#d5dbe3', '#264653', '#ffffff'],
+  ['GAMES', '#cdbff0', '#5b2a86', '#c7ffb8'],
+  ['DELI', '#f1d7b8', '#a23e1e', '#fff1d0'],
+  ['PETS', '#cfe8c8', '#3e8e41', '#fffbe0'],
+  ['TAILOR', '#e2d3e8', '#4a2f6b', '#ffe4f0'],
+  ['ICE CREAM', '#fbe1ec', '#e15a97', '#ffffff'],
+  ['COFFEE', '#dfd0bf', '#3b2a20', '#ffd9a0'],
+  ['SUSHI', '#e3e9f2', '#1d3557', '#ffd6d6'],
+];
+const CELL_W = 256;
+const CELL_H = 160;
+const COLS = 4;
+/** Height of a shop's ground floor, and how far its awning comes out. */
+const SHOP_H = 4;
+
+/** Every shop front side by side: the wall, a sign, a window with wares in it, a door. `lit` draws only what glows at night. */
+function shopAtlas(lit: boolean): THREE.CanvasTexture {
+  const t = canvasTexture(CELL_W * COLS, CELL_H * (SHOPS.length / COLS), (g) => {
+    SHOPS.forEach(([name, wall, sign, ink], i) => {
+      const ox = (i % COLS) * CELL_W;
+      const oy = Math.floor(i / COLS) * CELL_H;
+      const r = rng(i + 101);
+      if (lit) {
+        g.fillStyle = '#000';
+        g.fillRect(ox, oy, CELL_W, CELL_H);
+      } else {
+        g.fillStyle = wall;
+        g.fillRect(ox, oy, CELL_W, CELL_H);
+        // A plinth along the bottom, and a shadow under the sign.
+        g.fillStyle = 'rgba(0,0,0,0.16)';
+        g.fillRect(ox, oy + CELL_H - 14, CELL_W, 14);
+        g.fillRect(ox, oy + 42, CELL_W, 6);
+      }
+      // The sign.
+      g.fillStyle = lit ? sign : sign;
+      g.fillRect(ox + 10, oy + 8, CELL_W - 20, 34);
+      g.fillStyle = ink;
+      g.font = `800 ${name.length > 7 ? 21 : 25}px system-ui, sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(name, ox + CELL_W / 2, oy + 26);
+      // The window, with wares in it.
+      const wx = ox + 16;
+      const wy = oy + 62;
+      const ww = 140;
+      const wh = 78;
+      g.fillStyle = lit ? '#ffd88a' : '#a9d6f5';
+      g.fillRect(wx, wy, ww, wh);
+      for (let k = 0; k < 5; k++) {
+        g.fillStyle = ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#f78c6b'][Math.floor(r() * 5)];
+        const bw = 14 + r() * 18;
+        const bh = 12 + r() * 30;
+        g.fillRect(wx + 8 + k * 26, wy + wh - bh - 6, bw, bh);
+      }
+      if (!lit) {
+        g.fillStyle = 'rgba(255,255,255,0.4)';
+        g.fillRect(wx + 8, wy, 10, wh);
+        g.fillStyle = '#4b505c';
+        for (const rect of [[wx - 4, wy - 4, ww + 8, 4], [wx - 4, wy + wh, ww + 8, 4], [wx - 4, wy - 4, 4, wh + 8], [wx + ww, wy - 4, 4, wh + 8]]) g.fillRect(rect[0], rect[1], rect[2], rect[3]);
+      }
+      // The door, with an OPEN sign in it.
+      const dx = ox + 176;
+      const dy = oy + 58;
+      g.fillStyle = lit ? '#ffe6b0' : '#3d405b';
+      g.fillRect(dx, dy, 64, CELL_H - dy + oy - 14);
+      if (!lit) {
+        g.fillStyle = '#bfe3ff';
+        g.fillRect(dx + 8, dy + 8, 48, 62);
+      }
+      g.fillStyle = lit ? '#ff6b6b' : '#e63946';
+      g.fillRect(dx + 18, dy + 34, 28, 10);
+    });
+  });
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+
+/** How the ground lies at street level: a block's lawn, its sidewalks, the roads with their lane, edge and stop lines and crossings. */
+function streetTexture(): THREE.CanvasTexture {
+  const S = 1024;
+  const px = S / PERIOD;
+  const mid = S / 2;
+  return canvasTexture(S, S, (g) => {
+    // In meters from the middle of the intersection; z runs up the canvas (the ground plane's uv does).
+    const R = (color: string, x0: number, z0: number, x1: number, z1: number) => {
+      g.fillStyle = color;
+      g.fillRect(mid + x0 * px, mid - z1 * px, (x1 - x0) * px, (z1 - z0) * px);
+    };
+    const H = PERIOD / 2;
+    const road = ROAD / 2;
+    const walk = road + WALK;
+    R('#a7d98b', -H, -H, H, H);
+    // Sidewalks, with a seam every two meters.
+    R('#d9d3c5', -H, -walk, H, walk);
+    R('#d9d3c5', -walk, -H, walk, H);
+    g.fillStyle = 'rgba(120,112,98,0.28)';
+    for (let a = -H; a < H; a += 2) {
+      for (const s of [-1, 1]) {
+        g.fillRect(mid + a * px, mid - (s * (road + WALK / 2) + WALK / 2) * px, 1.2, WALK * px);
+        g.fillRect(mid + (s * (road + WALK / 2) - WALK / 2) * px, mid - (a + 1) * px, WALK * px, 1.2);
+      }
+    }
+    // The roads, and the curb along them: a light edge on the sidewalk, a dark gutter in the road.
+    R('#4b505c', -H, -road, H, road);
+    R('#4b505c', -road, -H, road, H);
+    for (const s of [-1, 1]) {
+      for (const [a0, a1] of [[road, H], [-H, -road]]) {
+        R('#f2eee4', a0, s * road + (s > 0 ? 0 : -0.3), a1, s * road + (s > 0 ? 0.3 : 0));
+        R('#f2eee4', s * road + (s > 0 ? 0 : -0.3), a0, s * road + (s > 0 ? 0.3 : 0), a1);
+        R('#383c46', a0, s * (road - 0.18) - 0.09, a1, s * (road - 0.18) + 0.09);
+        R('#383c46', s * (road - 0.18) - 0.09, a0, s * (road - 0.18) + 0.09, a1);
+      }
+    }
+    // Lane markings: a dashed yellow line down the middle, a white edge line each side, stopping short of the crossings.
+    const dash = 2.6;
+    for (let a = road + 5; a < H - 1; a += dash * 2) {
+      for (const s of [-1, 1]) {
+        const a0 = s > 0 ? a : -a - dash;
+        R('#ffd166', a0, -0.09, a0 + dash, 0.09);
+        R('#ffd166', -0.09, a0, 0.09, a0 + dash);
+      }
+    }
+    for (const s of [-1, 1]) {
+      for (const [a0, a1] of [[road + 5, H], [-H, -road - 5]]) {
+        R('#f1f1f1', a0, s * (road - 0.55) - 0.07, a1, s * (road - 0.55) + 0.07);
+        R('#f1f1f1', s * (road - 0.55) - 0.07, a0, s * (road - 0.55) + 0.07, a1);
+      }
+    }
+    // Zebra crossings across all four arms, and stop lines in front of them, the lane each way's own.
+    for (const s of [-1, 1]) {
+      for (let k = -3; k <= 3; k++) {
+        const c = k * 1.05;
+        R('#f5f5f5', s * (road + 0.4) - (s < 0 ? 2 : 0), c - 0.26, s * (road + 0.4) + (s > 0 ? 2 : 0), c + 0.26);
+        R('#f5f5f5', c - 0.26, s * (road + 0.4) - (s < 0 ? 2 : 0), c + 0.26, s * (road + 0.4) + (s > 0 ? 2 : 0));
+      }
+    }
+    const stop = road + 3.1;
+    // Right-hand traffic: heading +x you keep to +z, heading -x to -z, heading +z to -x, heading -z to +x.
+    R('#f5f5f5', -stop - 0.5, 0.2, -stop, road - 0.2);
+    R('#f5f5f5', stop, -road + 0.2, stop + 0.5, -0.2);
+    R('#f5f5f5', -road + 0.2, -stop - 0.5, -0.2, -stop);
+    R('#f5f5f5', 0.2, stop, road - 0.2, stop + 0.5);
+  });
+}
+
+/** Light discs' colors: what the signal shows. */
+const SIGNAL_COLOR: Record<Light, string> = { red: '#ff3b30', yellow: '#ffd60a', green: '#34c759' };
+const SIGNAL_SLOT: Record<Light, number> = { red: 0.32, yellow: 0, green: -0.32 };
+
+/** How dark it is (0–1), from the windows the sky lights up: 1.1 at night. */
+const darkOf = (m: THREE.MeshToonMaterial) => Math.min(1, m.emissiveIntensity / 1.1);
+
+/**
+ * The whole city at street level, for the office's `ground` group to hold (see outside.ts buildStreet):
+ * its roads and sidewalks with their markings, every block's buildings at full height (shop fronts
+ * with awnings and signs, brick walk-ups, glass towers, low houses with pitched roofs at the outskirts,
+ * a gas station, a parking structure), parks, street lamps, traffic lights that go through their
+ * cycle (shared/city.ts lightPhase), benches, bins and hydrants. The ground's at y = 0: put the group
+ * where the street is. The lots round the office that outside.ts builds by hand are left to it.
+ */
+export function buildStreetCity(night: NightParts): THREE.Group {
+  const group = new THREE.Group();
+  const gradient = (toon('#fff') as THREE.MeshToonMaterial).gradientMap;
+  const { lots, parks, gas } = cityLayout();
+  const scape = cityStreetscape();
+
+  // The ground, pushed back a little so the garage's lots and the plaza, laid on top, always win.
+  const size = PERIOD * 24;
+  const groundGeo = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
+  const uv = groundGeo.getAttribute('uv') as THREE.BufferAttribute;
+  const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
+  const groundMat = new THREE.MeshToonMaterial({ map: streetTexture(), gradientMap: gradient, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
+  group.add(new THREE.Mesh(groundGeo, groundMat));
+
+  // Walls: a material per paint, and the shop fronts' atlas.
+  const paintMats = new Map<number, THREE.MeshToonMaterial>();
+  const paintOf = (i: number) => {
+    let m = paintMats.get(i);
+    if (!m) {
+      const p = PAINTS[i];
+      const lit = litTexture(p, i + 1);
+      lit.repeat.set(1 / 16, 1 / 16);
+      m = new THREE.MeshToonMaterial({ map: bayTexture(p), emissive: '#ffffff', emissiveMap: lit, emissiveIntensity: 0, gradientMap: gradient });
+      night.windows.push(m);
+      paintMats.set(i, m);
+    }
+    return m;
+  };
+  const storeMat = new THREE.MeshToonMaterial({ map: shopAtlas(false), emissive: '#ffffff', emissiveMap: shopAtlas(true), emissiveIntensity: 0, gradientMap: gradient });
+  night.windows.push(storeMat);
+  const stores = new Walls();
+
+  const batch = newBatch();
+  const soup = new Soup();
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  const cyl = new THREE.CylinderGeometry(1, 1, 1, 6);
+  const ball = new THREE.SphereGeometry(1, 8, 6);
+  const beacons = batch.beacons;
+
+  const tree = (x: number, z: number, s: number, tone: number) => {
+    soup.add(cyl, '#8a5a3b', x, 1.2 * s, z, 0.28 * s, 2.4 * s, 0.28 * s);
+    soup.add(ball, TREE_GREENS[tone], x, 3.4 * s, z, 1.9 * s, 1.9 * s, 1.9 * s);
+  };
+
+  // A shop's storey: its front in modules of shop front, an awning over each; the other walls plain.
+  const face = (l: Lot) => (l.fz > 0 ? 1 : l.fz < 0 ? 2 : l.fx > 0 ? 4 : 8);
+  const awnings = ['#e63946', '#2a9d8f', '#f4a261', '#457b9d', '#8e5bbf', '#e9c46a'];
+  const shopFront = (l: Lot) => {
+    const span = l.fz !== 0 ? l.w : l.d;
+    const count = Math.max(1, Math.round(span / 6.5));
+    const step = span / count;
+    const pick = rng(l.ou * 31 + l.ov * 7 + Math.round(l.x) + Math.round(l.z) * 3);
+    const awning = awnings[Math.floor(pick() * awnings.length)];
+    let cell = Math.floor(pick() * SHOPS.length);
+    for (let m = 0; m < count; m++) {
+      cell = (cell + 5 + Math.floor(pick() * 3)) % SHOPS.length;
+      const col = cell % COLS;
+      const row = Math.floor(cell / COLS);
+      const rows = SHOPS.length / COLS;
+      const e = 0.5 / CELL_W;
+      const uv: [number, number, number, number] = [col / COLS + e, 1 - (row + 1) / rows + e, (col + 1) / COLS - e, 1 - row / rows - e];
+      let a: [number, number, number];
+      let u: [number, number, number];
+      let n: [number, number, number];
+      if (l.fz > 0) [a, u, n] = [[l.x - l.w / 2 + step * m, 0, l.z + l.d / 2], [step, 0, 0], [0, 0, 1]];
+      else if (l.fz < 0) [a, u, n] = [[l.x + l.w / 2 - step * m, 0, l.z - l.d / 2], [-step, 0, 0], [0, 0, -1]];
+      else if (l.fx > 0) [a, u, n] = [[l.x + l.w / 2, 0, l.z + l.d / 2 - step * m], [0, 0, -step], [1, 0, 0]];
+      else [a, u, n] = [[l.x - l.w / 2, 0, l.z - l.d / 2 + step * m], [0, 0, step], [-1, 0, 0]];
+      stores.quad(a, u, SHOP_H, n, uv);
+      // An awning over it, striped, sloping down to its front edge.
+      const cx = a[0] + u[0] / 2;
+      const cz = a[2] + u[2] / 2;
+      const yaw = Math.atan2(n[0], n[2]);
+      const stripes = 6;
+      for (let k = 0; k < stripes; k++) {
+        const off = ((k + 0.5) / stripes - 0.5) * step * 0.94;
+        const sx = Math.cos(yaw) * off;
+        const sz = -Math.sin(yaw) * off;
+        soup.add(box, k % 2 ? '#f6f1e4' : awning, cx + n[0] * 0.75 + sx, 3.25, cz + n[2] * 0.75 + sz, (step * 0.94) / stripes, 0.07, 1.5, yaw, 0.32);
+      }
+    }
+  };
+
+  // A low house: a pitched roof, a door, a chimney, and often a tree in the yard.
+  const roofs = ['#b5523b', '#6b4a35', '#4a5568', '#8d5b4c', '#a34a3c'];
+  const doors = ['#e63946', '#2a9d8f', '#f4a261', '#457b9d', '#6a4c93'];
+  const house = (l: Lot) => {
+    const pick = rng(l.ou * 17 + l.ov * 5 + Math.round(l.x));
+    const roof = roofs[Math.floor(pick() * roofs.length)];
+    const rise = 2.2;
+    const hx = l.w / 2 + 0.5;
+    const hz = l.d / 2 + 0.5;
+    const y = l.h;
+    // The ridge runs along the longer side.
+    if (l.w >= l.d) {
+      soup.tri([l.x - hx, y, l.z + hz], [l.x + hx, y, l.z + hz], [l.x + hx, y + rise, l.z], roof);
+      soup.tri([l.x - hx, y, l.z + hz], [l.x + hx, y + rise, l.z], [l.x - hx, y + rise, l.z], roof);
+      soup.tri([l.x + hx, y, l.z - hz], [l.x - hx, y, l.z - hz], [l.x - hx, y + rise, l.z], roof);
+      soup.tri([l.x + hx, y, l.z - hz], [l.x - hx, y + rise, l.z], [l.x + hx, y + rise, l.z], roof);
+      soup.tri([l.x + hx, y, l.z + hz], [l.x + hx, y, l.z - hz], [l.x + hx, y + rise, l.z], roof);
+      soup.tri([l.x - hx, y, l.z - hz], [l.x - hx, y, l.z + hz], [l.x - hx, y + rise, l.z], roof);
+    } else {
+      soup.tri([l.x + hx, y, l.z - hz], [l.x + hx, y, l.z + hz], [l.x, y + rise, l.z + hz], roof);
+      soup.tri([l.x + hx, y, l.z - hz], [l.x, y + rise, l.z + hz], [l.x, y + rise, l.z - hz], roof);
+      soup.tri([l.x - hx, y, l.z + hz], [l.x - hx, y, l.z - hz], [l.x, y + rise, l.z - hz], roof);
+      soup.tri([l.x - hx, y, l.z + hz], [l.x, y + rise, l.z - hz], [l.x, y + rise, l.z + hz], roof);
+      soup.tri([l.x - hx, y, l.z + hz], [l.x + hx, y, l.z + hz], [l.x, y + rise, l.z + hz], roof);
+      soup.tri([l.x + hx, y, l.z - hz], [l.x - hx, y, l.z - hz], [l.x, y + rise, l.z - hz], roof);
+    }
+    soup.add(box, '#8d99ae', l.x + l.w * 0.25, y + rise + 0.4, l.z + l.d * 0.2, 0.8, 1.8, 0.8);
+    const door = doors[Math.floor(pick() * doors.length)];
+    soup.add(box, door, l.x + l.fx * (l.w / 2 + 0.05), 1.05, l.z + l.fz * (l.d / 2 + 0.05), l.fx ? 0.12 : 1.1, 2.1, l.fz ? 0.12 : 1.1);
+    soup.add(box, '#d9d3c5', l.x + l.fx * (l.w / 2 + 0.7), 0.06, l.z + l.fz * (l.d / 2 + 0.7), l.fx ? 1.4 : 1.6, 0.12, l.fz ? 1.4 : 1.6);
+    if (pick() < 0.65) tree(l.x + l.fx * (l.w / 2 + 3) + l.fz * (pick() < 0.5 ? -3.5 : 3.5), l.z + l.fz * (l.d / 2 + 3) + l.fx * 3.5, 0.9 + pick() * 0.4, pick() < 0.5 ? 0 : 1);
+  };
+
+  // The gas station's forecourt, canopy, pumps and sign, with the lot's shop behind them.
+  const station = () => {
+    if (!gas) return;
+    const p = gas.plot;
+    const c = gas.canopy;
+    soup.add(box, '#575c68', (p.minX + p.maxX) / 2, 0.03, (p.minZ + p.maxZ) / 2, p.maxX - p.minX, 0.06, p.maxZ - p.minZ);
+    const cw = c.maxX - c.minX;
+    const cd = c.maxZ - c.minZ;
+    soup.add(box, '#f4f1de', (c.minX + c.maxX) / 2, 4.7, (c.minZ + c.maxZ) / 2, cw, 0.4, cd);
+    soup.add(box, '#e63946', (c.minX + c.maxX) / 2, 4.5, (c.minZ + c.maxZ) / 2, cw + 0.06, 0.16, cd + 0.06);
+    for (const [px, pz] of [
+      [c.minX + 0.3, c.minZ + 0.3],
+      [c.maxX - 0.3, c.maxZ - 0.3],
+    ])
+      soup.add(cyl, '#f4f1de', px, 2.25, pz, 0.28, 4.5, 0.28);
+    for (const a of gas.pumps) {
+      const x = (a.minX + a.maxX) / 2;
+      const z = (a.minZ + a.maxZ) / 2;
+      soup.add(box, '#e63946', x, 0.75, z, a.maxX - a.minX, 1.5, a.maxZ - a.minZ);
+      soup.add(box, '#f5f5f5', x, 1.6, z, a.maxX - a.minX + 0.05, 0.25, a.maxZ - a.minZ + 0.05);
+    }
+    // A price sign on a pole out by the street.
+    const fx = gas.fx;
+    const fz = gas.fz;
+    const sx = fz ? p.minX + 2 : fx > 0 ? p.maxX - 1.5 : p.minX + 1.5;
+    const sz = fx ? p.minZ + 2 : fz > 0 ? p.maxZ - 1.5 : p.minZ + 1.5;
+    soup.add(cyl, '#3d405b', sx, 3.2, sz, 0.12, 6.4, 0.12);
+    const sign = textPlane('⛽ GAS', { bg: '#e63946', color: '#ffffff', size: 64, border: '#ffffff' });
+    sign.scale.multiplyScalar(1.5);
+    sign.position.set(sx + fx * 0.2, 6.6, sz + fz * 0.2);
+    sign.rotation.y = Math.atan2(fx, fz);
+    group.add(sign);
+  };
+
+  for (const lot of lots) {
+    if (lot.hand) continue;
+    switch (lot.kind) {
+      case 'shop': {
+        const bucket = batch.walls.get(lot.paint) ?? new Walls();
+        batch.walls.set(lot.paint, bucket);
+        // The other three walls of its ground floor are plain; the front is the shop's.
+        bucket.box(lot.x, lot.z, lot.w, lot.d, 0, SHOP_H, lot.ou, lot.ov, 15 & ~face(lot));
+        stack(batch, lot, 1, { y0: SHOP_H });
+        shopFront(lot);
+        break;
+      }
+      case 'walkup':
+        stack(batch, lot, 1, { paint: BRICKS[(lot.ou + lot.ov) & 1] });
+        break;
+      case 'deck':
+        stack(batch, lot, 1, { paint: DECK });
+        break;
+      case 'house':
+        stack(batch, lot, 1, { flat: false });
+        house(lot);
+        break;
+      case 'gas':
+        stack(batch, lot, 1, { paint: 3 });
+        station();
+        break;
+      default: {
+        const topY = stack(batch, lot, 1);
+        if (lot.top?.kind === 'mast') {
+          soup.add(cyl, '#8d99ae', lot.x, topY + 6, lot.z, 0.28, 12, 0.28);
+          beacons.push(lot.x, topY + 12.3, lot.z);
+        }
+      }
+    }
+  }
+  for (const [paint, w] of batch.walls) group.add(new THREE.Mesh(w.geometry(), paintOf(paint)));
+  group.add(new THREE.Mesh(batch.tops.geometry(), toon('#a19d97')), new THREE.Mesh(stores.geometry(), storeMat));
+
+  // Parks: a lawn, a kerb of hedge all round, two paths, and the trees.
+  for (const p of parks) {
+    const h = p.size / 2;
+    soup.add(box, '#8fcf7a', p.x, 0.04, p.z, p.size, 0.08, p.size);
+    soup.add(box, '#dcd2b8', p.x, 0.09, p.z, 2.4, 0.06, p.size);
+    soup.add(box, '#dcd2b8', p.x, 0.09, p.z, p.size, 0.06, 2.4);
+    for (const s of [-1, 1]) {
+      soup.add(box, '#4ea657', p.x, 0.3, p.z + s * (h - 0.25), p.size, 0.6, 0.5);
+      soup.add(box, '#4ea657', p.x + s * (h - 0.25), 0.3, p.z, 0.5, 0.6, p.size);
+    }
+    for (const t of p.trees) tree(t.x, t.z, t.s, t.tone);
+  }
+
+  // Street lamps (not the ones outside.ts has put up out front), and how the light comes on at night.
+  const glow = glowTexture();
+  const lampAt: number[] = [];
+  for (const l of scape.lamps) {
+    if (l.hand) continue;
+    lampAt.push(l.x + l.ax * 1.2, 5, l.z + l.az * 1.2);
+    // Only near enough to see the post (the glow carries on further out).
+    if (Math.hypot(l.x, l.z) > 240) continue;
+    soup.add(cyl, '#3d405b', l.x, 0.25, l.z, 0.22, 0.5, 0.22);
+    soup.add(cyl, '#3d405b', l.x, 2.5, l.z, 0.08, 5, 0.08);
+    soup.add(box, '#3d405b', l.x + l.ax * 0.6, 4.95, l.z + l.az * 0.6, l.ax ? 1.3 : 0.08, 0.08, l.az ? 1.3 : 0.08);
+    soup.add(cyl, '#3d405b', l.x + l.ax * 1.2, 4.9, l.z + l.az * 1.2, 0.3, 0.24, 0.3);
+    soup.add(ball, '#fff3d6', l.x + l.ax * 1.2, 4.72, l.z + l.az * 1.2, 0.2, 0.2, 0.2);
+  }
+  const lampsGeo = new THREE.BufferGeometry();
+  lampsGeo.setAttribute('position', new THREE.Float32BufferAttribute(lampAt, 3));
+  const lamps = new THREE.Points(lampsGeo, new THREE.PointsMaterial({ size: 4, map: glow, color: '#ffcf8a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
+  lamps.frustumCulled = false;
+  group.add(lamps);
+
+  // Benches, bins and hydrants, near enough to be seen.
+  for (const p of scape.props) {
+    if (Math.hypot(p.x, p.z) > 200) continue;
+    const s = Math.sin(p.rot);
+    const c = Math.cos(p.rot);
+    // (lx, lz) in the prop's own frame, +z toward the road, to the ground.
+    const at = (lx: number, lz: number) => [p.x + lx * c + lz * s, p.z - lx * s + lz * c] as const;
+    if (p.kind === 'bench') {
+      const [sx, sz] = at(0, 0);
+      soup.add(box, '#8a5a3b', sx, 0.45, sz, 1.7, 0.08, 0.5, p.rot);
+      const [bx, bz] = at(0, -0.22);
+      soup.add(box, '#8a5a3b', bx, 0.78, bz, 1.7, 0.4, 0.06, p.rot);
+      for (const lx of [-0.7, 0.7]) {
+        const [px, pz] = at(lx, 0);
+        soup.add(box, '#3d405b', px, 0.22, pz, 0.08, 0.44, 0.44, p.rot);
+      }
+    } else if (p.kind === 'bin') {
+      soup.add(cyl, '#2f6f4f', p.x, 0.45, p.z, 0.26, 0.9, 0.26);
+      soup.add(cyl, '#1f2933', p.x, 0.93, p.z, 0.29, 0.08, 0.29);
+    } else {
+      soup.add(cyl, '#e63946', p.x, 0.36, p.z, 0.15, 0.72, 0.15);
+      soup.add(ball, '#e63946', p.x, 0.75, p.z, 0.17, 0.17, 0.17);
+      soup.add(cyl, '#f1c40f', p.x, 0.5, p.z, 0.25, 0.1, 0.1, p.rot + Math.PI / 2);
+    }
+  }
+
+  // Traffic signals: a pole and a head on every corner. What each shows is drawn by one lit disc a corner.
+  for (const p of scape.poles) {
+    soup.add(cyl, '#3d405b', p.x, 2.2, p.z, 0.09, 4.4, 0.09);
+    soup.add(box, '#22252f', p.x + p.fx * 0.25, 3.7, p.z + p.fz * 0.25, p.fx ? 0.3 : 0.36, 1.05, p.fz ? 0.3 : 0.36);
+    soup.add(box, '#22252f', p.x + p.fx * 0.1, 4.0, p.z + p.fz * 0.1, p.fx ? 0.08 : 0.2, 0.06, p.fz ? 0.08 : 0.2);
+  }
+  const lit = new THREE.InstancedMesh(new THREE.CircleGeometry(0.12, 10), new THREE.MeshBasicMaterial({ color: '#ffffff' }), scape.poles.length);
+  lit.frustumCulled = false;
+  const place = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  const yAxis = new THREE.Vector3(0, 1, 0);
+  const unit = new THREE.Vector3(1, 1, 1);
+  const spot = new THREE.Vector3();
+  const tint = new THREE.Color();
+  let signalAt = -1e9;
+  const signals = () => {
+    const now = performance.now();
+    if (now - signalAt < 250) return;
+    signalAt = now;
+    const t = Date.now() / 1000;
+    let last = -1;
+    let phase = lightPhase(t, scape.intersections[0]);
+    scape.poles.forEach((p, k) => {
+      if (p.i * 1000 + p.j !== last) {
+        last = p.i * 1000 + p.j;
+        phase = lightPhase(t, p);
+      }
+      const state = p.axis === 'x' ? phase.x : phase.z;
+      quat.setFromAxisAngle(yAxis, Math.atan2(p.fx, p.fz));
+      place.compose(spot.set(p.x + p.fx * 0.41, 3.7 + SIGNAL_SLOT[state], p.z + p.fz * 0.41), quat, unit);
+      lit.setMatrixAt(k, place);
+      lit.setColorAt(k, tint.set(SIGNAL_COLOR[state]));
+    });
+    lit.instanceMatrix.needsUpdate = true;
+    if (lit.instanceColor) lit.instanceColor.needsUpdate = true;
+  };
+  signals();
+  lit.onBeforeRender = signals;
+  group.add(lit);
+
+  // Everything vertex-colored (trees, roofs, furniture, gas station...) in the one mesh.
+  group.add(soup.mesh());
+
+  // The red lights blinking on the masts, and the street lamps' glow, brighter with the dark.
+  const beaconMat = new THREE.PointsMaterial({ size: 5, map: glow, color: '#ff3b30', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+  const beaconGeo = new THREE.BufferGeometry();
+  beaconGeo.setAttribute('position', new THREE.Float32BufferAttribute(beacons, 3));
+  const beaconPoints = new THREE.Points(beaconGeo, beaconMat);
+  beaconPoints.frustumCulled = false;
+  group.add(beaconPoints);
+  lamps.onBeforeRender = () => {
+    const dark = darkOf(storeMat);
+    (lamps.material as THREE.PointsMaterial).opacity = dark;
+    beaconMat.opacity = (Math.sin((Date.now() / 1000) * Math.PI) > 0 ? 1 : 0.08) * (0.35 + 0.65 * dark);
+  };
+  return group;
 }

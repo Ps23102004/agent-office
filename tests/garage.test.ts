@@ -79,10 +79,12 @@ test('you can drive out of the garage, across the lot and down the street, but n
   const road = (ROAD.minZ + ROAD.maxZ) / 2;
   assert.ok(onPavement({ x: 80, z: road, rotY: Math.PI / 2 }));
   assert.ok(onPavement({ x: -80, z: road, rotY: -Math.PI / 2 }));
-  assert.ok(!onPavement({ x: 95, z: road, rotY: Math.PI / 2 }), 'not past the end of it');
+  assert.ok(onPavement({ x: 95, z: road, rotY: Math.PI / 2 }), 'the city carries the street on');
+  assert.ok(!onPavement({ x: 400, z: road, rotY: Math.PI / 2 }), 'but not off the end of the city');
   assert.ok(!onPavement({ x: -40, z: 18, rotY: 0 }), 'the lawn beside the lot');
   assert.ok(!onPavement({ x: 0, z: FLOOR.minZ - 1, rotY: Math.PI / 2 }), 'through the back wall');
-  assert.ok(!paved(0, ROAD.maxZ + 1.5), 'the far sidewalk');
+  assert.ok(paved(0, ROAD.maxZ + 1.5), 'the far sidewalk');
+  assert.ok(!paved(0, ROAD.maxZ + 8), 'the lot across the street');
   // Nothing sticks out of a paved patch where two meet a corner the car could cut.
   assert.ok(PAVEMENT.every((b) => b.minX < b.maxX && b.minZ < b.maxZ));
 });
