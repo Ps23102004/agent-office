@@ -3,6 +3,7 @@ import { FLOOR, SLAB, STREET_Y, WALL_HEIGHT, WALL_T, WING, wingMinZ } from '../.
 import type { SkyState, Theme, Weather } from '../../shared/protocol';
 import { guessPlace, sunPosition } from '../../shared/sun';
 import type { NightParts } from './outside';
+import { decorTicker, quality } from '../quality';
 
 /*
  * Day, night and the weather outside the windows. The server says where the office is and what the
@@ -778,7 +779,8 @@ export class Sky {
     const lit = 0.3 + 0.7 * Math.max(this.level, this.lampsOn * 0.5);
     this.rainLines.material.color.set('#bcd0e6').multiplyScalar(lit);
     this.flakes.material.color.setScalar(lit);
-    this.fall(dt, t);
+    const fallDt = this.fallTick(dt);
+    if (fallDt) this.fall(fallDt, t);
     this.glass.update(dt, this.rain, lit);
   }
 
@@ -799,6 +801,9 @@ export class Sky {
     }
   }
 
+  /** The weather falls only as often as the Graphics setting says (see decorTicker). */
+  private readonly fallTick = decorTicker();
+
   private fall(dt: number, t: number) {
     const cx = this.camPos.x;
     const cz = this.camPos.z;
@@ -806,7 +811,7 @@ export class Sky {
     const floor = Math.max(this.street, this.camPos.y - 12);
     const wrap = (v: number, c: number, half: number) => (v - c > half ? v - 2 * half : v - c < -half ? v + 2 * half : v);
 
-    const rainN = Math.round((this.drops.length / 4) * this.rain);
+    const rainN = Math.round((this.drops.length / 4) * this.rain * quality.weather);
     this.rainLines.visible = rainN > 0;
     if (rainN > 0) {
       const pos = this.rainLines.geometry.attributes.position as THREE.BufferAttribute;
@@ -833,7 +838,7 @@ export class Sky {
       this.rainLines.geometry.setDrawRange(0, rainN * 2);
     }
 
-    const snowN = Math.round((this.flakeState.length / 4) * this.snow);
+    const snowN = Math.round((this.flakeState.length / 4) * this.snow * quality.weather);
     this.flakes.visible = snowN > 0;
     if (snowN > 0) {
       const pos = this.flakes.geometry.attributes.position as THREE.BufferAttribute;

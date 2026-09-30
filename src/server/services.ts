@@ -9,7 +9,9 @@ import type { ServiceInfo } from '../shared/protocol.js';
 // listen on, and credit each one to the worker whose terminal started it. Servers no worker
 // started (yours, from your own terminal) aren't listed.
 
+/** How often to look for services while a worker is working (it may start one), and how often when none is. */
 const SCAN_MS = 4000;
+const IDLE_SCAN_MS = 15_000;
 /** A port that stopped listening this recently still gets a "stopped" page instead of the office. */
 const GONE_MS = 24 * 60 * 60_000;
 /** Listeners that aren't something to review: browsers driven by tests, their helpers. */
@@ -21,6 +23,8 @@ export interface ServiceOwner {
   pid?: number;
   /** Claude itself, as opposed to a shell: its own ports (IDE, OAuth callbacks) aren't services. */
   agent: boolean;
+  /** It's in the middle of a task. */
+  working: boolean;
   /** Its working directory: the project, or its own worktree. */
   cwd: string;
   /** Its floor's checkout, which everyone on that floor shares. */
@@ -180,12 +184,15 @@ export class Services {
   ) {}
 
   start() {
-    void this.scan();
-    this.timer = setInterval(() => void this.scan(), SCAN_MS);
+    const tick = () => {
+      void this.scan();
+      this.timer = setTimeout(tick, this.owners().some((o) => o.working) ? SCAN_MS : IDLE_SCAN_MS);
+    };
+    tick();
   }
 
   stop() {
-    clearInterval(this.timer);
+    clearTimeout(this.timer);
   }
 
   /** The web servers (listeners that answered HTTP), by port. */

@@ -260,6 +260,26 @@ export function disposeSprite(s: THREE.Sprite) {
 }
 
 /**
+ * Whether something is too small for its shadow to be worth drawing (a mug, a book, a cable, a thin
+ * chair leg): the area of the biggest side of its box, in square metres, is under a hand's width squared or so.
+ */
+export function tinyForShadow(box: THREE.Box3): boolean {
+  const s = box.getSize(new THREE.Vector3());
+  const [a, b] = [s.x, s.y, s.z].sort((p, q) => q - p);
+  return a * b < 0.06;
+}
+
+/** Turns off the shadows of what's small in `root`, where it stands now (what wasn't merged: see mergeByMaterial). */
+export function trimShadows(root: THREE.Object3D) {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh && m.castShadow && tinyForShadow(box.setFromObject(m))) m.castShadow = false;
+  });
+}
+
+/**
  * Merges every (untextured) mesh under `root` into one per material, keeping which ones cast
  * shadows: a few draw calls instead of dozens, for things that never move on their own.
  */
@@ -274,8 +294,11 @@ export function mergeByMaterial(root: THREE.Object3D): THREE.Group {
     for (const k of Object.keys(geo.attributes)) if (k !== 'position' && k !== 'normal') geo.deleteAttribute(k);
     geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
     const mat = m.material as THREE.Material;
-    const key = `${mat.uuid}${m.castShadow ? '+' : '-'}`;
-    if (!byKey.has(key)) byKey.set(key, { mat, cast: m.castShadow, geos: [] });
+    // Small things (the clutter on a desk) don't cast, so they merge with each other and out of the shadow pass.
+    geo.computeBoundingBox();
+    const cast = m.castShadow && !tinyForShadow(geo.boundingBox!);
+    const key = `${mat.uuid}${cast ? '+' : '-'}`;
+    if (!byKey.has(key)) byKey.set(key, { mat, cast, geos: [] });
     byKey.get(key)!.geos.push(geo);
   });
   const out = new THREE.Group();

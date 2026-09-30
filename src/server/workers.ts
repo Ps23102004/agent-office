@@ -339,6 +339,7 @@ export class WorkerManager {
       workerId: w.info.id,
       pid: w.pty?.pid,
       agent: w.info.kind === 'agent',
+      working: w.info.status === 'working',
       cwd: this.cwd(w.info),
       root: this.dir,
     }));

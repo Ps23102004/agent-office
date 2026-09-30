@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, roofDrop } from '../../shared/layout';
 import type { NightParts } from './outside';
+import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, toon } from './toon';
 import { buildTower } from './tower';
 
@@ -563,6 +564,7 @@ export function buildCity(night: NightParts): City {
     for (const m of [carMesh, heads, tails]) m.instanceMatrix.needsUpdate = true;
   };
   moveCars(0);
+  const carsTick = decorTicker();
 
   // Clouds, drifting past at about the height of the towers.
   const cloud = night.clouds;
@@ -608,7 +610,8 @@ export function buildCity(night: NightParts): City {
       }
     },
     update(t, dt, dark) {
-      moveCars(dt);
+      const carsDt = carsTick(dt);
+      if (carsDt) moveCars(carsDt);
       lamps.visible = dark > 0.02;
       lamps.material.opacity = dark;
       headMat.color.setScalar(0.75 + 0.25 * dark);
