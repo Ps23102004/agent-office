@@ -1,4 +1,6 @@
-import { CARS, SPECS, DRIVE, parked, paved, type CarDef, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
+import { CARS, SPECS, DRIVE, carFits, parked, paved, type CarDef, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
+import { citySolids, seaRespawnsFrom } from '../shared/city.js';
+import { CITY_GATE } from '../shared/circuit.js';
 
 /** How often one person can honk, at most (ms). */
 const HONK_EVERY = 250;
@@ -11,6 +13,8 @@ const HONK_EVERY = 250;
 export class Garage {
   private cars: CarState[];
   private honked = new Map<string, number>();
+  /** When each car's pose was last accepted (ms), to tell a drive from a jump. */
+  private movedAt: number[] = [];
 
   /** A floor's garage; or the race circuit's cars (`defs`), which go anywhere `where` says (see shared/circuit.ts). */
   constructor(
@@ -41,6 +45,7 @@ export class Garage {
     if (!c || (seat !== 'driver' && seat !== 'passenger') || c[seat] || (seat === 'passenger' && SPECS[this.defs[car].kind].seats < 2)) return false;
     this.leave(id);
     c[seat] = id;
+    if (seat === 'driver') this.movedAt[car] = this.now();
     return true;
   }
 
@@ -67,6 +72,8 @@ export class Garage {
     const slip = pose.slip ?? 0;
     const spec = SPECS[this.defs[car].kind];
     if (![x, z, rotY, speed, steer, slip].every(Number.isFinite) || !this.where(x, z)) return undefined;
+    if (this.where === paved && !this.plausible(car, { x, z, rotY })) return undefined;
+    this.movedAt[car] = this.now();
     Object.assign(c, {
       x,
       z,
@@ -76,6 +83,22 @@ export class Garage {
       steer: Math.min(DRIVE.steer, Math.max(-DRIVE.steer, steer)),
     });
     return { x: c.x, z: c.z, rotY: c.rotY, speed: c.speed, steer: c.steer, slip: c.slip };
+  }
+
+  /**
+   * Whether a city car can have got to `to` from where the office last had it: clear of the city's
+   * buildings and street furniture, and no further than it could have gone since (flat out, with some
+   * slack for the network). Two jumps are allowed: back onto the road out of the sea (only to one of
+   * the spots shoreRespawns gives for the water by where it was), and out of the gate from the circuit.
+   */
+  private plausible(car: number, to: { x: number; z: number; rotY: number }): boolean {
+    const kind = this.defs[car].kind;
+    if (!carFits(to, citySolids(to.x, to.z, 6), kind)) return false;
+    const c = this.cars[car];
+    const seconds = Math.min(1, Math.max(0, (this.now() - (this.movedAt[car] ?? this.now())) / 1000));
+    if (Math.hypot(to.x - c.x, to.z - c.z) <= SPECS[kind].top * 1.3 * seconds + 3) return true;
+    const at = (p: { x: number; z: number }) => Math.hypot(p.x - to.x, p.z - to.z) < 0.5;
+    return at(CITY_GATE.out) || seaRespawnsFrom(c.x, c.z).some(at);
   }
 
   /** `id` leans on the horn: the car they're in, unless they only just did. */

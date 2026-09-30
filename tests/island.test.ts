@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GRID, LIGHTHOUSE, PIER, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, citySolids, coastAt, shoreRespawn, surfaceAt } from '../src/shared/city.js';
-import { GROUND, carFits, drive, paved, type CarPose, type Pedals } from '../src/shared/garage.js';
+import { GRID, LIGHTHOUSE, PIER, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, citySolids, coastAt, shoreRespawn, shoreRespawns, surfaceAt } from '../src/shared/city.js';
+import { CARS, GROUND, carFits, drive, paved, type CarPose, type Pedals } from '../src/shared/garage.js';
 import { Garage } from '../src/server/garage.js';
 
 const GAS: Pedals = { gas: 1, turn: 0, brake: false };
@@ -43,9 +43,7 @@ test('the coast goes all the way round, past the ring road, with a beach everywh
   assert.deepEqual(coastAt(1), coastAt(1), 'the same every time');
 });
 
-test('out of the sea you come back on the nearest road, facing inland, where the office takes you', () => {
-  const g = new Garage();
-  g.enter('ann', 0, 'driver');
+test('out of the sea you come back on the nearest road, facing inland', () => {
   for (let k = 0; k < 64; k++) {
     const th = (k / 64) * Math.PI * 2;
     const r = coastAt(th).shore + 3 + (k % 5) * 20;
@@ -58,11 +56,52 @@ test('out of the sea you come back on the nearest road, facing inland, where the
     // Its nose points back toward the middle of the island.
     assert.ok(Math.sin(at.rotY) * at.x + Math.cos(at.rotY) * at.z < 0, 'facing inland');
     assert.ok(carFits(at, citySolids(at.x, at.z, 8)), 'with room for a car');
-    assert.ok(!g.drive('ann', 0, { ...still(x, z), speed: 5 }), 'the office never has it in the water');
-    assert.ok(g.drive('ann', 0, { ...at, speed: 0, steer: 0 }), 'but takes the jump back to the road');
+    // Every spot it might come back to is on a road with room for any of the cars and bikes.
+    for (const spot of shoreRespawns(x, z)) {
+      assert.equal(surfaceAt(spot.x, spot.z), 'road');
+      for (const kind of ['lambo', 'ferrari', 'motorbike', 'bicycle'] as const) assert.ok(carFits(spot, citySolids(spot.x, spot.z, 8), kind));
+    }
     // On foot, you're put back up the beach.
     const foot = shoreRespawn(x, z, true);
     assert.equal(surfaceAt(foot.x, foot.z), 'sand');
+  }
+});
+
+test('the office takes a drive, and the jump back out of the sea, but no teleports', () => {
+  let now = 1_000_000;
+  const g = new Garage(() => (now += 1000));
+  const blue = CARS.findIndex((c) => c.name === 'Blue Lambo');
+  assert.ok(g.enter('ann', blue, 'driver'));
+  const at = (x: number, z: number) => ({ ...still(x, z, Math.PI / 2), speed: 15 });
+  // Into a building, however near: no.
+  const lot = cityLayout().lots.find((l) => !l.hand && l.kind !== 'gas' && Math.hypot(l.x, l.z) < 200)!;
+  assert.ok(!g.drive('ann', blue, at(lot.x, lot.z)), 'not inside a building');
+  // Down the street east to the beach, 20 m a second.
+  assert.ok(g.drive('ann', blue, at(9, 27)));
+  assert.ok(!g.drive('ann', blue, at(200, 27)), 'not across town in a second');
+  let x = 9;
+  while (surfaceAt(x + 20, 27) !== 'water') assert.ok(g.drive('ann', blue, at((x += 20), 27)), `x ${x}`);
+  while (surfaceAt(x + 1, 27) !== 'water') x += 1;
+  assert.ok(g.drive('ann', blue, at(x, 27)), 'on the beach, by the water');
+  assert.ok(!g.drive('ann', blue, at(x + 4, 27)), 'never in the water');
+  // Back on the road out of the sea: one of the spots for the water it went into, not just anywhere.
+  assert.ok(!g.drive('ann', blue, { ...shoreRespawns(0, -600)[0], speed: 0, steer: 0 }), 'not a respawn from another shore');
+  assert.ok(g.drive('ann', blue, { ...shoreRespawns(x + 6, 27)[1], speed: 0, steer: 0 }), 'the jump back to the road');
+});
+
+test('a bicycle creeps across the sand from a standstill', () => {
+  let p = still(coastAt(0).land + 3, 0, Math.PI / 2);
+  for (let i = 0; i < 1200; i++) p = drive(p, GAS, 1 / 120, 'bicycle', 'sand');
+  assert.ok(p.speed > 0.5 && p.x > coastAt(0).land + 6, `${p.speed.toFixed(2)} m/s`);
+});
+
+test('the beach is sand right into the corners, where the coast comes nearest the ring road', () => {
+  for (let k = 0; k < 4000; k++) {
+    const th = (k / 4000) * Math.PI * 2;
+    const { land, shore } = coastAt(th);
+    const pier = (r: number) => Math.abs(Math.cos(th) * r - PIER.x) < PIER.width;
+    for (const r of [land + 0.5, (land + shore) / 2, shore - 0.5]) if (!pier(r)) assert.equal(surfaceAt(Math.cos(th) * r, Math.sin(th) * r), 'sand', `${th.toFixed(3)} ${r.toFixed(1)}`);
+    assert.equal(surfaceAt(Math.cos(th) * (land - 0.5), Math.sin(th) * (land - 0.5)) === 'sand', false);
   }
 });
 

@@ -109,6 +109,7 @@ function sea(): THREE.ShaderMaterial {
       THREE.UniformsLib.fog,
       {
         uTime: { value: 0 },
+        uFar: { value: 320 },
         uDay: { value: 1 },
         uSky: { value: new THREE.Color('#bfe3ff') },
         uDeep: { value: new THREE.Color('#1f7fb8') },
@@ -144,6 +145,7 @@ function sea(): THREE.ShaderMaterial {
       uniform vec3 fogColor;
       uniform float fogNear;
       uniform float fogFar;
+      uniform float uFar;
       varying float vShore;
       varying vec3 vWorld;
       ${SWELL}
@@ -173,6 +175,8 @@ function sea(): THREE.ShaderMaterial {
         float d = length(cameraPosition - vWorld);
         float fog = max(smoothstep(fogNear, fogFar, d), smoothstep(135.0, 300.0, d));
         fog *= mix(1.0, 0.82, smoothstep(120.0, 240.0, fogFar));
+        // All the way into the haze before the camera's far plane, so the sea never ends in an edge.
+        fog = max(fog, smoothstep(uFar * 0.6, uFar * 0.95, d));
         gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, fog);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -226,8 +230,9 @@ export function buildIsland(night: NightParts): THREE.Group {
   const water = new THREE.Mesh(seaGeo, sea());
   water.frustumCulled = false;
   const dark = () => Math.min(1, (night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
-  water.onBeforeRender = (_r, scene) => {
+  water.onBeforeRender = (_r, scene, camera) => {
     const u = (water.material as THREE.ShaderMaterial).uniforms;
+    u.uFar.value = (camera as THREE.PerspectiveCamera).far;
     // Everyone's waves are in step: the office's clock, not the page's.
     u.uTime.value = (Date.now() / 1000) % 3600;
     u.uDay.value = 1 - dark();

@@ -1,5 +1,5 @@
 import { SPECS, DRIVE_STEP, seatOffset, carFits, carPoint, drive, impact, onPavement, overlaps, type Box, type CarPose, type CarSeat, type Pedals } from '../shared/garage';
-import { shoreRespawn, surfaceAt } from '../shared/city';
+import { citySolids, shoreRespawns, surfaceAt } from '../shared/city';
 import type { PlayerController } from './player';
 import type { Fleet } from './world/cars';
 
@@ -166,7 +166,7 @@ export class Driver {
     }
     if (this.driving) {
       const was = this.fleet.cars[car].pose;
-      const pose = { ...was, ...(under ? shoreRespawn(was.x, was.z) : {}), speed: 0, slip: 0, yaw: 0 };
+      const pose = { ...was, ...(under ? this.ashore(car, was) : {}), speed: 0, slip: 0, yaw: 0 };
       this.fleet.place(car, pose);
       this.hooks.moved(car, pose);
     }
@@ -226,7 +226,7 @@ export class Driver {
 
   /**
    * Going under: the car slows, noses down and sinks, the screen goes dark, and it's back on the
-   * nearest road facing inland (shared/city.ts shoreRespawn), which the office hears as a jump.
+   * nearest road facing inland with room for it (see ashore), which the office hears as a jump.
    */
   private sink(car: number, dt: number) {
     const was = this.sinking!;
@@ -246,7 +246,7 @@ export class Driver {
       return;
     }
     if (was < SINK.back) {
-      const at = shoreRespawn(v.pose.x, v.pose.z);
+      const at = this.ashore(car, v.pose);
       const pose: CarPose = { x: at.x, z: at.z, rotY: at.rotY, speed: 0, steer: 0, slip: 0, yaw: 0 };
       v.root.rotation.x = 0;
       this.depth = 0;
@@ -260,6 +260,18 @@ export class Driver {
       this.sinking = null;
       this.hooks.fade?.(false);
     }
+  }
+
+  /**
+   * Where car `car`, gone into the sea at `from`, comes back: the first of the spots by the nearest
+   * road (shared/city.ts shoreRespawns) with room for it, clear of what's built there, the other cars
+   * and the street's traffic. If every one is taken, the first anyway (you can drive out of that).
+   */
+  private ashore(car: number, from: { x: number; z: number }): { x: number; z: number; rotY: number } {
+    const kind = this.fleet.cars[car].def.kind;
+    const spots = shoreRespawns(from.x, from.z);
+    const cars = this.fleet.solids(car);
+    return spots.find((at) => carFits(at, [...cars, ...citySolids(at.x, at.z, 8), ...(this.hooks.traffic?.(at.x, at.z, 12) ?? [])], kind)) ?? spots[0];
   }
 
   /**

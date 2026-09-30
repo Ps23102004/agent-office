@@ -104,19 +104,22 @@ test("a car's turned footprint only overlaps what it really touches", () => {
 });
 
 test('the garage: one driver and one passenger a car, and only the driver moves it', () => {
-  const g = new Garage();
+  let now = 1_000_000;
+  const g = new Garage(() => (now += 1000));
   assert.deepEqual(g.state(), parked(), 'everything in its spot to start with');
   assert.ok(g.enter('ann', 1, 'driver'));
   assert.ok(!g.enter('bob', 1, 'driver'), "Ann's driving");
   assert.ok(g.enter('bob', 1, 'passenger'));
   assert.ok(!g.enter('cat', 1, 'passenger'), 'full');
   assert.deepEqual(g.seatOf('bob'), { car: 1, seat: 'passenger' });
-  const pose = { x: 0, z: 18, rotY: 1, speed: 12, steer: 0.1 };
+  const pose = { x: 0, z: 17, rotY: 1, speed: 12, steer: 0.1 };
   assert.ok(!g.drive('bob', 1, pose), "the passenger doesn't steer");
   assert.deepEqual(g.drive('ann', 1, pose), { ...pose, slip: 0 });
   assert.deepEqual({ ...g.state()[1], driver: undefined, passenger: undefined }, { ...pose, slip: 0, driver: undefined, passenger: undefined });
-  assert.ok(g.drive('ann', 1, { ...pose, x: -60 }), 'off onto the grass is fine');
+  assert.ok(g.drive('ann', 1, { ...pose, x: -22 }) && g.drive('ann', 1, { ...pose, x: -40, z: 18 }), 'off onto the grass is fine');
   assert.ok(!g.drive('ann', 1, { ...pose, x: 0, z: -600 }), 'but not out in the sea');
+  assert.ok(!g.drive('ann', 1, { ...pose, x: 150, z: 27 }), 'nor a jump across town');
+  g.drive('ann', 1, { ...pose, x: -22 });
   g.drive('ann', 1, pose);
   assert.ok(!g.drive('ann', 1, { ...pose, speed: Number.NaN }), 'nor any nonsense');
   assert.equal(g.drive('ann', 1, { ...pose, speed: 999 })?.speed, DRIVE.top, 'no faster than a car goes');
@@ -127,7 +130,7 @@ test('the garage: one driver and one passenger a car, and only the driver moves 
   const left = g.state()[1];
   assert.equal(left.driver, undefined);
   assert.equal(left.passenger, 'bob');
-  assert.deepEqual([left.x, left.z, left.speed, left.steer], [0, 18, 0, 0]);
+  assert.deepEqual([left.x, left.z, left.speed, left.steer], [0, 17, 0, 0]);
   // Bob slides over behind the wheel (out of the passenger seat into it), then leaves for good.
   assert.ok(g.enter('bob', 1, 'driver'));
   assert.equal(g.state()[1].passenger, undefined);

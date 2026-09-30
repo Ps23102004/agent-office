@@ -216,7 +216,8 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
   } else toward(0, kind === 'bicycle' ? 0.65 : kind === 'motorbike' ? 2 : DRIVE.coast);
   // Off the road: the ground drags at the wheels, and bogs you down to what it lets you do.
   if (ground.drag) {
-    toward(0, ground.drag);
+    // Rolling resistance grows with speed from nothing at rest: even a bicycle creeps across the sand.
+    toward(0, ground.drag * Math.min(1, Math.abs(v) / 3));
     if (Math.abs(v) > top) toward(Math.sign(v) * top, 3 + ground.drag);
   }
 

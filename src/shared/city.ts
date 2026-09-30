@@ -580,6 +580,7 @@ export function coastAt(th: number): { land: number; shore: number } {
 }
 
 /** Everywhere inside this is land for sure (the coast is never nearer), so most asks skip the trigonometry. */
+/** Nearer the middle than this, it's land whichever way you look (the coast is never nearer): radial, as the coast is. */
 const SURELY_LAND = Math.min(GRID.maxX, -GRID.minX, GRID.maxZ, -GRID.minZ) + VERGE - 1;
 
 /**
@@ -612,16 +613,15 @@ export type Surface = 'road' | 'walk' | 'grass' | 'sand' | 'water';
  * step, for the grip under the tires. Buildings stand on grass here: citySolids has them.
  */
 export function surfaceAt(x: number, z: number): Surface {
-  if (Math.abs(x) > SURELY_LAND || Math.abs(z) > SURELY_LAND) {
+  // Inside the streets' square it's the city's; past it, the verge, the beach or the sea (or the pier).
+  if (x < GRID.minX || x > GRID.maxX || z < GRID.minZ || z > GRID.maxZ) {
     if (x >= PIER.x - PIER.width / 2 && x <= PIER.x + PIER.width / 2 && z <= PIER.from && z >= PIER.to) return 'walk';
     const r = Math.hypot(x, z);
-    if (r > SURELY_LAND) {
-      const th = Math.atan2(z, x);
-      const land = landAt(x / r, z / r, th);
-      if (r > land) return r > land + beachAt(th) ? 'water' : 'sand';
-    }
+    if (r <= SURELY_LAND) return 'grass';
+    const th = Math.atan2(z, x);
+    const land = landAt(x / r, z / r, th);
+    return r <= land ? 'grass' : r > land + beachAt(th) ? 'water' : 'sand';
   }
-  if (x < GRID.minX || x > GRID.maxX || z < GRID.minZ || z > GRID.maxZ) return 'grass';
   const ax = across(x, STREET_X);
   const az = across(z, STREET_Z);
   if (ax <= ROAD_W / 2 || az <= ROAD_W / 2) return 'road';
@@ -648,17 +648,54 @@ export function shoreRespawn(x: number, z: number, onFoot = false): { x: number;
     // rotY 0 faces +z: facing the middle.
     return { x: Math.cos(th) * r, z: Math.sin(th) * r, rotY: Math.atan2(-Math.cos(th), -Math.sin(th)) };
   }
+  return shoreRespawns(x, z)[0];
+}
+
+/**
+ * Every spot a car out of the sea at (x, z) can come back to, best first: in the right-hand lane of
+ * the cross street nearest it, just in from the ring road on the side it went in off, facing inland;
+ * then further in along that street; then the streets either side. The driver's page takes the first
+ * one with room (a parked car or traffic may be on it), and the office accepts only these.
+ */
+export function shoreRespawns(x: number, z: number): { x: number; z: number; rotY: number }[] {
   // Which side of the ring road it's off: the one it's furthest past (or nearest to, from inside).
   const past = [x - GX1, GX0 - x, z - GZ1, GZ0 - z];
   const side = past.indexOf(Math.max(...past));
-  const IN = 16;
   const LANE = ROAD_W / 4;
-  const nearest = (v: number, origin: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, origin + PERIOD * Math.round((v - origin) / PERIOD)));
+  const alongX = side < 2;
+  const [origin, lo, hi, v] = alongX ? [STREET_Z, GZ0, GZ1, z] : [STREET_X, GX0, GX1, x];
+  const k = Math.min((hi - origin) / PERIOD, Math.max((lo - origin) / PERIOD, Math.round((v - origin) / PERIOD)));
+  const lines = [k, k + 1, k - 1]
+    .map((n) => origin + PERIOD * n)
+    .filter((l) => l >= lo && l <= hi)
+    .sort((a, b) => Math.abs(a - v) - Math.abs(b - v));
+  const out: { x: number; z: number; rotY: number }[] = [];
   // Right-hand traffic: heading +x you keep to +z, -x to -z; heading +z to -x, -z to +x.
-  if (side === 0) return { x: GX1 - IN, z: nearest(z, STREET_Z, GZ0, GZ1) - LANE, rotY: -Math.PI / 2 };
-  if (side === 1) return { x: GX0 + IN, z: nearest(z, STREET_Z, GZ0, GZ1) + LANE, rotY: Math.PI / 2 };
-  if (side === 2) return { x: nearest(x, STREET_X, GX0, GX1) + LANE, z: GZ1 - IN, rotY: Math.PI };
-  return { x: nearest(x, STREET_X, GX0, GX1) - LANE, z: GZ0 + IN, rotY: 0 };
+  for (const line of lines) {
+    for (const IN of [16, 26, 36, 46]) {
+      if (side === 0) out.push({ x: GX1 - IN, z: line - LANE, rotY: -Math.PI / 2 });
+      else if (side === 1) out.push({ x: GX0 + IN, z: line + LANE, rotY: Math.PI / 2 });
+      else if (side === 2) out.push({ x: line + LANE, z: GZ1 - IN, rotY: Math.PI });
+      else out.push({ x: line - LANE, z: GZ0 + IN, rotY: 0 });
+    }
+  }
+  return out;
+}
+
+/**
+ * Where a car last seen on land at (x, z) can have come back to out of the sea: every spot of
+ * shoreRespawns for the water near it (it went in within a few metres, and drifted a little).
+ */
+export function seaRespawnsFrom(x: number, z: number): { x: number; z: number; rotY: number }[] {
+  const out: { x: number; z: number; rotY: number }[] = [];
+  for (const r of [0, 4, 8, 14, 22, 32]) {
+    for (let a = 0; a < (r ? 16 : 1); a++) {
+      const qx = x + Math.cos((a / 16) * Math.PI * 2) * r;
+      const qz = z + Math.sin((a / 16) * Math.PI * 2) * r;
+      if (surfaceAt(qx, qz) === 'water') out.push(...shoreRespawns(qx, qz));
+    }
+  }
+  return out;
 }
 
 /** How wide the gaps in a park's hedge are, where its two paths come out on each side: room for a car. */
