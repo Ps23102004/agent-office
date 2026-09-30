@@ -51,3 +51,8 @@ test('service discovery is every 4 s while a worker works, and every 15 s otherw
   assert.equal(scanDue(4000, 0, false), false);
   assert.equal(scanDue(15_000, 0, false), true);
 });
+
+test('a level redraws shadows for movement no faster than its own minimum', () => {
+  assert.ok(QUALITY.battery.shadowMoveEvery >= 100 && QUALITY.battery.shadowMoveEvery < QUALITY.battery.shadowEvery);
+  assert.ok(QUALITY.balanced.shadowMoveEvery >= 50 && QUALITY.balanced.shadowMoveEvery < QUALITY.balanced.shadowEvery);
+});

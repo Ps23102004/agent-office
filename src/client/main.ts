@@ -4562,7 +4562,9 @@ function backgroundTick() {
   speakWork();
   for (const p of store.peers.values()) {
     if (p.id === store.you || !store.onMyFloor(p)) continue;
-    const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z);
+    // Where they are for the eyes too: in their seat or their car.
+    const at = whereIs(p);
+    const d = Math.hypot(at.x - player.pos.x, at.z - player.pos.z);
     voice.setVolume(p.id, d < 4 ? 1 : Math.max(0.2, 1 - (d - 4) / 16));
   }
 }
@@ -4842,7 +4844,11 @@ function frame(ts?: number) {
  */
 function refreshShadows(now: number) {
   shadowNow.copy(sun.position).sub(sun.target.position).normalize();
-  if (shadowNow.dot(shadowSun) > 0.9999 && player.pos.distanceToSquared(shadowMe) < 0.25 && now - shadowsAt < quality.shadowEvery && !castersMoved(false)) return;
+  const sunMoved = shadowNow.dot(shadowSun) <= 0.9999;
+  const due = now - shadowsAt >= quality.shadowEvery;
+  // Someone moving redraws them, but not faster than the level allows: a car at speed is always on the move.
+  const somethingMoved = now - shadowsAt >= quality.shadowMoveEvery && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
+  if (!sunMoved && !due && !somethingMoved) return;
   shadowSun.copy(shadowNow);
   shadowMe.copy(player.pos);
   castersMoved(true);
@@ -4853,32 +4859,38 @@ function refreshShadows(now: number) {
 /** Where (x, y, z each) the things that walk, drive or ride about were when the shadows were last drawn. */
 const casterSeen: number[] = [];
 const casterAt = new THREE.Vector3();
+// The scan in progress (see castersMoved), kept out here so it makes nothing to throw away each frame.
+let scanAt = 0;
+let scanRecord = false;
+let scanMoved = false;
+function visitCaster(o: THREE.Object3D) {
+  if (!o.visible) return;
+  o.getWorldPosition(casterAt);
+  const i = scanAt;
+  scanAt += 3;
+  if (scanRecord) {
+    casterSeen[i] = casterAt.x;
+    casterSeen[i + 1] = casterAt.y;
+    casterSeen[i + 2] = casterAt.z;
+  } else if (Math.abs(casterAt.x - casterSeen[i]) + Math.abs(casterAt.y - casterSeen[i + 1]) + Math.abs(casterAt.z - casterSeen[i + 2]) > 0.15 || Number.isNaN(casterSeen[i])) scanMoved = true;
+}
 /**
  * Whether anything that moves about and casts a shadow (the people, the workers, the dog, the cars, the
  * elevator) has moved a little since the shadows were last drawn; with `record`, remembers where they are now.
  */
 function castersMoved(record: boolean): boolean {
-  let i = 0;
-  let moved = !office.elevator.settled;
-  const visit = (o: THREE.Object3D) => {
-    if (!o.visible) return;
-    o.getWorldPosition(casterAt);
-    if (record) {
-      casterSeen[i] = casterAt.x;
-      casterSeen[i + 1] = casterAt.y;
-      casterSeen[i + 2] = casterAt.z;
-    } else if (Math.abs(casterAt.x - casterSeen[i]) + Math.abs(casterAt.y - casterSeen[i + 1]) + Math.abs(casterAt.z - casterSeen[i + 2]) > 0.15 || Number.isNaN(casterSeen[i])) moved = true;
-    i += 3;
-  };
-  for (const r of remotes.values()) visit(r.person.root);
-  for (const v of workerViews.values()) visit(v.model.root);
-  for (const a of idleAgents) visit(a.model.root);
-  for (const c of office.cars.cars) visit(c.root);
-  visit(dog.root);
+  scanAt = 0;
+  scanRecord = record;
+  scanMoved = !office.elevator.settled;
+  for (const r of remotes.values()) visitCaster(r.person.root);
+  for (const v of workerViews.values()) visitCaster(v.model.root);
+  for (const a of idleAgents) visitCaster(a.model.root);
+  for (const c of office.cars.cars) visitCaster(c.root);
+  visitCaster(dog.root);
   // Someone came or went: what's there to compare with is different.
-  if (record) casterSeen.length = i;
-  else if (i !== casterSeen.length) moved = true;
-  return moved;
+  if (record) casterSeen.length = scanAt;
+  else if (scanAt !== casterSeen.length) scanMoved = true;
+  return scanMoved;
 }
 
 // ---- Boot ------------------------------------------------------------------------------------------

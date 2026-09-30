@@ -12,6 +12,8 @@ export interface Quality {
   shadowSize: number;
   /** Shadows are only redrawn when the sun or someone near you moved, and at least this often (ms); 0 redraws them every frame. */
   shadowEvery: number;
+  /** Something moving redraws them no more often than this (ms), so a car at speed doesn't mean every frame. */
+  shadowMoveEvery: number;
   /** The dog, the holiday's bats and lights and the city's cars update this many times a second; 0 is every frame. */
   decorHz: number;
   /** How much of the rain and snow is drawn. */
@@ -21,9 +23,9 @@ export interface Quality {
 }
 
 export const QUALITY: Record<Graphics, Quality> = {
-  battery: { fps: 30, pixelRatio: 1.25, shadowSize: 1024, shadowEvery: 500, decorHz: 15, weather: 0.5, laptopMs: [500, 500, 3000] },
-  balanced: { fps: 60, pixelRatio: 1.5, shadowSize: 2048, shadowEvery: 250, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000] },
-  full: { fps: Infinity, pixelRatio: 2, shadowSize: 2048, shadowEvery: 0, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000] },
+  battery: { fps: 30, pixelRatio: 1.25, shadowSize: 1024, shadowEvery: 500, shadowMoveEvery: 100, decorHz: 15, weather: 0.5, laptopMs: [500, 500, 3000] },
+  balanced: { fps: 60, pixelRatio: 1.5, shadowSize: 2048, shadowEvery: 250, shadowMoveEvery: 50, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000] },
+  full: { fps: Infinity, pixelRatio: 2, shadowSize: 2048, shadowEvery: 0, shadowMoveEvery: 0, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000] },
 };
 
 /** The level in force. One object that's changed in place, so what reads it always sees the current one. */
