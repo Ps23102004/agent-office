@@ -1,4 +1,4 @@
-import { CARS, SPECS, DRIVE, parked, paved, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
+import { CARS, SPECS, DRIVE, parked, paved, type CarDef, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
 
 /** How often one person can honk, at most (ms). */
 const HONK_EVERY = 250;
@@ -9,10 +9,17 @@ const HONK_EVERY = 250;
  * restarts, every car is back in its spot.
  */
 export class Garage {
-  private cars = parked();
+  private cars: CarState[];
   private honked = new Map<string, number>();
 
-  constructor(private now = () => Date.now()) {}
+  /** A floor's garage; or the race circuit's cars (`defs`), which go anywhere `where` says (see shared/circuit.ts). */
+  constructor(
+    private now = () => Date.now(),
+    private defs: readonly CarDef[] = CARS,
+    private where: (x: number, z: number) => boolean = paved,
+  ) {
+    this.cars = parked(defs);
+  }
 
   /** Every car as it is now, for the floor's pages. */
   state(): CarState[] {
@@ -31,7 +38,7 @@ export class Garage {
   /** `id` gets into `seat` of car `car`, out of wherever they were: only if it's free. Says whether anything changed. */
   enter(id: string, car: number, seat: CarSeat): boolean {
     const c = this.cars[car];
-    if (!c || (seat !== 'driver' && seat !== 'passenger') || c[seat] || (seat === 'passenger' && SPECS[CARS[car].kind].seats < 2)) return false;
+    if (!c || (seat !== 'driver' && seat !== 'passenger') || c[seat] || (seat === 'passenger' && SPECS[this.defs[car].kind].seats < 2)) return false;
     this.leave(id);
     c[seat] = id;
     return true;
@@ -57,8 +64,8 @@ export class Garage {
     if (!c || c.driver !== id) return undefined;
     const { x, z, rotY, speed, steer } = pose;
     const slip = pose.slip ?? 0;
-    const spec = SPECS[CARS[car].kind];
-    if (![x, z, rotY, speed, steer, slip].every(Number.isFinite) || !paved(x, z)) return undefined;
+    const spec = SPECS[this.defs[car].kind];
+    if (![x, z, rotY, speed, steer, slip].every(Number.isFinite) || !this.where(x, z)) return undefined;
     Object.assign(c, {
       x,
       z,

@@ -33,7 +33,11 @@ import { ROUND, score, targetFrame, type BarGame, type Score, type Toss } from '
 import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
-import { CARS, SPECS, carPoint, seatHips, type CarSeat } from '../shared/garage';
+import { CARS, SPECS, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
+import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, surfaceAt, type Gate } from '../shared/circuit';
+import { buildCircuit, type Circuit } from './world/circuit';
+import { joinGrid, myRacer, startRace, wireRace } from './race';
+import { RACE } from '../shared/race';
 import { Smoke } from './world/smoke';
 import { HAZE_MAX, Sky, describeSky } from './world/sky';
 import { Laptop } from './world/laptop';
@@ -356,6 +360,39 @@ function syncRoof() {
 store.on('floors', syncRoof);
 /** Where you are now: up on the roof (true), or on a floor of the office. */
 let upTop = false;
+
+// ---- W2: the race circuit ----------------------------------------------------------------------------
+/** At the race circuit (shared/circuit.ts): a place of its own, like the roof, through a gate in the city. */
+let atCircuit = false;
+let circuit: Circuit | null = null;
+/** The circuit: built the first time anyone goes there. */
+function theCircuit(): Circuit {
+  if (!circuit) {
+    circuit = buildCircuit();
+    circuit.group.visible = false;
+    scene.add(circuit.group);
+    noOutline(circuit.group);
+  }
+  return circuit;
+}
+/** The cars where the office has you: the garage's under your floor, or the circuit's (they match store.cars). */
+const fleet = () => (store.floor === CIRCUIT ? theCircuit().fleet : office.cars);
+const carDefs = (): readonly CarDef[] => (store.floor === CIRCUIT ? CIRCUIT_CARS : CARS);
+/** How high the ground the cars are on is: the street under your floor, or the circuit's. */
+const streetY = () => (atCircuit ? 0 : player.street);
+/** Off the track, the grass slows a car right down. */
+function onGrass(p: CarPose, dt: number): CarPose {
+  if (surfaceAt(p.x, p.z) !== 'grass') return p;
+  const drag = Math.exp(-dt * 0.8);
+  const speed = Math.abs(p.speed) > 11 ? p.speed - Math.sign(p.speed) * 9 * dt : p.speed * drag;
+  return { ...p, speed, slip: (p.slip ?? 0) * drag };
+}
+/** Where you came to the circuit from (a floor, and the garage's car you drove through the gate in), to go back to. */
+let raceFrom: { floor: string; car: number | null } | null = null;
+/** Through a gate: to the circuit or back to the city, until you're there. */
+let gateTrip: { to: 'circuit' | 'city'; kind: CarDef['kind'] | null } | null = null;
+/** Out of the gate's opening since you last came through one: going through again takes stepping out first. */
+let gateArmed = false;
 /** How far into the DJ's set it is, on the office's clock, so everyone up there hears the same bar. */
 const djAt = () => djTime(store.officeNow());
 /** Drinks from the bar, and how they make the world look (see booze.ts, world/drunk.ts). */
@@ -379,7 +416,11 @@ const driver = new Driver(player, office.cars, {
     sound.crash({ x: at.x, y: player.street + 0.5, z: at.z }, speed);
     if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 15));
   },
-  traffic: (x, z, reach) => (upTop ? [] : office.life.obstacles(x, z, reach).map((o) => ({ ...o.box, vx: o.vx, vz: o.vz, mass: 1600 }))),
+  traffic: (x, z, reach) => (upTop || atCircuit ? [] : office.life.obstacles(x, z, reach).map((o) => ({ ...o.box, vx: o.vx, vz: o.vz, mass: 1600 }))),
+  // W2: at the circuit a car goes on its track, grass and paddock; the grass slows it; on the grid the brakes are on till the lights go out.
+  ground: () => (atCircuit ? circuitGround : undefined),
+  surface: (p, dt) => (atCircuit ? onGrass(p, dt) : p),
+  hold: () => atCircuit && store.race.phase === 'countdown' && !!myRacer(),
 });
 const telescope = new TelescopeView(
   camera,
@@ -538,7 +579,7 @@ function teeOff() {
 /** Someone else on the floor hit one: their swing, then their ball, off the same tee. */
 function theirShot(id: string, shot: Shot) {
   const p = store.peers.get(id);
-  if (!p || !store.onMyFloor(p) || upTop) return;
+  if (!p || !store.onMyFloor(p) || upTop || atCircuit) return;
   remotes.get(id)?.person.golfSwing(shot.power);
   const floor = store.floor;
   setTimeout(() => {
@@ -769,14 +810,14 @@ let carPending = 0;
 
 /** Where car `i` is, at about the height of its horn. */
 function carAt(i: number): { x: number; y: number; z: number } {
-  const p = office.cars.cars[i]?.pose ?? CARS[i];
-  return { x: p.x, y: player.street + 0.6, z: p.z };
+  const p = fleet().cars[i]?.pose ?? carDefs()[i];
+  return { x: p.x, y: streetY() + 0.6, z: p.z };
 }
 
 /** E at a car: behind the wheel if nobody's driving it, else beside whoever is. */
 function getIn(i: number) {
   const c = store.cars[i];
-  const def = CARS[i];
+  const def = carDefs()[i];
   if (trip || climber.active || driver.active || !c || !def) return;
   if (carrying) return toast('🗂️ Your hands are full: put the card back first (Q)', 'warn');
   if (holdingBall()) return toast('🏀 Put the ball down first (Q)', 'warn');
@@ -828,7 +869,7 @@ function honk() {
   const now = performance.now();
   if (i === null || now - honkedAt < 300) return;
   honkedAt = now;
-  sound.honk(carAt(i), CARS[i].kind === 'lambo');
+  sound.honk(carAt(i), carDefs()[i].kind === 'lambo');
   net.send({ t: 'car.honk' });
 }
 
@@ -872,8 +913,145 @@ function carAgain() {
 /** Where someone on your floor is sitting in a car, if they're in one. */
 function rideOf(id: string): { x: number; y: number; z: number; rotY: number } | undefined {
   const at = store.carOf(id);
-  return at && office.cars.seatAt(at.car, at.seat);
+  return at && fleet().seatAt(at.car, at.seat);
 }
+
+
+// ---- W2: through the gates, to the race circuit and back ------------------------------------------
+/** Whether you (or the car you're in) are in a gate's opening, down on its ground. */
+function inGateNow(g: Gate): boolean {
+  const at = driver.pose ?? player.pos;
+  return Math.abs(player.pos.y - streetY()) < 1.2 && inGate(g, at.x, at.z);
+}
+
+/** Each frame: walked or driven into a gate, you go through it (the city's to the circuit, the circuit's back). */
+function gates() {
+  if (trip || !store.floor || upTop || !player.enabled || (!atCircuit && !inOffice())) return;
+  const inside = inGateNow(atCircuit ? CIRCUIT_GATE : CITY_GATE);
+  if (!inside) gateArmed = true;
+  else if (gateArmed) {
+    gateArmed = false;
+    if (atCircuit) leaveCircuit();
+    else toCircuit();
+  }
+}
+
+/** Through the city's gate: to the circuit, in one of its cars like the one you're driving (if there's one free). */
+function toCircuit() {
+  const i = driver.driving ? driver.car : null;
+  raceFrom = { floor: store.floor!, car: i };
+  gateTrip = { to: 'circuit', kind: i === null ? null : CARS[i].kind };
+  goThrough(CIRCUIT);
+}
+
+/** Off the circuit: through its gate, back to the one in the city (on the floor you came from); or, `to` a floor, by the elevator. */
+function leaveCircuit(to?: string) {
+  const floors = builtFloors();
+  const floor = to ?? (floors.some((f) => f.id === raceFrom?.floor) ? raceFrom!.floor : floors[0]?.id);
+  if (!floor || trip) return;
+  if (to) {
+    // Arriving by elevator, in its car.
+    placeOnArrival = true;
+    return goThrough(floor);
+  }
+  gateTrip = { to: 'city', kind: null };
+  const index = Math.max(0, floors.findIndex((f) => f.id === floor));
+  goThrough(floor, { ...CITY_GATE.out, y: streetBelow(index) });
+}
+
+/** A blink, and you're there: whatever you were doing stops, and a car you were in stays behind. */
+function goThrough(floor: string, at?: { x: number; y: number; z: number; rotY: number }) {
+  closeAllModals();
+  if (hanger.active) hanger.cancel();
+  if (walkingTo) stopWalking();
+  if (golf.active) golf.stop();
+  if (thrower.active) thrower.stop();
+  if (player.seat) standUp();
+  trip = { floor, how: 'switch', timer: window.setTimeout(tripFailed, 10_000) };
+  player.enabled = false;
+  player.clearKeys();
+  fade(true, true);
+  setTimeout(() => {
+    dropCar();
+    net.send({ t: 'floor.go', floor, ...(at ? { at } : {}) });
+  }, 170);
+}
+
+/** Arrived through a gate: out of the one at the other end, on foot or in a car (a circuit car of the kind you came in, or your own back in the city). */
+function throughGate() {
+  const g = gateTrip!;
+  gateTrip = null;
+  gateArmed = false;
+  const out = (atCircuit ? CIRCUIT_GATE : CITY_GATE).out;
+  placeAt({ ...out, y: streetY() });
+  let car = -1;
+  if (g.to === 'circuit' && atCircuit && g.kind) car = CIRCUIT_CARS.findIndex((d, k) => d.kind === g.kind && !store.cars[k]?.driver && !store.cars[k]?.passenger);
+  const mine = raceFrom?.car ?? null;
+  if (g.to === 'city' && !atCircuit && mine !== null && store.cars[mine] && !store.cars[mine].driver) car = mine;
+  if (car < 0) return;
+  const pose = { x: out.x, z: out.z, rotY: out.rotY, speed: 0, steer: 0, slip: 0 };
+  fleet().place(car, pose);
+  getIn(car);
+  if (driver.driving) net.send({ t: 'car.drive', car, ...pose });
+}
+
+/** At the circuit the sun's shadows are drawn round you, wherever you are on it; elsewhere, round the office. */
+function followSun() {
+  const x = atCircuit ? Math.round(player.pos.x / 8) * 8 : 0;
+  const z = atCircuit ? Math.round(player.pos.z / 8) * 8 : 0;
+  if (sun.target.position.x === x && sun.target.position.z === z) return;
+  sun.target.position.set(x, 0, z);
+  sun.target.updateMatrixWorld();
+}
+
+// The race (shared/race.ts). Its panel and HUD are ui/race.ts's; until then, R in a car and a toast or two.
+wireRace({
+  send: (msg) => net.send(msg),
+  intoCar: () => {
+    if (!atCircuit || trip) return false;
+    if (driver.driving) return true;
+    if (driver.active) getOut(true);
+    const i = CIRCUIT_CARS.findIndex((_, k) => !store.cars[k]?.driver && !store.cars[k]?.passenger);
+    if (i >= 0) getIn(i);
+    return driver.driving;
+  },
+});
+/** What R does in a car at the circuit, if anything: line up, or (lined up) start it. */
+function raceKey(): string | null {
+  if (!atCircuit || !driver.driving) return null;
+  const r = store.race;
+  if (!myRacer()) return r.phase === 'idle' || r.phase === 'lobby' || r.phase === 'finished' ? 'Line up on the grid' : null;
+  return r.phase === 'lobby' ? 'Start the race' : null;
+}
+function raceAction() {
+  if (myRacer()) startRace();
+  else joinGrid();
+}
+/** The slot you've been put in on the grid, once your car's there (see the race topic). */
+let gridded = '';
+let racePhase = store.race.phase;
+store.on('race', () => {
+  const r = store.race;
+  const mine = myRacer();
+  // Lined up (and again as it counts down): your car onto your slot on the grid, facing the lights.
+  if (atCircuit && mine && driver.driving && (r.phase === 'lobby' || r.phase === 'countdown') && gridded !== `${mine.slot}|${r.phase}`) {
+    gridded = `${mine.slot}|${r.phase}`;
+    const pose = { ...gridPose(mine.slot), speed: 0, steer: 0, slip: 0 };
+    fleet().place(driver.car!, pose);
+    net.send({ t: 'car.drive', car: driver.car!, ...pose });
+  }
+  if (!mine) gridded = '';
+  if (r.phase === racePhase) return;
+  racePhase = r.phase;
+  hintKey = 'stale';
+  if (!atCircuit) return;
+  if (r.phase === 'countdown') toast(`🚦 ${mine ? 'Lights out in' : 'The race starts in'} ${RACE.countdown}…`);
+  else if (r.phase === 'racing') toast(`🏁 Go! ${r.laps} laps`);
+  else if (r.phase === 'finished') {
+    const winner = r.racers.find((x) => x.position === 1);
+    toast(`🏆 ${winner?.name ?? 'Someone'} wins${r.record ? ` · lap record ${(r.record.ms / 1000).toFixed(2)}s (${r.record.name})` : ''}`);
+  }
+});
 
 /** In a car: how fast, who with, and the keys. */
 function renderDriveHint(el: HTMLElement) {
@@ -886,11 +1064,12 @@ function renderDriveHint(el: HTMLElement) {
     const other = name(c?.passenger);
     hint = {
       k: `drive|${kmh}|${other}`,
-      parts: [h('span.title', {}, `🏎️ ${CARS[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[CARS[i].kind].width < 1 ? 'Brake' : 'Handbrake'), key('H', 'Honk'), key('E', 'Get out')],
+      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), key('E', 'Get out')],
     };
+    hint.k += `|${raceKey() ?? ''}`;
   } else {
     const at = name(c?.driver);
-    hint = { k: `ride|${at}`, parts: [h('span.title', {}, `🏎️ ${CARS[i].name}`), aside(at ? `${clip(at, 24)} is driving` : 'nobody at the wheel'), key('H', 'Honk'), key('E', 'Get out')] };
+    hint = { k: `ride|${at}`, parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(at ? `${clip(at, 24)} is driving` : 'nobody at the wheel'), key('H', 'Honk'), key('E', 'Get out')] };
   }
   const k = `car|${hint.k}`;
   if (k === hintKey) return;
@@ -998,7 +1177,7 @@ net.onMessage((msg) => {
   if (msg.t === 'worker.remove') sentHome.add(msg.workerId);
   store.apply(msg);
   // A floor's cars where they are before anything asks if there's room to stand beside one (see welcome).
-  if (msg.t === 'welcome' || msg.t === 'floor.enter') office.cars.snap(store.cars);
+  if (msg.t === 'welcome' || msg.t === 'floor.enter') fleet().snap(store.cars);
   seatedAlready = false;
   sentHome.clear();
   routeTerminalMessage(msg);
@@ -1103,7 +1282,7 @@ net.onMessage((msg) => {
       carNews(!!msg.answer);
       break;
     case 'car.honk':
-      if (msg.car >= 0 && msg.car < CARS.length) sound.honk(carAt(msg.car), CARS[msg.car].kind === 'lambo');
+      if (msg.car >= 0 && msg.car < carDefs().length) sound.honk(carAt(msg.car), carDefs()[msg.car].kind === 'lambo');
       break;
     case 'floors':
       noticeWaiting();
@@ -1211,6 +1390,12 @@ store.on('upgrade', renderUpgrade);
 function renderProject() {
   const p = store.project;
   renderTitle();
+  if (store.floor === CIRCUIT) {
+    $('project-meta').classList.remove('lobby');
+    $('project-name').textContent = `🏁 ${CIRCUIT_NAME}`;
+    $('project-meta').textContent = '🏙️ through the gate in the city · the gate at the end of the paddock goes back';
+    return;
+  }
   if (store.floor === ROOF) {
     const n = builtFloors().length;
     $('project-meta').classList.remove('lobby');
@@ -1278,7 +1463,7 @@ function takenAway() {
 
 /** Where you're standing, to come back to (see lastSpot): nowhere while you're between floors, or climbing between them. */
 function spotHere(): Spot | null {
-  if (!store.floor || trip || climber.active) return null;
+  if (!store.floor || trip || climber.active || atCircuit) return null;
   // Sitting, it's where you'd get up to; in a car, where you'd get out.
   const at = (driver.active ? driver.wayOut() : player.standingSpot()) ?? player.pos;
   const name = store.floor === ROOF ? ROOF_NAME : (store.currentFloor()?.name ?? '');
@@ -1340,6 +1525,8 @@ function lift() {
  * bottom floor's.
  */
 function ride(to: string, keepWalking = false): void {
+  // W2: from the circuit, back to the city's gate (the garage), or straight to a floor or the roof.
+  if (atCircuit) return to === GARAGE ? leaveCircuit() : leaveCircuit(to);
   // A map of its own has no elevator: straight there, and no roof or garage to go to.
   if (!inOffice()) {
     if (to === ROOF || to === GARAGE) {
@@ -1419,6 +1606,7 @@ function standingAt(to: string): Arrival {
 let backToThrone = false;
 
 function switchFloor(floorId: string, keepWalking = false): void {
+  if (atCircuit) return leaveCircuit(floorId);
   // The roof isn't laid out like a floor: to and from it, it's the elevator (and on a map with no
   // roof, straight down off it).
   if (upTop && !inOffice()) return leaveRoofFor(floorId);
@@ -1454,6 +1642,7 @@ function tripFailed() {
   const t = trip;
   if (!t) return;
   trip = null;
+  gateTrip = null;
   fade(false);
   if (t.how === 'elevator') lift()?.setOpen(!!store.floor);
   if (t.how === 'ladder' || t.how === 'pole') climber.abort();
@@ -1502,19 +1691,25 @@ store.on('floors', paintFloor);
 function setPlace() {
   telescope.exit();
   const up = store.floor === ROOF;
-  if (up === upTop) return;
+  const racing = store.floor === CIRCUIT;
+  if (up === upTop && racing === atCircuit) return;
   upTop = up;
+  atCircuit = racing;
   const r = up ? theRoof() : roof;
-  world.group.visible = !up;
+  const c = racing ? theCircuit() : circuit;
+  world.group.visible = !up && !racing;
   // The holiday decorations are dressed round the office and the street below it, not up here.
-  holiday.group.visible = !up && inOffice();
+  holiday.group.visible = !up && !racing && inOffice();
   if (r) r.group.visible = up;
-  player.colliders = up ? r!.colliders : world.colliders;
+  if (c) c.group.visible = racing;
+  player.colliders = up ? r!.colliders : racing ? c!.colliders : world.colliders;
+  // The cars you can get into here (you're on your feet: a trip gets you out first).
+  driver.fleet = fleet();
   sky.setRoof(up, roofDrop(roofFloors()));
-  sound.setOutdoors(up);
+  sound.setOutdoors(up || racing);
   sound.setDj(up ? djAt : null);
   // You can see the whole city from up there (and its clouds); from the top floors, as far as the haze.
-  camera.far = up ? 700 : FAR;
+  camera.far = up || racing ? 700 : FAR;
   camera.updateProjectionMatrix();
   // Drinks stay at the bar (what you've had comes down with you).
   if (!up) booze.putDown();
@@ -1533,6 +1728,7 @@ function setPlace() {
 /** What you can use where you are, and what's in the way of looking at it. */
 function usable(): Interactable[][] {
   if (upTop && roof) return [roof.interactables];
+  if (atCircuit && circuit) return [circuit.interactables];
   return inOffice() ? [office.interactables, gallery.interactables, dog.interactables, ball.interactables] : [world.interactables, court?.interactables ?? []];
 }
 
@@ -1556,6 +1752,7 @@ function arrive(how: TripKind | 'back' = trip?.how ?? 'elevator') {
     clearTimeout(trip.timer);
     trip = null;
   }
+  if (gateTrip) throughGate();
   if (!store.floor) {
     // Nowhere to go yet: the doors stay shut until there's a floor, and the panel says how to add one.
     lift()?.setOpen(false);
@@ -1653,14 +1850,14 @@ function applyMap() {
   world = next.world;
   court = next.court;
   idleAgents = next.idle;
-  world.group.visible = !upTop;
-  if (!upTop) player.colliders = world.colliders;
+  world.group.visible = !upTop && !atCircuit;
+  if (!upTop && !atCircuit) player.colliders = world.colliders;
   player.room = { ...plan().bounds, ...world.room };
   sky.setIndoors(world.room.enclosed);
   // What you hear: the office's phones and fridge, or the hall's own windows and gong.
   sound.setHall(world.acoustics ? { bounds: plan().bounds, ...world.acoustics } : null);
   // The office's own: the holiday decorations round it and the street, the dog, the jukebox.
-  holiday.group.visible = inOffice() && !upTop;
+  holiday.group.visible = inOffice() && !upTop && !atCircuit;
   dog.root.visible = inOffice() && !!store.dog;
   playJukebox();
   dressBoards(world);
@@ -1678,7 +1875,7 @@ function applyMap() {
   renderPullsBoard();
   renderServicesBoard();
   renderQueueBoard();
-  if (store.floor && !upTop && !trip) {
+  if (store.floor && !upTop && !atCircuit && !trip) {
     placeInCar();
     // Back in the office, in its elevator: the doors open onto it.
     lift()?.setOpen(true);
@@ -1705,7 +1902,7 @@ function placeAtSpawn() {
 /** Up onto the map's throne, if it has one and nobody's on it. */
 function sitOnThrone() {
   const seat = plan().throne && freePlace(plan().throne!);
-  if (!seat || upTop) return;
+  if (!seat || upTop || atCircuit) return;
   if (player.seat) player.stand();
   player.sit(seat);
   me.sit(seat.hips);
@@ -1788,7 +1985,7 @@ function syncPeers() {
     r.person.holdDrink(peer.drink ? (DRINK_BY_ID.get(peer.drink) ?? null) : null);
     r.person.carry(peer.carrying);
     r.person.read(!!peer.reading);
-    r.person.sit(store.carOf(id) ? seatHips(CARS[store.carOf(id)!.car].kind) : peer.seat ? (seatOn(plan(), peer.seat)?.hips ?? null) : null);
+    r.person.sit(store.carOf(id) ? seatHips(carDefs()[store.carOf(id)!.car].kind) : peer.seat ? (seatOn(plan(), peer.seat)?.hips ?? null) : null);
     r.person.setDoing(whereabouts(peer, store.carOf(id), plan()));
   }
   for (const [id, r] of remotes) {
@@ -1906,7 +2103,7 @@ let errand: { at: { x: number; z: number }; what: string; face?: { x: number; z:
  * ladder, driving a car) it just does it. A key of yours takes over, and then it doesn't happen.
  */
 function walkThen(at: { x: number; y?: number; z: number }, what: string, then: () => void, face?: { x: number; z: number }) {
-  if (upTop || trip || climber.active || driver.active) return then();
+  if (upTop || atCircuit || trip || climber.active || driver.active) return then();
   closeAllModals();
   if (player.seat) standUp();
   if (hanger.active) hanger.cancel();
@@ -3670,7 +3867,7 @@ function hintFor(it: Interactable): Hint {
       return { k: '', parts: [title('🔭 Office telescope'), aside('overlooks the worker floor'), key('E', 'Look through')] };
     case 'car': {
       const c = store.cars[it.car ?? -1];
-      const def = CARS[it.car ?? -1];
+      const def = carDefs()[it.car ?? -1];
       if (!c || !def) return { k: '', parts: [] };
       const name = (id?: string) => (id ? clip(store.peers.get(id)?.name ?? 'Someone', 20) : '');
       const [at, beside] = [name(c.driver), name(c.passenger)];
@@ -3991,6 +4188,7 @@ window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
     if (e.code === 'KeyE') getOut();
     else if (e.code === 'KeyH') honk();
+    else if (e.code === 'KeyR' && raceKey()) raceAction();
     return;
   }
   // With the ball in your hands, E winds up a shot (let go to shoot) and Q drops it.
@@ -4185,7 +4383,7 @@ function aimedAt(ndc: THREE.Vector2, slack = 0): { it: Interactable; near: boole
   raycaster.setFromCamera(ndc, camera);
   eye.set(player.pos.x, player.pos.y + EYE_HEIGHT, player.pos.z);
   // (Workers standing in line in the castle carry their spot's interactable: see Court.)
-  for (const hit of raycaster.intersectObjects(upTop && roof ? roof.pickables : inOffice() ? [office.group, dog.root] : world.pickables, true)) {
+  for (const hit of raycaster.intersectObjects(upTop && roof ? roof.pickables : atCircuit && circuit ? circuit.pickables : inOffice() ? [office.group, dog.root] : world.pickables, true)) {
     let it: Interactable | undefined;
     let shown = true;
     for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
@@ -4438,7 +4636,7 @@ const hud = mountHud(
 );
 /** F: hang a picture on a wall of this floor. There are no walls for them up on the roof. */
 function startHanging() {
-  if (upTop) return toast('No walls to hang pictures on up here — take the elevator down to a floor', 'warn');
+  if (upTop || atCircuit) return toast('No walls to hang pictures on out here — take the elevator to a floor', 'warn');
   if (!inOffice()) return toast(`${plan().icon} ${plan().name}'s walls are hung already — pictures go up in the office`, 'warn');
   hanger.start();
 }
@@ -4611,19 +4809,19 @@ function frame(ts?: number) {
 
   walkTick(now);
   // The cars first, so whoever's riding in one sits in it where it's got to.
-  office.cars.update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
+  fleet().update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
   // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
-  if (inOffice() && !upTop) {
+  if (inOffice() && !upTop && !atCircuit) {
     const pose = driver.driving ? driver.pose : null;
     const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
     office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid);
-    if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[CARS[driver.car!].kind].length) / 2), Math.abs(pose.speed));
+    if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[carDefs()[driver.car!].kind].length) / 2), Math.abs(pose.speed));
   }
   player.update(dt);
   // A car coming at you where you stand: out of its way, with a thump if it was going.
-  if (inOffice() && !driver.active && !upTop && !trip) {
-    const hit = office.cars.shove(player.pos, null);
+  if ((inOffice() || atCircuit) && !driver.active && !upTop && !trip) {
+    const hit = fleet().shove(player.pos, null);
     if (hit > 1.5 && now - shovedAt > 600) {
       shovedAt = now;
       sound.crash({ x: player.pos.x, y: player.pos.y + 0.8, z: player.pos.z }, hit / 2);
@@ -4636,7 +4834,7 @@ function frame(ts?: number) {
   arcade.update(camera, dt);
   cabinet.update(camera, dt);
   // Pulled away from the tee (sat down, off up the ladder, into the elevator): the club goes back.
-  if (golf.active && (trip || hanger.active || climber.active || player.seat || upTop)) golf.stop();
+  if (golf.active && (trip || hanger.active || climber.active || player.seat || upTop || atCircuit)) golf.stop();
   golf.update(dt);
   // Pulled away from the line (sat down, into the elevator): the dart or axe goes back.
   if (thrower.active && (trip || hanger.active || climber.active || player.seat || !upTop)) thrower.stop();
@@ -4650,7 +4848,7 @@ function frame(ts?: number) {
   const grip = climber.grip;
   me.setGrip(grip);
   me.update(dt, t, (player.moving && player.grounded) || (grip === 'ladder' && player.moving), !player.grounded && !grip && !golf.active && !thrower.active && !driver.active, player.speedBoost);
-  if (driver.active) office.cars.poseRider(me, driver.car!, driver.seat!);
+  if (driver.active) fleet().poseRider(me, driver.car!, driver.seat!);
   me.setVoiceLevel(voice.inVoice ? voice.localLevel : 0);
   const firstPerson = player.view === 'first';
   // In first person you are the camera; in third, hide yourself when it's zoomed in right behind your head.
@@ -4717,14 +4915,14 @@ function frame(ts?: number) {
     const ground = groundAt(player.colliders, p.x, p.z, p.y);
     const airborne = !sat && p.y > ground + 0.05;
     // Or holding on to the ladder or a pole; off a pole onto the mat, the firehouse bell rings.
-    const holding = sat || upTop || !inOffice() ? null : gripOf(p, office.stack.poles(), ground);
+    const holding = sat || upTop || atCircuit || !inOffice() ? null : gripOf(p, office.stack.poles(), ground);
     if (r.grip === 'pole' && !holding && Math.abs(p.y) < 0.2) sound.poleLanding(6, { x: pos.x, y: 0.5, z: pos.z });
     r.grip = holding;
     r.person.setGrip(holding);
     const walking = !sat && p.moving && !airborne;
     r.person.update(dt, t, walking || (holding === 'ladder' && p.moving), airborne && !holding && Math.abs(pos.y - r.target.y) > 0.01);
     const seated = store.carOf(id);
-    if (seated) office.cars.poseRider(r.person, seated.car, seated.seat);
+    if (seated) fleet().poseRider(r.person, seated.car, seated.seat);
     // Their walk cycle takes a step every π/11 seconds.
     r.stepT = walking ? r.stepT + dt : 0.2;
     if (r.stepT >= Math.PI / 11) {
@@ -4742,14 +4940,14 @@ function frame(ts?: number) {
     voice.setVolume(id, d < 4 ? 1 : Math.max(0.2, 1 - (d - 4) / 16));
   }
 
-  // The engines of the cars being driven on this floor, yours (by how hard you're on the gas) and theirs.
+  // The engines of the cars being driven on this floor (or at the circuit), yours (by how hard you're on the gas) and theirs.
   const engines: Parameters<typeof sound.setEngines>[0] = [];
-  if (!upTop && inOffice()) {
+  if (!upTop && (inOffice() || atCircuit)) {
     for (const [i, c] of store.cars.entries()) {
       const mine = driver.car === i && driver.driving;
       if (!c.driver && !mine) continue;
-      const pose = office.cars.cars[i]?.pose ?? c;
-      engines.push({ car: i, at: { x: pose.x, y: player.street + 0.5, z: pose.z }, speed: pose.speed, gas: mine ? driver.gas : Math.min(1, Math.abs(pose.speed) / 10) });
+      const pose = fleet().cars[i]?.pose ?? c;
+      engines.push({ car: i, at: { x: pose.x, y: streetY() + 0.5, z: pose.z }, speed: pose.speed, gas: mine ? driver.gas : Math.min(1, Math.abs(pose.speed) / 10) });
     }
   }
   sound.setEngines(engines);
@@ -4780,8 +4978,8 @@ function frame(ts?: number) {
     const dogDt = dogTick(dt);
     if (dogDt) dog.update(dogDt);
   }
-  if (!upTop && inOffice()) updateBall(now, dt);
-  if (!upTop) {
+  if (!upTop && !atCircuit && inOffice()) updateBall(now, dt);
+  if (!upTop && !atCircuit) {
     world.update(t, dt, [player.pos, ...[...remotes.values()].map((r) => r.person.root.position), ...departures.positions(), ...arrivals.positions(), ...(court?.positions() ?? [])]);
     if (inOffice()) {
       office.stack.update(dt, [{ x: player.pos.x, y: player.pos.y, z: player.pos.z, grip }, ...[...remotes.values()].map((r) => ({ x: r.person.root.position.x, y: r.person.root.position.y, z: r.person.root.position.z, grip: r.grip }))], camera.position);
@@ -4794,8 +4992,12 @@ function frame(ts?: number) {
   hanger.update();
   sky.update(dt, t, camera);
   // A map of its own lights itself its own way (the castle's torchlit hall), after the sky's had its say.
-  if (!upTop) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
-  if (!upTop && inOffice() && holidayTick(dt)) holiday.update(t, sky.lampsOn, camera);
+  if (!upTop && !atCircuit) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
+  if (!upTop && !atCircuit && inOffice() && holidayTick(dt)) holiday.update(t, sky.lampsOn, camera);
+  // W2: the circuit's lights and crowd; through a gate, to it or back; the sun's shadows follow you round it.
+  if (atCircuit && circuit) circuit.update(dt, t, store.race, store.officeNow(), circuit.fleet.cars.map((v) => v.pose));
+  gates();
+  followSun();
   sound.setWeather(sky.rain, 1 - sky.daylight);
   if (upTop && roof) {
     // Everything up there moves to the DJ's set; strobes flash the whole roof as a drop lands.
@@ -4897,7 +5099,7 @@ function castersMoved(record: boolean): boolean {
   for (const r of remotes.values()) visitCaster(r.person.root);
   for (const v of workerViews.values()) visitCaster(v.model.root);
   for (const a of idleAgents) visitCaster(a.model.root);
-  for (const c of office.cars.cars) visitCaster(c.root);
+  for (const c of fleet().cars) visitCaster(c.root);
   visitCaster(dog.root);
   // Someone came or went: what's there to compare with is different.
   if (record) casterSeen.length = scanAt;

@@ -319,8 +319,12 @@ export class Fleet {
     /** The office's: the cars' go in with them. */
     private all: Collider[],
     interactables: Interactable[],
+    /** Which cars: the garage's, or the race circuit's (shared/circuit.ts). */
+    readonly defs: readonly CarDef[] = CARS,
+    /** What stands in a car's way besides `all`, near (x, z): the city's buildings and lamp posts. */
+    private near: (x: number, z: number, reach: number) => Box[] = citySolids,
   ) {
-    this.cars = CARS.map((def, index) => {
+    this.cars = defs.map((def, index) => {
       const model = supercar(def.kind, def.color);
       const interactable: Interactable = { kind: 'car', x: def.x, z: def.z, y: this.street, radius: 3.2, car: index };
       model.root.userData.interact = interactable;
@@ -432,7 +436,7 @@ export class Fleet {
         vz: Math.cos(p.rotY) * p.speed - Math.sin(p.rotY) * (p.slip ?? 0) } : c);
     }
     const p = this.cars[except]?.pose;
-    if (p) out.push(...citySolids(p.x, p.z, 10 + Math.hypot(p.speed, p.slip ?? 0) * 0.1));
+    if (p) out.push(...this.near(p.x, p.z, 10 + Math.hypot(p.speed, p.slip ?? 0) * 0.1));
     return out;
   }
 

@@ -11,6 +11,16 @@ import dogShibaUrl from '../models/dog-shiba.glb?url';
 import kitchenUrl from '../models/kitchen.glb?url';
 import loungeUrl from '../models/lounge.glb?url';
 import plantsUrl from '../models/plants.glb?url';
+import race_grandStandUrl from '../models/race/grandStand.glb?url';
+import race_grandStandCoveredUrl from '../models/race/grandStandCovered.glb?url';
+import race_pitsGarageUrl from '../models/race/pitsGarage.glb?url';
+import race_pitsOfficeUrl from '../models/race/pitsOffice.glb?url';
+import race_treeLargeUrl from '../models/race/treeLarge.glb?url';
+import race_treeSmallUrl from '../models/race/treeSmall.glb?url';
+import race_bannerTowerRedUrl from '../models/race/bannerTowerRed.glb?url';
+import race_bannerTowerGreenUrl from '../models/race/bannerTowerGreen.glb?url';
+import race_lightPostLargeUrl from '../models/race/lightPostLarge.glb?url';
+import race_tentLongUrl from '../models/race/tentLong.glb?url';
 import { toon } from './toon';
 
 // The things in the world modelled in Blender rather than built in code. Each .glb is exported by a
@@ -27,6 +37,17 @@ const MODELS = {
   kitchen: { url: kitchenUrl, preload: true },
   lounge: { url: loungeUrl, preload: true },
   plants: { url: plantsUrl, preload: true },
+  // The race circuit's props: Kenney's Racing Kit (CC0, see CREDITS.md), loaded the first time you go there.
+  'race/grandStand': { url: race_grandStandUrl, preload: false },
+  'race/grandStandCovered': { url: race_grandStandCoveredUrl, preload: false },
+  'race/pitsGarage': { url: race_pitsGarageUrl, preload: false },
+  'race/pitsOffice': { url: race_pitsOfficeUrl, preload: false },
+  'race/treeLarge': { url: race_treeLargeUrl, preload: false },
+  'race/treeSmall': { url: race_treeSmallUrl, preload: false },
+  'race/bannerTowerRed': { url: race_bannerTowerRedUrl, preload: false },
+  'race/bannerTowerGreen': { url: race_bannerTowerGreenUrl, preload: false },
+  'race/lightPostLarge': { url: race_lightPostLargeUrl, preload: false },
+  'race/tentLong': { url: race_tentLongUrl, preload: false },
 } satisfies Record<string, { url: string; preload: boolean }>;
 
 export type ModelName = keyof typeof MODELS;

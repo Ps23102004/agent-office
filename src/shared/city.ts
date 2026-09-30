@@ -82,6 +82,9 @@ const CLEAR: Area[] = [
 ];
 const keepClear = (x: number, z: number) => CLEAR.some((a) => x > a.minX && x < a.maxX && z > a.minZ && z < a.maxZ);
 
+/** The block behind the office, east of it, left open as a paved plaza with the gate to the race circuit on it (circuit.ts). */
+export const RACE_PLAZA: Area = rect(STREET_X + PERIOD / 2, STREET_Z - PERIOD * 1.5, INNER, INNER);
+
 // ---- The lots ------------------------------------------------------------------------------------
 
 /** What kind of building stands on a lot (client/world/city.ts dresses each). */
@@ -285,6 +288,10 @@ export function cityLayout(): CityLayout {
       }
     }
   }
+
+  // The race circuit's plaza stays open, for the gate (see circuit.ts CITY_GATE): the dice above are thrown all the same.
+  for (let k = lots.length - 1; k >= 0; k--) if (touches(lots[k].plot, RACE_PLAZA)) lots.splice(k, 1);
+  for (let k = parks.length - 1; k >= 0; k--) if (touches(rect(parks[k].x, parks[k].z, parks[k].size, parks[k].size), RACE_PLAZA)) parks.splice(k, 1);
 
   // One gas station and one parking structure, on the lots nearest the distance they look best at.
   const pick = (min: number, from: number, to: number, target: number) => {
@@ -511,6 +518,7 @@ const across = (v: number, line: number) => {
 export function cityPaved(x: number, z: number): boolean {
   if (x * x + z * z > RADIUS * RADIUS) return false;
   if (across(x, STREET_X) <= BAND || across(z, STREET_Z) <= BAND) return true;
+  if (x >= RACE_PLAZA.minX && x <= RACE_PLAZA.maxX && z >= RACE_PLAZA.minZ && z <= RACE_PLAZA.maxZ) return true;
   const g = cityLayout().gas?.plot;
   return !!g && x >= g.minX && x <= g.maxX && z >= g.minZ && z <= g.maxZ;
 }

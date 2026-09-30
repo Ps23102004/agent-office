@@ -13,6 +13,12 @@ export interface DriveHooks {
   bump(at: { x: number; z: number }, speed: number): void;
   /** What else is moving about near (x, z): the street's traffic, with its mass and motion. */
   traffic?(x: number, z: number, reach: number): Box[];
+  /** Where a car can be, if not the pavement (at the race circuit: the track, its grass and the paddock). */
+  ground?(): ((x: number, z: number) => boolean) | undefined;
+  /** What the ground does to the car after a step of `dt` (grass slows it): the car as it is then. */
+  surface?(p: CarPose, dt: number): CarPose;
+  /** Held on the brakes, whatever you press (on the grid, counting down). */
+  hold?(): boolean;
 }
 
 /** How often the office hears where your car is, at most (seconds). */
@@ -42,7 +48,8 @@ export class Driver {
 
   constructor(
     private player: PlayerController,
-    private fleet: Fleet,
+    /** The cars you can get into where you are: the garage's, or the race circuit's. Changed only while you're on your feet. */
+    public fleet: Fleet,
     private hooks: DriveHooks,
   ) {}
 
@@ -160,10 +167,11 @@ export class Driver {
     this.clock += dt;
     if (this.driving) {
       const p = this.player;
+      const held = this.hooks.hold?.() ?? false;
       const pedals: Pedals = {
-        gas: (p.holding('KeyW', 'ArrowUp') ? 1 : 0) - (p.holding('KeyS', 'ArrowDown') ? 1 : 0),
+        gas: held ? 0 : (p.holding('KeyW', 'ArrowUp') ? 1 : 0) - (p.holding('KeyS', 'ArrowDown') ? 1 : 0),
         turn: (p.holding('KeyA', 'ArrowLeft') ? 1 : 0) - (p.holding('KeyD', 'ArrowRight') ? 1 : 0),
-        brake: p.holding('Space'),
+        brake: held || p.holding('Space'),
       };
       this.gas = pedals.gas;
       // A slow frame carries its fraction over; a paused tab never gets a giant physics step.
@@ -189,15 +197,17 @@ export class Driver {
    */
   private move(from: CarPose, pedals: Pedals, dt: number, solids: Box[]): CarPose {
     const kind = this.fleet.cars[this.car!].def.kind;
-    const fits = (p: CarPose) => carFits(p, solids, kind);
+    const ground = this.hooks.ground?.();
+    const fits = (p: CarPose) => carFits(p, solids, kind, ground);
     const n = Math.max(1, Math.ceil((Math.hypot(from.speed, from.slip ?? 0) * dt) / STEP));
     const h = dt / n;
     // Already in something (someone parked on top of you): drive out of it any way you like.
     const stuck = !fits(from);
     let pose = from;
     for (let i = 0; i < n; i++) {
-      const next = drive(pose, pedals, h, kind);
-      if (stuck ? onPavement(next, kind) : fits(next)) {
+      const driven = drive(pose, pedals, h, kind);
+      const next = this.hooks.surface ? this.hooks.surface(driven, h) : driven;
+      if (stuck ? onPavement(next, kind, ground) : fits(next)) {
         pose = next;
         continue;
       }

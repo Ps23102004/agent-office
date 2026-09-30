@@ -119,9 +119,9 @@ export interface CarState extends CarPose {
   passenger?: string;
 }
 
-/** Every car in its spot, as the office starts. */
-export function parked(): CarState[] {
-  return CARS.map((c) => ({ x: c.x, z: c.z, rotY: c.rotY, speed: 0, steer: 0, slip: 0 }));
+/** Every car in its spot, as the office starts (the garage's, or `defs`: the race circuit's). */
+export function parked(defs: readonly CarDef[] = CARS): CarState[] {
+  return defs.map((c) => ({ x: c.x, z: c.z, rotY: c.rotY, speed: 0, steer: 0, slip: 0 }));
 }
 
 /** The pedals and the wheel: `gas` 1 forward, -1 back (braking first if you're going the other way), `turn` +1 hard left. */
@@ -259,8 +259,8 @@ export function paved(x: number, z: number): boolean {
   return PAVEMENT.some((b) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) || cityPaved(x, z);
 }
 
-/** Whether the whole car is on the pavement: its corners, and halfway along each side. */
-export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarKind = 'lambo'): boolean {
+/** Whether the whole car is on the pavement (or on `where`, somewhere else a car can be): its corners, and halfway along each side. */
+export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarKind = 'lambo', where: (x: number, z: number) => boolean = paved): boolean {
   const w = SPECS[kind].width / 2;
   const l = SPECS[kind].length / 2;
   for (const [lx, lz] of [
@@ -274,7 +274,7 @@ export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarK
     [0, -l],
   ]) {
     const at = carPoint(p, lx, lz);
-    if (!paved(at.x, at.z)) return false;
+    if (!where(at.x, at.z)) return false;
   }
   return true;
 }
@@ -299,9 +299,9 @@ export function overlaps(p: { x: number; z: number; rotY: number }, b: Box, kind
   return true;
 }
 
-/** Whether the car can be at `p`: on the pavement, clear of all of `solids`. */
-export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>, kind: CarKind = 'lambo'): boolean {
-  if (!onPavement(p, kind)) return false;
+/** Whether the car can be at `p`: on the pavement (or `where`), clear of all of `solids`. */
+export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>, kind: CarKind = 'lambo', where: (x: number, z: number) => boolean = paved): boolean {
+  if (!onPavement(p, kind, where)) return false;
   for (const b of solids) if (overlaps(p, b, kind)) return false;
   return true;
 }

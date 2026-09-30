@@ -48,6 +48,9 @@ import { EMOTE_EVERY, EmoteBucket, isEmote } from '../shared/emotes.js';
 import { isThemePick } from '../shared/theme.js';
 import { PROMPTS, PROMPT_MAX, isPromptId } from '../shared/prompts.js';
 import { ROOF, isDrink } from '../shared/rooftop.js';
+import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_GATE, circuitGround } from '../shared/circuit.js';
+import { Garage } from './garage.js';
+import { RaceControl } from './race.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
 
 const MIME: Record<string, string> = {
@@ -253,6 +256,11 @@ export async function startServer(cfg: Config) {
   }
   const floors = new Map<string, Floor>();
   const floorOf = (c: Client): Floor | undefined => (c.peer.floor ? floors.get(c.peer.floor) : undefined);
+  // ---- W2: the race circuit, a place of its own (shared/circuit.ts): its cars, and the race (server/race.ts).
+  const circuitCars = new Garage(undefined, CIRCUIT_CARS, circuitGround);
+  const race = new RaceControl();
+  /** The cars where `c` is: their floor's garage, or the circuit's. */
+  const garageOf = (c: Client): Garage | undefined => (c.peer.floor === CIRCUIT ? circuitCars : floorOf(c)?.garage);
   /** The floor a worker sits on. Worker ids are unique across the building. */
   const workerFloor = (workerId: string): Floor | undefined => {
     for (const f of floors.values()) if (f.workers.get(workerId)) return f;
@@ -639,6 +647,8 @@ export async function startServer(cfg: Config) {
   });
   /** The rooftop bar: nobody works up there, so it has none of a floor's things. */
   const roofView = (): FloorView => ({ ...floorView(undefined), floor: ROOF });
+  /** The race circuit: its own cars, and nothing of a floor's. */
+  const circuitView = (): FloorView => ({ ...floorView(undefined), floor: CIRCUIT, cars: circuitCars.state() });
   const screensOf = (c: Client, floor: Floor | undefined) => {
     for (const { workerId, frame } of floor?.workers.fullScreens() ?? []) sendTo(c, { t: 'screen', workerId, ...frame, full: true });
   };
@@ -1036,13 +1046,15 @@ export async function startServer(cfg: Config) {
     // Back on the floor they were on before a reload, a restart or closing the tab, else the first floor.
     const wanted = url.searchParams.get('floor');
     // Their floor's gone since (taken off the building, or its checkout deleted): up to the roof instead.
-    const gone = !!wanted && wanted !== ROOF && !floors.has(wanted);
+    const gone = !!wanted && wanted !== ROOF && wanted !== CIRCUIT && !floors.has(wanted);
+    // Back at the circuit (after a reconnect), by its gate home.
+    const atCircuit = wanted === CIRCUIT;
     // Up on the roof, as long as there's a building under it.
     const onRoof = (wanted === ROOF || gone) && floors.size > 0;
-    const floor = onRoof ? undefined : arrivalFloor(wanted);
+    const floor = onRoof || atCircuit ? undefined : arrivalFloor(wanted);
     // Back where they were standing on it too; anywhere else, they arrive by elevator.
     const back = !gone && wanted !== null && (onRoof || floor?.id === wanted);
-    const spot = (back && spotFrom(url.searchParams)) || { ...elevatorSpot(), y: 0, rotY: 0 };
+    const spot = atCircuit ? { ...CIRCUIT_GATE.out, y: 0 } : (back && spotFrom(url.searchParams)) || { ...elevatorSpot(), y: 0, rotY: 0 };
     const account = session.account;
     // An account's name is its own; on the shared password people pick one.
     const name = account?.name ?? (str(url.searchParams.get('name'), 24).trim() || `Guest ${id.slice(0, 3)}`);
@@ -1086,7 +1098,7 @@ export async function startServer(cfg: Config) {
         sharing: false,
         ...(account ? { account: true } : {}),
         ...(url.searchParams.get('lite') === '1' ? { lite: true } : {}),
-        ...(onRoof ? { floor: ROOF } : floor ? { floor: floor.id } : {}),
+        ...(onRoof ? { floor: ROOF } : atCircuit ? { floor: CIRCUIT } : floor ? { floor: floor.id } : {}),
       },
     };
     // Maps of your own may have been added or edited since: everyone already in hears first.
@@ -1117,8 +1129,9 @@ export async function startServer(cfg: Config) {
       map: maps.state(),
       prompts: prompts.state(),
       leaveOnMerge: leaveOnMerge.state(),
-      ...(onRoof ? roofView() : floorView(floor)),
+      ...(onRoof ? roofView() : atCircuit ? circuitView() : floorView(floor)),
     });
+    sendTo(client, { t: 'race', state: race.state() });
     screensOf(client, floor);
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
@@ -1154,6 +1167,8 @@ export async function startServer(cfg: Config) {
         if (f.court.left(id)) ballChanged(f);
         if (f.garage.leave(id)) carsChanged(f);
       }
+      if (circuitCars.leave(id)) circuitCarsChanged();
+      if (race.leave(id)) raceChanged();
       broadcast({ t: 'peer.leave', id });
       if (account) accountsChanged();
       floorsChanged();
@@ -1169,6 +1184,12 @@ export async function startServer(cfg: Config) {
   };
   const ballChanged = (floor: Floor) => toFloor(floor, { t: 'ball', ball: floor.court.state() });
   const carsChanged = (floor: Floor) => toFloor(floor, { t: 'cars', cars: floor.garage.state() });
+  const circuitCarsChanged = () => {
+    for (const o of clients.values()) if (o.peer.floor === CIRCUIT) sendTo(o, { t: 'cars', cars: circuitCars.state() });
+  };
+  /** The race changed: everyone hears, wherever they are (it's news in the city too). */
+  const raceChanged = () => broadcast({ t: 'race', state: race.state() });
+  const raceTimer = setInterval(() => race.tick(Date.now()) && raceChanged(), 250);
   const jukeboxChanged = (floor: Floor) => toFloor(floor, { t: 'jukebox', state: floor.jukebox.state() });
   const teamState = async () => ({ ...(await team.state()), deploy: cfg.deployScript });
   const teamChanged = async () => broadcast({ t: 'team', state: await teamState() });
@@ -1206,6 +1227,16 @@ export async function startServer(cfg: Config) {
     const left = leave(c);
     c.peer.floor = ROOF;
     sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...roofView() });
+    arrived(c, left);
+    floorsChanged();
+  };
+
+  /** Through the gate in the city to the race circuit: in by its gate home. */
+  const goToCircuit = (c: Client) => {
+    if (c.peer.floor === CIRCUIT) return;
+    const left = leave(c, { ...CIRCUIT_GATE.out, y: 0 });
+    c.peer.floor = CIRCUIT;
+    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...circuitView() });
     arrived(c, left);
     floorsChanged();
   };
@@ -1255,6 +1286,9 @@ export async function startServer(cfg: Config) {
     const ballLeft = !!was?.court.left(c.id);
     // So does a car they were in, parked where they left it.
     const carLeft = !!was?.garage.leave(c.id);
+    // Off the circuit: its car stays where they left it, and the race goes on without them.
+    const circuitCarLeft = c.peer.floor === CIRCUIT && circuitCars.leave(c.id);
+    const raced = race.leave(c.id);
     c.attached.clear();
     c.typingAt.clear();
     c.stale.clear();
@@ -1270,7 +1304,7 @@ export async function startServer(cfg: Config) {
     // An issue card belongs to the board it came off, which is on the floor they left; a drink stays at the bar.
     delete c.peer.carrying;
     delete c.peer.drink;
-    return { was, wasDrawing, ballLeft, carLeft };
+    return { was, wasDrawing, ballLeft, carLeft, circuitCarLeft, raced };
   };
 
   const arrived = (c: Client, left: ReturnType<typeof leave>) => {
@@ -1278,6 +1312,8 @@ export async function startServer(cfg: Config) {
     if (left.wasDrawing) drawingChanged(left.was);
     if (left.ballLeft && left.was) ballChanged(left.was);
     if (left.carLeft && left.was) carsChanged(left.was);
+    if (left.circuitCarLeft) circuitCarsChanged();
+    if (left.raced) raceChanged();
   };
 
   /**
@@ -1480,6 +1516,10 @@ export async function startServer(cfg: Config) {
         break;
       }
       case 'floor.go': {
+        if (msg.floor === CIRCUIT) {
+          goToCircuit(c);
+          break;
+        }
         if (msg.floor === ROOF) {
           if (floors.size) goToRoof(c);
           else warn(c, 'There is no building to go up on yet');
@@ -1548,23 +1588,39 @@ export async function startServer(cfg: Config) {
       }
       case 'car.enter':
       case 'car.leave': {
-        const floor = floorOf(c);
-        if (!floor) break;
-        const changed = msg.t === 'car.enter' ? floor.garage.enter(c.id, Math.trunc(num(msg.car)), msg.seat) : floor.garage.leave(c.id);
+        const garage = garageOf(c);
+        if (!garage) break;
+        const changed = msg.t === 'car.enter' ? garage.enter(c.id, Math.trunc(num(msg.car)), msg.seat) : garage.leave(c.id);
         // They hear back either way: someone who didn't get in (someone beat them to the seat) learns who did.
-        if (changed) toNeighbors(c, { t: 'cars', cars: floor.garage.state() });
-        sendTo(c, { t: 'cars', cars: floor.garage.state(), answer: true });
+        if (changed) toNeighbors(c, { t: 'cars', cars: garage.state() });
+        sendTo(c, { t: 'cars', cars: garage.state(), answer: true });
+        // Out of the car (or into another), out of the race.
+        if (changed && garage === circuitCars && race.leave(c.id)) raceChanged();
         break;
       }
       case 'car.drive': {
-        const floor = floorOf(c);
+        const garage = garageOf(c);
         const car = Math.trunc(num(msg.car));
-        const now = floor?.garage.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer), slip: msg.slip === undefined ? 0 : num(msg.slip) });
+        const now = garage?.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer), slip: msg.slip === undefined ? 0 : num(msg.slip) });
         if (now) toNeighbors(c, { t: 'car.move', car, ...now }, true);
+        if (now && garage === circuitCars && race.drove(c.id, now.x, now.z, Date.now())) raceChanged();
         break;
       }
+      case 'race.join': {
+        const at = c.peer.floor === CIRCUIT ? circuitCars.seatOf(c.id) : undefined;
+        if (!at || at.seat !== 'driver') return warn(c, 'Get behind the wheel of one of the circuit’s cars to line up on the grid');
+        if (race.join(c.id, c.peer.name, at.car, Date.now())) raceChanged();
+        else warn(c, 'There’s no room on the grid right now: a race is on, or it’s full');
+        break;
+      }
+      case 'race.start':
+        if (race.start(c.id, Date.now())) raceChanged();
+        break;
+      case 'race.leave':
+        if (race.leave(c.id)) raceChanged();
+        break;
       case 'car.honk': {
-        const car = floorOf(c)?.garage.honk(c.id);
+        const car = garageOf(c)?.honk(c.id);
         if (car !== undefined) toNeighbors(c, { t: 'car.honk', car });
         break;
       }
@@ -2363,6 +2419,7 @@ export async function startServer(cfg: Config) {
   const shutdown = (keep = false) => {
     clearInterval(heartbeat);
     clearInterval(resync);
+    clearInterval(raceTimer);
     clearTimeout(floorsTimer);
     arcade.flush();
     upgrader.stop();
