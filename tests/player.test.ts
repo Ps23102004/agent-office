@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { PlayerController } from '../src/client/player.js';
 import type { Collider } from '../src/client/world/office.js';
-import { BALCONY, FLOOR, LOFT, SEATING_BY_ID, SLAB, STAIRS, seatAt, seatPlace } from '../src/shared/layout.js';
+import { cityLayout, citySolids } from '../src/shared/city.js';
+import { BALCONY, FLOOR, LOFT, SEATING_BY_ID, SLAB, STAIRS, STREET_Y, seatAt, seatPlace } from '../src/shared/layout.js';
 
 /** The office floor: upstairs, over the garage, so off it you'd drop to the street. */
 const officeFloor: Collider = { ...FLOOR, bottom: -SLAB, top: 0 };
@@ -204,4 +205,20 @@ test('seat places are only the ones the office has', () => {
   assert.equal(seatAt('couch:2')?.seatId, 'couch');
   assert.equal(seatAt('loft-couch:1')?.y, LOFT.y);
   for (const bad of ['couch:3', 'couch:', 'couch', 'sofa:0', 'couch:-1', 'couch:1.5', '']) assert.equal(seatAt(bad), undefined, bad);
+});
+
+test('walking on the street, you are stopped by a city building instead of walking through it', (t) => {
+  const { player, keys, frames } = controller(t, []);
+  const lot = cityLayout().lots.find((l) => !l.hand && citySolids(l.x, l.z + l.d / 2 + 1.5, 0.4).length === 0)!;
+  player.street = STREET_Y;
+  player.pos.set(lot.x, STREET_Y, lot.z + lot.d / 2 + 1.5);
+  player.grounded = true;
+  keys('KeyW');
+  frames(240);
+  assert.ok(player.pos.z >= lot.z + lot.d / 2 + 0.3, `walked into the building: z=${player.pos.z}`);
+  // Down on the street only: the office's own floors are nowhere near the city's lots.
+  player.pos.set(lot.x, 0, lot.z + lot.d / 2 + 1.5);
+  player.grounded = true;
+  frames(60);
+  assert.ok(player.pos.z < lot.z + lot.d / 2, 'up on an office floor nothing of the city is in the way');
 });
