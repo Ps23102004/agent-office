@@ -4833,9 +4833,9 @@ function frame(ts?: number) {
   // The cars first, so whoever's riding in one sits in it where it's got to.
   fleet().update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
   // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
+  player.city = inOffice() && !upTop && !atCircuit; // W3: the city's solids are for the office's street world only
   if (inOffice() && !upTop && !atCircuit) {
     const pose = driver.driving ? driver.pose : null;
-  player.city = inOffice() && !upTop && !atCircuit; // W3: the city's solids are for the office's street world only
     const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
     office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid, sky.clockHour()); // W3: people and traffic keep the office's hours
