@@ -930,8 +930,10 @@ export class Person {
 
   /** On a bike: hands out on the bars, knees either side, leaning with it as you turn. */
   ride(hips: number, lean: number, phase: number, pedaling: boolean) {
-    this.body.position.y = hips - HIPS;
     this.body.rotation.set(0.18, 0, lean);
+    // Lean about the ground under the bike, not about the hips, or the rider slides off the saddle.
+    const up = hips - HIPS;
+    this.body.position.set(-up * Math.sin(lean), up * Math.cos(lean), 0);
     this.armL.rotation.set(-1.15, 0, -0.12);
     this.armR.rotation.set(-1.15, 0, 0.12);
     const pedal = pedaling ? Math.sin(phase) * 0.45 : 0;

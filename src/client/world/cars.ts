@@ -197,8 +197,9 @@ export function supercar(kind: CarKind, color: string): CarModel {
   inside.visible = false;
   const bodyGroup = new THREE.Group();
   lights.traverse((o) => { o.castShadow = false; });
-  bodyGroup.add(packed(g, true), mergeByMaterial(lights), top, inside);
-  root.add(bodyGroup, ...wheels);
+  // The wheels ride in the body group: whatever it rolls, pitches or bobs, they go with it.
+  bodyGroup.add(packed(g, true), mergeByMaterial(lights), top, inside, ...wheels);
+  root.add(bodyGroup);
   return { root, body: bodyGroup, top, open: inside, wheels };
 }
 
@@ -266,8 +267,9 @@ function bike(kind: 'motorbike' | 'bicycle', color: string): CarModel {
     pedals.position.set(0, 0.3, -0.08);
     pedals.add(packed(bits));
   }
-  body.add(packed(parts, true), mergeByMaterial(lights));
-  root.add(body, ...wheels, pedals);
+  // Wheels and cranks are in the body group too, so the whole bike leans as one about the ground line.
+  body.add(packed(parts, true), mergeByMaterial(lights), ...wheels, pedals);
+  root.add(body);
   return { root, body, top: new THREE.Group(), open: new THREE.Group(), wheels, pedals };
 }
 
@@ -440,7 +442,8 @@ export class Fleet {
   poseRider(person: { ride(hips: number, lean: number, phase: number, pedaling: boolean): void }, i: number, seat: CarSeat) {
     const v = this.cars[i];
     if (!v || SPECS[v.def.kind].width >= 1) return;
-    person.ride(seatHips(v.def.kind), -leanAngle(v.pose, v.def.kind), v.pedalPhase, v.def.kind === 'bicycle' && seat === 'driver');
+    // The bike's own (smoothed) lean, so the rider never gets ahead of the frame.
+    person.ride(seatHips(v.def.kind), v.body.rotation.z, v.pedalPhase, v.def.kind === 'bicycle' && seat === 'driver');
   }
 
   /** Wheels travel with the car, while its springs let the body pitch and roll a little. */
@@ -461,8 +464,7 @@ export class Fleet {
     v.body.rotation.z += (roll - v.body.rotation.z) * k;
     v.body.rotation.x += ((bike ? 0 : -acceleration * 0.003) - v.body.rotation.x) * k;
     v.body.position.y = bike ? 0 : Math.sin((p.x + p.z) * 3) * 0.015 * Math.min(1, Math.abs(p.speed) / 4);
-    if (bike) for (const w of v.wheels) w.rotation.z = roll;
-    if (v.pedals) { v.pedals.rotation.x = v.pedalPhase; v.pedals.rotation.z = roll; }
+    if (v.pedals) v.pedals.rotation.x = v.pedalPhase;
   }
 
   /**
