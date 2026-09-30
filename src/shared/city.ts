@@ -717,6 +717,10 @@ export function parkHedges(p: Park): Area[] {
 }
 
 const CELL = 24;
+/** How tall a solid is (m), for people on foot: a hedge or a bench can be hopped, a building can't. */
+const heights = new WeakMap<Area, number>();
+const TALL = 100;
+export const solidHeight = (a: Area): number => heights.get(a) ?? TALL;
 let index: Map<number, Area[]> | null = null;
 const cellKey = (cx: number, cz: number) => (cx + 4096) * 8192 + (cz + 4096);
 
@@ -755,10 +759,6 @@ function solids(): Map<number, Area[]> {
     for (const a of parkHedges(p)) add(a, 0.6);
     for (const t of p.trees) post(t.x, t.z, 0.3 * t.s);
   }
-/** How tall a solid is (m), for people on foot: a hedge or a bench can be hopped, a building can't. */
-const heights = new WeakMap<Area, number>();
-const TALL = 100;
-export const solidHeight = (a: Area): number => heights.get(a) ?? TALL;
   post(LIGHTHOUSE.x, LIGHTHOUSE.z, LIGHTHOUSE.radius);
   for (const s of [-1, 1]) {
     const x = PIER.x + s * (PIER.width / 2 - 0.1);
