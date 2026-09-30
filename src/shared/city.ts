@@ -24,3 +24,25 @@ export function rng(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** Somewhere flat on the ground, x and z (the same shape as garage.ts Box). */
+export interface Area {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/**
+ * Whether (x, z) is out on the city's streets or sidewalks, where a car can go (the garage and its
+ * lots are garage.ts PAVEMENT). Not on anyone's lot, and not out past RADIUS.
+ */
+// ponytail: stub until the open-world pass lays the streets out (see client/world/city.ts).
+export function cityPaved(_x: number, _z: number): boolean {
+  return false;
+}
+
+/** What stands in the way within `reach` of (x, z) out in the city: buildings, lamp posts, trees. */
+export function citySolids(_x: number, _z: number, _reach: number): Area[] {
+  return [];
+}

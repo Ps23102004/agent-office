@@ -1,4 +1,5 @@
 import { FLOOR, ROAD, WALL_T } from './layout.js';
+import { cityPaved } from './city.js';
 
 // The Lambos and Ferraris in the garage, which anyone can drive: where they're parked, where you can
 // take them (the garage, the lots round it and the street), and the arcade physics a driver's own
@@ -161,7 +162,7 @@ export function carPoint(p: { x: number; z: number; rotY: number }, lx: number, 
 
 /** Whether (x, z) is somewhere a car can be. */
 export function paved(x: number, z: number): boolean {
-  return PAVEMENT.some((b) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ);
+  return PAVEMENT.some((b) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) || cityPaved(x, z);
 }
 
 /** Whether the whole car is on the pavement: its corners, and halfway along each side. */
