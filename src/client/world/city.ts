@@ -4,7 +4,7 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { INNER, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, rng, type Light, type Lot } from '../../shared/city';
+import { INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, rng, type Light, type Lot } from '../../shared/city';
 
 // The city around the rooftop bar: the building's own floors going down to the street (as the tower
 // looks from outside, world/tower.ts), a grid of streets with cars running along them, parks, and
@@ -925,7 +925,7 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     const door = doors[Math.floor(pick() * doors.length)];
     soup.add(box, door, l.x + l.fx * (l.w / 2 + 0.05), 1.05, l.z + l.fz * (l.d / 2 + 0.05), l.fx ? 0.12 : 1.1, 2.1, l.fz ? 0.12 : 1.1);
     soup.add(box, '#d9d3c5', l.x + l.fx * (l.w / 2 + 0.7), 0.06, l.z + l.fz * (l.d / 2 + 0.7), l.fx ? 1.4 : 1.6, 0.12, l.fz ? 1.4 : 1.6);
-    if (pick() < 0.65) tree(l.x + l.fx * (l.w / 2 + 3) + l.fz * (pick() < 0.5 ? -3.5 : 3.5), l.z + l.fz * (l.d / 2 + 3) + l.fx * 3.5, 0.9 + pick() * 0.4, pick() < 0.5 ? 0 : 1);
+    if (l.yard) tree(l.yard.x, l.yard.z, l.yard.s, l.yard.tone);
   };
 
   // The gas station's forecourt, canopy, pumps and sign, with the lot's shop behind them.
@@ -950,10 +950,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
       soup.add(box, '#f5f5f5', x, 1.6, z, a.maxX - a.minX + 0.05, 0.25, a.maxZ - a.minZ + 0.05);
     }
     // A price sign on a pole out by the street.
-    const fx = gas.fx;
-    const fz = gas.fz;
-    const sx = fz ? p.minX + 2 : fx > 0 ? p.maxX - 1.5 : p.minX + 1.5;
-    const sz = fx ? p.minZ + 2 : fz > 0 ? p.maxZ - 1.5 : p.minZ + 1.5;
+    const { fx, fz } = gas;
+    const { x: sx, z: sz } = gas.sign;
     soup.add(cyl, '#3d405b', sx, 3.2, sz, 0.12, 6.4, 0.12);
     const sign = textPlane('⛽ GAS', { bg: '#e63946', color: '#ffffff', size: 64, border: '#ffffff' });
     sign.scale.multiplyScalar(1.5);
@@ -1020,7 +1018,7 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     if (l.hand) continue;
     lampAt.push(l.x + l.ax * 1.2, 5, l.z + l.az * 1.2);
     // Only near enough to see the post (the glow carries on further out).
-    if (Math.hypot(l.x, l.z) > 240) continue;
+    if (Math.hypot(l.x, l.z) > POST_RADIUS) continue;
     soup.add(cyl, '#3d405b', l.x, 0.25, l.z, 0.22, 0.5, 0.22);
     soup.add(cyl, '#3d405b', l.x, 2.5, l.z, 0.08, 5, 0.08);
     soup.add(box, '#3d405b', l.x + l.ax * 0.6, 4.95, l.z + l.az * 0.6, l.ax ? 1.3 : 0.08, 0.08, l.az ? 1.3 : 0.08);
@@ -1035,7 +1033,6 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   // Benches, bins and hydrants, near enough to be seen.
   for (const p of scape.props) {
-    if (Math.hypot(p.x, p.z) > 200) continue;
     const s = Math.sin(p.rot);
     const c = Math.cos(p.rot);
     // (lx, lz) in the prop's own frame, +z toward the road, to the ground.

@@ -51,11 +51,11 @@ const hash = (...n: number[]) => n.reduce((h, v) => Math.imul(h ^ (v + 0x9e3779b
  * golf ball bounces off them): [x, z, width, height, depth, paint]. The city leaves their lots to them.
  */
 export const NEIGHBOURS: readonly (readonly [number, number, number, number, number, string])[] = [
-  [-38, 45, 12, 10, 9, '#8ecae6'],
-  [-22, 46, 14, 16, 10, '#ffb4a2'],
+  [-40, 45, 11, 10, 9, '#8ecae6'],
+  [-18, 46, 6, 16, 10, '#ffb4a2'],
   [12, 47, 16, 19, 12, '#cdb4db'],
-  [30, 45, 12, 9, 9, '#ffd6a5'],
-  [-20, -42, 18, 14, 10, '#a2d2ff'],
+  [40, 45, 11, 9, 9, '#ffd6a5'],
+  [-12, -42, 18, 14, 10, '#a2d2ff'],
   [8, -44, 16, 20, 12, '#f4acb7'],
   [-48, -6, 10, 12, 16, '#ffe5b4'],
   [50, 4, 10, 15, 18, '#bde0fe'],
@@ -111,6 +111,8 @@ export interface Lot {
   plot: Area;
   /** On a neighbour's or the golf hole's lot, round the office: only the roof's view has this one (the street has the hand-built ones). */
   hand: boolean;
+  /** A house's tree in the yard, if it has one. */
+  yard?: { x: number; z: number; s: number; tone: 0 | 1 };
   /** Tall ones step back on the way up: the top part's footprint, and how much taller it goes. */
   step?: { w: number; d: number; up: number };
   /** On its roof: a mast with a red light, a water tower, or a box of air conditioning. */
@@ -129,6 +131,8 @@ export interface GasStation {
   plot: Area;
   canopy: Area;
   pumps: Area[];
+  /** The price sign's pole. */
+  sign: { x: number; z: number };
   /** Which way the front faces (see Lot). */
   fx: number;
   fz: number;
@@ -272,6 +276,10 @@ export function cityLayout(): CityLayout {
           lot.h = 5.5 + k() * 2;
           delete lot.step;
           delete lot.top;
+          if (k() < 0.65) {
+            const side = k() < 0.5 ? -3.5 : 3.5;
+            lot.yard = { x: lot.x + lot.fx * (lot.w / 2 + 3) + lot.fz * side, z: lot.z + lot.fz * (lot.d / 2 + 3) + lot.fx * 3.5, s: 0.9 + k() * 0.4, tone: k() < 0.5 ? 0 : 1 };
+          }
         } else if (dist < SHOPS_TO && h < 34) lot.kind = kr < 0.55 ? 'shop' : kr < 0.8 ? 'walkup' : 'block';
         lots.push(lot);
       }
@@ -313,7 +321,8 @@ export function cityLayout(): CityLayout {
     station.h = 4.4;
     delete station.step;
     delete station.top;
-    gas = { plot: p, canopy: box(-7, 7, 4, 12), pumps: [-4.5, 0, 4.5].map((u) => box(u - 0.4, u + 0.4, 7.4, 9.4)), fx, fz };
+    const sign = { x: fz ? p.minX + 2 : fx > 0 ? p.maxX - 1.5 : p.minX + 1.5, z: fx ? p.minZ + 2 : fz > 0 ? p.maxZ - 1.5 : p.minZ + 1.5 };
+    gas = { plot: p, canopy: box(-7, 7, 4, 12), pumps: [-4.5, 0, 4.5].map((u) => box(u - 0.4, u + 0.4, 7.4, 9.4)), sign, fx, fz };
   }
   const deck = pick(20, 100, 220, 170);
   if (deck && deck !== station) {
@@ -372,6 +381,10 @@ export interface Streetscape {
   props: Prop[];
 }
 
+/** Lamp posts and street furniture are drawn, and are solid, only this far from the origin (m); the lamps' glow goes on out to RADIUS. */
+export const POST_RADIUS = 240;
+export const PROP_RADIUS = 200;
+
 let scape: Streetscape | null = null;
 
 const R = Math.ceil(RADIUS / PERIOD) + 1;
@@ -427,7 +440,7 @@ export function cityStreetscape(): Streetscape {
         const rot = alongX ? (sign < 0 ? Math.PI : 0) : sign < 0 ? -Math.PI / 2 : Math.PI / 2;
         const put = (kind: Prop['kind'], u: number) => {
           const p = alongX ? { x: bx + u, z: line } : { x: line, z: bz + u };
-          if (!keepClear(p.x, p.z)) props.push({ kind, ...p, rot });
+          if (!keepClear(p.x, p.z) && Math.hypot(p.x, p.z) <= PROP_RADIUS) props.push({ kind, ...p, rot });
         };
         if (k() < 0.4) put('bench', -9 + k() * 4);
         if (k() < 0.55) put('bin', 8 + k() * 4);
@@ -522,13 +535,18 @@ function solids(): Map<number, Area[]> {
   };
   const post = (x: number, z: number, r: number) => add({ minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r });
   const { lots, parks, gas } = cityLayout();
-  for (const l of lots) if (!l.hand) add(rect(l.x, l.z, l.w, l.d));
+  for (const l of lots) {
+    if (l.hand) continue;
+    add(rect(l.x, l.z, l.w, l.d));
+    if (l.yard) post(l.yard.x, l.yard.z, 0.3 * l.yard.s);
+  }
   for (const n of NEIGHBOURS) add(neighbourArea(n));
   if (gas) {
     for (const p of gas.pumps) add(p);
     // The canopy's two posts, at its far corners.
     post(gas.canopy.minX + 0.3, gas.canopy.minZ + 0.3, 0.3);
     post(gas.canopy.maxX - 0.3, gas.canopy.maxZ - 0.3, 0.3);
+    post(gas.sign.x, gas.sign.z, 0.12);
   }
   for (const p of parks) {
     // A kerb round the park, and the trees' trunks.
@@ -541,7 +559,7 @@ function solids(): Map<number, Area[]> {
     for (const t of p.trees) post(t.x, t.z, 0.3 * t.s);
   }
   const s = cityStreetscape();
-  for (const l of s.lamps) if (!l.hand) post(l.x, l.z, 0.2);
+  for (const l of s.lamps) if (!l.hand && Math.hypot(l.x, l.z) <= POST_RADIUS) post(l.x, l.z, 0.2);
   for (const p of s.poles) post(p.x, p.z, 0.2);
   for (const p of s.props) {
     if (p.kind === 'bench') {

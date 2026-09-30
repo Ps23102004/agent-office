@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, cityPaved, citySolids, cityStreetscape, lightPhase } from '../src/shared/city.js';
+import { NEIGHBOURS, PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, cityPaved, neighbourArea, citySolids, cityStreetscape, lightPhase, POST_RADIUS, PROP_RADIUS } from '../src/shared/city.js';
 import { LOT, SIDE_LOT, paved } from '../src/shared/garage.js';
 import { ROAD } from '../src/shared/layout.js';
 
@@ -81,4 +81,29 @@ test('the lights: never green both ways, and walking only while the cars across 
     }
     assert.ok(seenGreenX && seenGreenZ);
   }
+});
+
+test('the hand-built neighbours stand clear of every road and sidewalk', () => {
+  for (const n of NEIGHBOURS) {
+    const a = neighbourArea(n);
+    for (let x = a.minX; x <= a.maxX; x += 0.5) for (let z = a.minZ; z <= a.maxZ; z += 0.5) assert.ok(!cityPaved(x, z), `${n[0]},${n[1]} at ${x},${z}`);
+  }
+});
+
+test('a car cannot drive into the gas station shop, its pumps, sign or a house-yard tree', () => {
+  const { gas, lots } = cityLayout();
+  const shop = lots.find((l) => l.kind === 'gas')!;
+  const hit = (x: number, z: number) => citySolids(x, z, 0.1).length > 0;
+  assert.ok(hit(shop.x, shop.z), 'the shop');
+  assert.ok(hit(gas!.sign.x, gas!.sign.z), 'the sign pole');
+  assert.ok(hit((gas!.pumps[0].minX + gas!.pumps[0].maxX) / 2, (gas!.pumps[0].minZ + gas!.pumps[0].maxZ) / 2), 'a pump');
+  const yard = lots.find((l) => l.yard)!.yard!;
+  assert.ok(hit(yard.x, yard.z), 'a yard tree');
+});
+
+test('drawn furniture is exactly what is solid', () => {
+  const { props, lamps } = cityStreetscape();
+  assert.ok(props.every((p) => Math.hypot(p.x, p.z) <= PROP_RADIUS));
+  const far = lamps.find((l) => !l.hand && Math.hypot(l.x, l.z) > POST_RADIUS)!;
+  assert.deepEqual(citySolids(far.x, far.z, 0.1), []);
 });
