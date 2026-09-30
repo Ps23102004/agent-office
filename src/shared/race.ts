@@ -49,6 +49,8 @@ export const RACE = {
   slots: 8,
   /** Seconds the others get after the winner before the race ends without them. */
   grace: 30,
+  /** Seconds the results stay up once it's over, before the circuit's idle again (or until someone lines up for the next). */
+  results: 45,
 } as const;
 
 export function idleRace(): RaceState {

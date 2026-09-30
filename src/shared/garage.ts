@@ -119,9 +119,9 @@ export interface CarState extends CarPose {
   passenger?: string;
 }
 
-/** Every car in its spot, as the office starts. */
-export function parked(): CarState[] {
-  return CARS.map((c) => ({ x: c.x, z: c.z, rotY: c.rotY, speed: 0, steer: 0, slip: 0 }));
+/** Every car in its spot, as the office starts (the garage's, or `defs`: the race circuit's). */
+export function parked(defs: readonly CarDef[] = CARS): CarState[] {
+  return defs.map((c) => ({ x: c.x, z: c.z, rotY: c.rotY, speed: 0, steer: 0, slip: 0 }));
 }
 
 /** The pedals and the wheel: `gas` 1 forward, -1 back (braking first if you're going the other way), `turn` +1 hard left. */
@@ -287,8 +287,8 @@ export function paved(x: number, z: number): boolean {
   return PAVEMENT.some((b) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) || surfaceAt(x, z) !== 'water';
 }
 
-/** Whether the whole car is on land: its corners, and halfway along each side. */
-export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarKind = 'lambo'): boolean {
+/** Whether the whole car is on land (or on `where`, somewhere else a car can be): its corners, and halfway along each side. */
+export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarKind = 'lambo', where: (x: number, z: number) => boolean = paved): boolean {
   const w = SPECS[kind].width / 2;
   const l = SPECS[kind].length / 2;
   for (const [lx, lz] of [
@@ -302,7 +302,7 @@ export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarK
     [0, -l],
   ]) {
     const at = carPoint(p, lx, lz);
-    if (!paved(at.x, at.z)) return false;
+    if (!where(at.x, at.z)) return false;
   }
   return true;
 }
@@ -328,10 +328,12 @@ export function overlaps(p: { x: number; z: number; rotY: number }, b: Box, kind
 }
 
 /**
- * Whether the car can be at `p`: clear of all of `solids`. Nothing invisible stops it: it can roll on
- * into the sea (the driver's page sees it go under: client/driving.ts).
+ * Whether the car can be at `p`: clear of all of `solids`. Nothing invisible stops it in the city: it can
+ * roll on into the sea (the driver's page sees it go under: client/driving.ts). Given `where` (the race
+ * circuit, whose barriers are its edge), it must be on that too.
  */
-export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>, kind: CarKind = 'lambo'): boolean {
+export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>, kind: CarKind = 'lambo', where?: (x: number, z: number) => boolean): boolean {
+  if (where && !onPavement(p, kind, where)) return false;
   for (const b of solids) if (overlaps(p, b, kind)) return false;
   return true;
 }

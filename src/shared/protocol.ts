@@ -13,6 +13,7 @@ import type { JukeboxState } from './jukebox.js';
 import type { CustomMap } from './maps/index.js';
 import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
+import type { RaceState } from './race.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
 export type WorkerStatus =
@@ -1266,6 +1267,12 @@ export type ClientMsg =
   | { t: 'car.drive'; car: number; x: number; z: number; rotY: number; speed: number; steer: number; slip?: number }
   /** Honk the horn of the car you're in. */
   | { t: 'car.honk' }
+  /** At the race circuit, behind the wheel of one of its cars: line up on the grid (see shared/race.ts). */
+  | { t: 'race.join' }
+  /** On the grid: start the countdown. */
+  | { t: 'race.start' }
+  /** Pull out of the race (or off the grid). */
+  | { t: 'race.leave' }
   /** Give the dog on your floor a pat; it has to be within reach. */
   | { t: 'dog.pet' }
   /** Name the dog on your floor ('' gives it back its first name). */
@@ -1366,6 +1373,8 @@ export type ServerMsg =
   | { t: 'car.move'; car: number; x: number; z: number; rotY: number; speed: number; steer: number; slip?: number }
   /** Someone in a car on your floor honked its horn. */
   | { t: 'car.honk'; car: number }
+  /** The race at the circuit, whenever it changes (and as you come in): to everyone, wherever they are. */
+  | { t: 'race'; state: RaceState }
   | { t: 'jukebox'; state: JukeboxState }
   /** Who's at the arcade cabinet on your floor now, and the building's high scores. */
   | { t: 'cabinet'; state: CabinetState }

@@ -10,9 +10,11 @@ import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { BallState } from '../shared/hoop';
 import { parked, type CarSeat, type CarState } from '../shared/garage';
+import { CIRCUIT } from '../shared/circuit';
+import { idleRace, type RaceState } from '../shared/race';
 import { OFFICE_MAP, planOf, type MapPlan } from '../shared/maps';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars' | 'race';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -236,6 +238,8 @@ class Store {
    */
   cars: CarState[] = parked();
   carsAt: number[] = [];
+  /** The race at the circuit (shared/race.ts), as the office last said, wherever you are. */
+  race: RaceState = idleRace();
   /** Outside the windows; null until the server says. */
   sky: SkyState | null = null;
   /** The building's holiday decorations: the same on every floor. */
@@ -304,7 +308,8 @@ class Store {
   /** Everything on the floor you just arrived on, in place of the last one's. */
   private enter(v: FloorView) {
     this.floor = v.floor;
-    rememberFloor(v.floor);
+    // The race circuit isn't somewhere to come back to after a reload: you're back by its gate in the city.
+    if (v.floor !== CIRCUIT) rememberFloor(v.floor);
     this.project = v.project;
     this.workers = new Map(v.workers.map((w) => [w.id, w]));
     this.screens.clear(); // fresh full frames follow
@@ -536,6 +541,10 @@ class Store {
       case 'cars':
         this.setCars(msg.cars);
         this.emit('cars');
+        break;
+      case 'race':
+        this.race = msg.state;
+        this.emit('race');
         break;
       case 'car.move': {
         const c = this.cars[msg.car];

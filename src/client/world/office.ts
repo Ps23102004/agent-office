@@ -5,6 +5,7 @@ import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { buildStreetLife, type StreetLife } from './streetlife';
+import { buildCityGate } from './circuit';
 import { Fleet } from './cars';
 import { mergeByMaterial, mergeColored, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 import { ART_COUNT, blinds, blobShadows, onWallAt, setShadowFloors, userFrames, wallArt, type ArtItem, type Blob, type BlindItem } from './detail';
@@ -1552,6 +1553,11 @@ export function buildOffice(): Office {
   const life = buildStreetLife(night);
   life.group.position.y = STREET_Y;
   ground.add(life.group);
+  // W2: the gate to the race circuit, on its plaza behind the office (world/circuit.ts).
+  const raceGate = buildCityGate(STREET_Y);
+  raceGate.group.position.y = STREET_Y;
+  ground.add(raceGate.group);
+  groundColliders.push(...raceGate.colliders);
   const green = buildGreen(ground, groundColliders, night);
   group.add(ground);
   colliders.push(...groundColliders);
@@ -1972,6 +1978,7 @@ export function buildOffice(): Office {
   setLevel(0, 1);
 
   const update = (t: number, dt: number, people: Iterable<{ x: number; y: number; z: number }>) => {
+    raceGate.update(t);
     const near = new Set<Door>();
     for (const p of people) for (const d of doors) if (Math.abs(p.y - d.y) < 1.6 && Math.hypot(p.x - d.x, p.z - d.z) < 2.4) near.add(d);
     for (const d of doors) {
