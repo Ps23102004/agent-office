@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { ELEVATOR, ELEVATOR_FRONT, FLOOR, ROAD, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
+import { ELEVATOR, ELEVATOR_FRONT, FLOOR, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
 import { LOT, SIDE_LOT } from '../../shared/garage';
+import { NEIGHBOURS, neighbourArea, neighbourFacing } from '../../shared/city';
 import type { Collider } from './office';
+import { buildStreetCity } from './city';
 import { mergeByMaterial, mesh, textPlane, toon, toonUnique } from './toon';
 
 const G = STREET_Y;
@@ -259,36 +261,16 @@ export function streetLamp(parts: THREE.Group, night: NightParts, glass: THREE.M
 }
 
 /**
- * How far the grass and the road go, end to end: from the top floor the haze is up to HAZE_MAX off
- * (see world/sky.ts), and their ends must be further than that even at the edge of the view.
+ * Where the street lamps out front stand (x), along the near sidewalk (z 22.2) and the far one
+ * (31.8), clear of the crossings of the city's own streets at x = ±28 (shared/city.ts).
  */
-const REACH = 1200;
-
-/**
- * The neighbours' buildings: [x, z, width, height, depth, paint], across the street and further out
- * behind and beside the office. The gap across the street from the balcony is the golf hole's
- * (GOLF_HOLE in layout).
- */
-const NEIGHBOURS: [number, number, number, number, number, string][] = [
-  [-38, 45, 12, 10, 9, '#8ecae6'],
-  [-22, 46, 14, 16, 10, '#ffb4a2'],
-  [12, 47, 16, 19, 12, '#cdb4db'],
-  [30, 45, 12, 9, 9, '#ffd6a5'],
-  [-20, -42, 18, 14, 10, '#a2d2ff'],
-  [8, -44, 16, 20, 12, '#f4acb7'],
-  [-48, -6, 10, 12, 16, '#ffe5b4'],
-  [50, 4, 10, 15, 18, '#bde0fe'],
-];
-
-/** Which way a neighbour at (x, z) is turned: its front to the office. */
-const facing = (x: number, z: number) => (Math.abs(x) > 40 ? (x > 0 ? -Math.PI / 2 : Math.PI / 2) : z > 0 ? Math.PI : 0);
+export const STREET_LAMPS = { north: [-40, -16, -4, 8, 16, 40], south: [-37, -19, -4, 8, 20, 38] } as const;
 
 /** The neighbours' footprints, and how tall each stands (roof cap included) above the street. */
 export function neighbourBoxes(): { minX: number; maxX: number; minZ: number; maxZ: number; top: number }[] {
-  return NEIGHBOURS.map(([x, z, w, h, d]) => {
-    // Turned a quarter, its width runs along z.
-    const [hx, hz] = Math.abs(Math.sin(facing(x, z))) > 0.5 ? [d / 2, w / 2] : [w / 2, d / 2];
-    return { minX: x - hx - 0.2, maxX: x + hx + 0.2, minZ: z - hz - 0.2, maxZ: z + hz + 0.2, top: h + 0.4 };
+  return NEIGHBOURS.map((n) => {
+    const a = neighbourArea(n);
+    return { minX: a.minX - 0.2, maxX: a.maxX + 0.2, minZ: a.minZ - 0.2, maxZ: a.maxZ + 0.2, top: n[3] + 0.4 };
   });
 }
 
@@ -297,11 +279,11 @@ export function neighbourBoxes(): { minX: number; maxX: number; minZ: number; ma
  * sidewalks and street lamps, trees and neighbours' buildings, and in `sky` some clouds.
  */
 export function buildStreet(group: THREE.Group, colliders: Collider[], night: NightParts, sky: THREE.Group) {
-  const lawn = new THREE.Mesh(new THREE.PlaneGeometry(REACH, REACH), toon('#a7d98b'));
-  lawn.rotation.x = -Math.PI / 2;
-  lawn.position.y = G - 0.03;
-  lawn.receiveShadow = true;
-  group.add(lawn);
+  // The city's own streets, sidewalks and blocks all round (world/city.ts), the ground a hair under the
+  // lots laid on it here, so they win. It's drawn at full size here; the roof sees it from far above.
+  const city = buildStreetCity(night);
+  city.position.y = G - 0.03;
+  group.add(city);
   // What you stand on anywhere out there, the lot and the road and the grass alike.
   colliders.push({ minX: -200, maxX: 200, minZ: -200, maxZ: 200, bottom: G - 1, top: G });
 
@@ -313,42 +295,23 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
     group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, y, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
   }
 
-  // The road: asphalt, white edge lines and a dashed yellow middle.
-  const road = canvasTexture(256, 128, (g) => {
-    g.fillStyle = '#5b606c';
-    g.fillRect(0, 0, 256, 128);
-    g.fillStyle = '#f1f1f1';
-    g.fillRect(0, 6, 256, 4);
-    g.fillRect(0, 118, 256, 4);
-    g.fillStyle = '#ffd166';
-    g.fillRect(0, 61, 150, 6);
-  });
-  road.wrapS = THREE.RepeatWrapping;
-  road.repeat.set(REACH / 8, 1);
-  group.add(groundPlane(REACH, ROAD.maxZ - ROAD.minZ, 0, G - 0.008, (ROAD.minZ + ROAD.maxZ) / 2, road));
-  for (const [z0, z1] of [
-    [21, ROAD.minZ],
-    [ROAD.maxZ, ROAD.maxZ + 2],
-  ]) {
-    group.add(mesh(box(REACH, 0.08, z1 - z0), toon('#e3ddd0'), 0, G, (z0 + z1) / 2));
-  }
   const forest = new THREE.Group();
 
   // Trees along the sidewalks and around the building.
   const trees: [number, number, number][] = [
-    [-34, 22, 1.1],
-    [-22, 22, 1],
-    [22, 22, 1.05],
-    [34, 22, 0.95],
+    [-38, 22, 1.1],
+    [-19.5, 22, 1],
+    [19.5, 22, 1.05],
+    [38, 22, 0.95],
     [-40, 32.5, 1.1],
     [-12, 32.5, 1],
     [14, 32.5, 1.15],
     [42, 32.5, 1],
-    [-27, -8, 1.2],
-    [-29, 4, 1],
-    [-26, 14, 0.9],
-    [29, -6, 1.1],
-    [30, 6, 1.25],
+    [-20.5, -8, 1.2],
+    [-20.5, 9, 1],
+    [-20.5, 14, 0.9],
+    [21, -6, 1.1],
+    [21, 6, 1.25],
     [-12, -22, 1.2],
     [4, -24, 1],
     // Clear of the back office, when a floor's built out into one (see WING).
@@ -367,15 +330,15 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
   // Street lamps down both sidewalks, their arms out over the road.
   const lamps = new THREE.Group();
   const glass = bulb(night, '#fff3d6');
-  for (const x of [-40, -28, -16, -4, 8, 16, 28, 40]) streetLamp(lamps, night, glass, colliders, x, 22.2, 1);
-  for (const x of [-34, -22, -4, 8, 26, 36]) streetLamp(lamps, night, glass, colliders, x, 31.8, -1);
+  for (const x of STREET_LAMPS.north) streetLamp(lamps, night, glass, colliders, x, 22.2, 1);
+  for (const x of STREET_LAMPS.south) streetLamp(lamps, night, glass, colliders, x, 31.8, -1);
   group.add(mergeByMaterial(lamps));
 
   // The neighbours: across the street, and further out behind and beside the office.
   for (const [x, z, w, h, d, color] of NEIGHBOURS) {
     const b = building(w, h, d, color, night.windows);
     b.position.set(x, G, z);
-    b.rotation.y = facing(x, z);
+    b.rotation.y = neighbourFacing(x, z);
     group.add(b);
   }
 

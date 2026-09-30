@@ -743,8 +743,11 @@ export class Sky {
     const precip = Math.max(this.rain, this.snow);
     // How far off the haze is down on the street; the higher up, the thinner it is (see HAZE), so
     // the street never goes into it from the top floors, and from the roof you see across the city.
-    fog.near = lerp(40, 3, this.fog) * (1 - 0.4 * precip);
-    fog.far = lerp(90, 28, this.fog) * (1 - 0.3 * precip);
+    // Out in the open (not up on the roof, nor in a hall) the city goes on for blocks, so on a clear day it
+    // shows through the haze as far as HAZE_MAX.
+    const open = !this.roof && !this.indoors;
+    fog.near = lerp(open ? 80 : 40, 3, this.fog) * (1 - 0.4 * precip);
+    fog.far = lerp(open ? 250 : 90, 28, this.fog) * (1 - 0.3 * precip);
     uniforms.skyStreet.value = this.roof ? this.roofStreet : this.indoors ? 0 : this.night.street;
     this.night.clouds.color.copy(C.white).lerp(C.cloudGrey, this.cover).lerp(SPOOKY.cloud, sp);
     this.night.clouds.visible = this.fog < 0.6;

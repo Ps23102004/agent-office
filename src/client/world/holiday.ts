@@ -4,6 +4,7 @@ import { BALCONY, DESKS, DESK_SIZE, EXIT_STAIRS, FLOOR, PLANTS, STREET_Y, WALL_H
 import type { Theme } from '../../shared/protocol';
 import { batWingGeometry, glowTexture } from './costumes';
 import { plantLeaves, type Collider, type Office } from './office';
+import { STREET_LAMPS } from './outside';
 import { SPOOKY_MOON } from './sky';
 import { mergeByMaterial, mesh, textPlane, toon, toonUnique } from './toon';
 
@@ -60,8 +61,8 @@ function pumpkinSpots(): Spot[] {
   spots.push([BALCONY.maxX - 0.4, 0, BALCONY.maxZ - 0.4, 0.2, FACE.north]);
   spots.push([EXIT_STAIRS.minX + 0.3, 0, EXIT_STAIRS.landingZ0 + 0.25, 0.17, FACE.south]);
   // Down the street, at the foot of every lamp (see buildStreet), facing the office.
-  for (const x of [-40, -28, -16, -4, 8, 16, 28, 40]) spots.push([x + 0.6, G + 0.04, 21.7, 0.3, FACE.north]);
-  for (const x of [-34, -22, -4, 8, 26, 36]) spots.push([x + 0.6, G + 0.04, 32.3, 0.3, FACE.north]);
+  for (const x of STREET_LAMPS.north) spots.push([x + 0.6, G + 0.04, 21.7, 0.3, FACE.north]);
+  for (const x of STREET_LAMPS.south) spots.push([x + 0.6, G + 0.04, 32.3, 0.3, FACE.north]);
   // Heaps of them out front, either side of the garage, and at the balcony's posts.
   for (const sx of [-1, 1]) {
     spots.push([sx * 17.2, G, 19.2, 0.55, FACE.north], [sx * 18.3, G, 19.6, 0.38, FACE.north + sx * 0.4], [sx * 16.3, G, 19.9, 0.3, FACE.north - sx * 0.3]);
