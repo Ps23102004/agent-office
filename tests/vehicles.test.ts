@@ -137,3 +137,40 @@ test('a motorbike flat out on full lock turns no tighter than its tires hold', (
   for (let i = 0; i < 30; i++) p = drive(p, { gas: 1, turn: 1, brake: false }, 1 / 30, 'motorbike');
   assert.ok(Math.abs(p.speed * (p.yaw ?? 0)) <= SPECS.motorbike.grip * 9.81 + 1e-6, `lateral ${p.speed * (p.yaw ?? 0)}`);
 });
+
+// "The tires come out": the frame rolled about the ground but the wheels rolled about their hubs, and the rider about their hips.
+test('at full lean a bike\'s wheels stay on its axles and its rider stays on the saddle', async () => {
+  const { Person } = await import('../src/client/world/character.js');
+  const { HIPS } = await import('../src/client/player.js');
+    for (const kind of ['motorbike', 'bicycle'] as const) {
+    const i = CARS.findIndex((c) => c.kind === kind);
+    const fleet = new Fleet([], []);
+    const v = fleet.cars[i];
+    const spec = SPECS[kind];
+    for (const steer of [0.5, -0.5]) {
+      fleet.place(i, { ...still, speed: 14, steer });
+      for (let f = 0; f < 60; f++) fleet.update(1 / 30, [], [], 0, { car: i, driving: true }, new THREE.Vector3(0, STREET_Y, 0));
+      assert.ok(Math.abs(v.body.rotation.z) > 0.3, `${kind} leans ${v.body.rotation.z}`);
+      // A Person needs a canvas; its ride pose only touches body and limbs, so stand in for those.
+      const limb = () => new THREE.Group();
+      const rider = { root: new THREE.Group(), body: new THREE.Group(), armL: limb(), armR: limb(), legL: limb(), legR: limb(), ride: Person.prototype.ride };
+      rider.root.add(rider.body);
+      fleet.poseRider(rider as never, i, 'driver');
+      v.root.updateMatrixWorld(true);
+      // Each hub is exactly where the frame's axle is (the frame leans about the ground line).
+      for (const w of v.wheels) {
+        const axle = new THREE.Vector3(0, w.position.y, w.userData.front ? spec.wheelbase / 2 : -spec.wheelbase / 2);
+        const want = v.body.localToWorld(axle);
+        const got = w.getWorldPosition(new THREE.Vector3());
+        assert.ok(got.distanceTo(want) < 0.02, `${kind} hub ${got.distanceTo(want)} off`);
+      }
+      // The rider's hips sit over the saddle, not out to the side.
+      rider.root.position.copy(v.root.position);
+      rider.root.rotation.y = v.root.rotation.y;
+      rider.root.updateMatrixWorld(true);
+      const hips = rider.body.localToWorld(new THREE.Vector3(0, HIPS, 0));
+      const seat = v.body.localToWorld(new THREE.Vector3(0, 0.82, 0));
+      assert.ok(Math.abs(hips.x - seat.x) < 0.05, `${kind} rider ${hips.x - seat.x} m off the saddle`);
+    }
+  }
+});

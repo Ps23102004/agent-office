@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, WING, inWing, wingMinZ, type SeatPlace } from '../shared/layout';
+import { citySolids } from '../shared/city';
 import type { ViewMode } from './state';
 import type { Collider } from './world/office';
 
 const RADIUS = 0.32;
+const NONE: Collider[] = [];
 /** Top of your head above your feet, for walking under the loft. */
 const HEIGHT = 1.7;
 /** The tallest ledge you walk up (or down) without jumping, like a stair. */
@@ -592,7 +594,7 @@ export class PlayerController {
   /** What stands in your way at (x, z) with your feet at `y`, or null. */
   private blocker(x: number, z: number, y: number, allowEscape = false): Collider | null {
     let hit: Collider | null = null;
-    for (const c of this.colliders) {
+    for (const c of [...this.colliders, ...this.cityNear(x, z, y)]) {
       // Stood on top of it, or passing beneath it.
       if (y >= c.top - 0.05 || y + HEIGHT <= (c.bottom ?? 0)) continue;
       // A spawn or height change can leave the body overlapping a solid. Only
@@ -603,6 +605,20 @@ export class PlayerController {
       if (!hit || c.top > hit.top) hit = c;
     }
     return hit;
+  }
+
+  /** The city's buildings, lamps, benches and trunks round (x, z), as colliders: only while you're down on the street. */
+  private cityBoxes: Collider[] = [];
+  private cityAt = { x: 1e9, z: 1e9, street: NaN };
+  private cityNear(x: number, z: number, y: number): Collider[] {
+    if (y > this.street + 2.5) return NONE;
+    const a = this.cityAt;
+    // Fetched for 10 m round, and again once you've walked 4 m from where it was taken.
+    if (Math.hypot(x - a.x, z - a.z) > 4 || a.street !== this.street) {
+      this.cityAt = { x, z, street: this.street };
+      this.cityBoxes = citySolids(x, z, 10).map((c) => ({ ...c, bottom: this.street, top: this.street + 100 }));
+    }
+    return this.cityBoxes;
   }
 
   private tryMove(x: number, z: number) {

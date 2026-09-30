@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { PERIOD, RADIUS, STREET_X, STREET_Z } from '../src/shared/city.js';
-import { MAX_PEOPLE, MAX_VEHICLES, buildStreetLife, canGo, canWalk, crossRange, dodge, gapAhead, lightPhase, nextCrossing, route, safeSpeed, stopForLight, yieldsTo, type Road } from '../src/client/world/streetlife.js';
+import { MAX_PEOPLE, MAX_VEHICLES, activity, buildStreetLife, canGo, canWalk, carOut, carProgress, crossRange, dodge, gapAhead, ghostCars, ghostPeds, hourAt, lightPhase, loopAt, loopLength, loopProgress, loopRoute, nextCrossing, pedAt, pedOut, ringAt, route, safeSpeed, stopForLight, trafficDensity, yieldsTo, type Road } from '../src/client/world/streetlife.js';
 
 // The pure rules of the street life (lights, lanes, following, dodging) and a whole simulated minute of it, no WebGL.
 
@@ -125,13 +125,13 @@ test('a minute of street life: within budget, everything finite, no cars on top 
   life.group.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) meshes++;
   });
-  assert.ok(meshes <= 15, `${meshes} draw calls`);
+  assert.ok(meshes <= 16, `${meshes} draw calls`);
   const near = { x: 0, z: STREET_Z };
   const carsAt = new Set<number>();
   let t = 1000;
   for (let i = 0; i < 60 * 30; i++) {
     t += 1 / 30;
-    life.update(t, 1 / 30, 0.2, near, [{ x: near.x, z: near.z, vx: 0, vz: 0 }]);
+    life.update(t, 1 / 30, 0.2, near, [{ x: near.x, z: near.z, vx: 0, vz: 0 }], 12.5);
     if (i % 30) continue;
     const on = life.vehicles.filter((v) => v.on);
     assert.ok(on.length <= MAX_VEHICLES && life.people.length <= MAX_PEOPLE);
@@ -151,7 +151,125 @@ test('a minute of street life: within budget, everything finite, no cars on top 
   const p = life.people.find((p) => p.on && p.state !== 'down')!;
   assert.equal(life.hit({ x: p.x, z: p.z }, 8), 'person');
   assert.equal(p.state, 'down');
-  for (let i = 0; i < 90; i++) life.update((t += 1 / 30), 1 / 30, 0, near);
+  for (let i = 0; i < 90; i++) life.update((t += 1 / 30), 1 / 30, 0, near, undefined, 12.5);
   assert.notEqual(p.state, 'down');
   assert.equal(p.tilt, 0);
+});
+
+test('the day has rush hours, a lunch, and a quiet night', () => {
+  assert.ok(trafficDensity(8.2) > trafficDensity(3) * 3 && trafficDensity(17.6) > trafficDensity(14));
+  assert.ok(trafficDensity(3) < 0.2 && trafficDensity(17.6) >= 0.95);
+  assert.ok(activity('commuter', 8.2) > 0.9 && activity('commuter', 3) < 0.01);
+  assert.ok(activity('lunch', 12.8) > 0.9 && activity('lunch', 8) < 0.1);
+  assert.ok(activity('jogger', 7) > 0.9 && activity('jogger', 13) < 0.1);
+  // How many are out: a crowd at lunch and on the way home, almost no one at 3 a.m.
+  const out = (h: number) => ghostPeds().filter((g) => pedOut(g, h)).length;
+  assert.ok(out(3) < 15 && out(12.8) > 120 && out(17.8) > 150);
+  const cars = (h: number) => ghostCars().filter((g) => carOut(g, h)).length;
+  assert.ok(cars(8.2) > 2 * cars(3));
+  // A clock in another zone.
+  assert.ok(Math.abs(hourAt(0, 330) - 5.5) < 1e-9 && Math.abs(hourAt(3600 * 23, 120) - 1) < 1e-9);
+});
+
+test('every car ghost goes round a loop of streets that is closed, continuous and the same for everyone', () => {
+  const gs = ghostCars();
+  assert.equal(gs.length, ghostCars().length);
+  for (const g of gs.slice(0, 60)) {
+    const P = loopLength(g.loop);
+    // Turns at each corner go on to a road that is on the loop, and the loop comes back to where it began.
+    let r = loopAt(g.loop, 1) as Road & { s: number };
+    for (let i = 0; i < 4; i++) {
+      const at = loopAt(g.loop, 1 + i * 0.25 * P);
+      assert.ok(loopProgress(g.loop, at, at.s) !== null);
+    }
+    const there = loopRoute(g.loop, { axis: r.axis, dir: r.dir, line: r.line }, nextCrossing(r.s, r.dir, r.axis === 'x' ? STREET_X : STREET_Z));
+    assert.ok(there);
+    assert.deepEqual(loopAt(g.loop, P + 5), loopAt(g.loop, 5));
+    assert.ok(carProgress(g, 1.7e9) >= 0 && carProgress(g, 1.7e9) < P);
+    // Half a minute on, it has moved its speed.
+    assert.ok(Math.abs(((carProgress(g, 1.7e9 + 30) - carProgress(g, 1.7e9) + P) % P) - g.speed * 30) < 1e-3 || g.speed * 30 > P);
+  }
+});
+
+test('people walk a ring of sidewalk with no jumps, wait their turn at a crossing, and stop where the ghost stops', () => {
+  const gs = ghostPeds();
+  assert.equal(gs.length, ghostPeds().length);
+  let withStops = 0;
+  for (const g of gs) {
+    const { ring } = g;
+    let last = ringAt(ring, 0);
+    for (let S = 0.5; S <= ring.P; S += 0.5) {
+      const at = ringAt(ring, S);
+      assert.ok(Math.hypot(at.x - last.x, at.z - last.z) < 0.52, `ghost ${g.j} jumps at ${S}`);
+      last = at;
+    }
+    // Stops are in order, on a side, and not inside a street.
+    let prev = -1;
+    for (const s of g.stops) {
+      assert.ok(s.off > prev && s.off < ring.P && s.dwell > 0);
+      assert.ok(!ring.crossings.some((c) => s.off > c.o0 && s.off < c.o1), 'stopped in the road');
+      prev = s.off;
+    }
+    if (g.stops.length) withStops++;
+    // Time runs one way: however the day is cut up, they never go back.
+    let R = -1;
+    for (let t = 1.7e9; t < 1.7e9 + g.cycle * 2; t += 7) {
+      const a = pedAt(g, t);
+      assert.ok(a.R >= R - 1e-6, `ghost ${g.j} goes back`);
+      R = a.R;
+    }
+  }
+  assert.ok(withStops > gs.length * 0.7);
+  const kinds = new Set(gs.flatMap((g) => g.stops.map((s) => s.kind)));
+  for (const k of ['door', 'bench', 'look'] as const) assert.ok(kinds.has(k), `somebody goes to a ${k}`);
+});
+
+test('two pages that never spoke agree on the street: the same people in the same places, the same cars where they are near', () => {
+  const run = (near: { x: number; z: number }, dt: number) => {
+    const life = buildStreetLife();
+    let t = 1.7e9;
+    while (t < 1.7e9 + 150) {
+      t += dt;
+      life.update(t, dt, 0, near, [{ ...near, vx: 0, vz: 0 }], 12.5);
+    }
+    return life;
+  };
+  const a = run({ x: 14, z: 0 }, 1 / 30);
+  const b = run({ x: 40, z: 40 }, 1 / 20);
+  let people = 0;
+  let together = 0;
+  for (const p of a.people) {
+    const q = b.people.find((q) => q.on && q.gj === p.gj && q.pairSide === p.pairSide);
+    if (!p.on || !q || p.state === 'down') continue;
+    people++;
+    // (One held at a red light is a while behind the other, then hurries to catch up.)
+    if (Math.hypot(p.x - q.x, p.z - q.z) < 3) together++;
+  }
+  assert.ok(people > 10 && together >= people * 0.75, `${together}/${people} people in the same place`);
+  let shared = 0;
+  let close = 0;
+  for (const v of a.vehicles) {
+    const w = b.vehicles.find((w) => w.on && w.gj === v.gj);
+    if (!v.on || !w || Math.hypot(v.x - 14, v.z) > 90 || Math.hypot(w.x - 40, w.z - 40) > 90) continue;
+    shared++;
+    if (Math.hypot(v.x - w.x, v.z - w.z) < 12) close++;
+  }
+  assert.ok(shared >= 3 && close >= shared * 0.6, `${close}/${shared} cars agree`);
+});
+
+test('people go in at doors, sit on benches and stand about; at night hardly anyone is out', () => {
+  const seen = new Set<string>();
+  const life = buildStreetLife();
+  let t = 1.7e9;
+  for (let i = 0; i < 30 * 240; i++) {
+    t += 1 / 30;
+    life.update(t, 1 / 30, 0, { x: 14, z: 0 }, [{ x: 14, z: 0, vx: 0, vz: 0 }], 12.5);
+    if (i % 15) continue;
+    for (const p of life.people) if (p.on) seen.add(p.state + (p.state === 'door' && p.dr >= 1 ? ':inside' : ''));
+  }
+  for (const s of ['walk', 'cross', 'wait', 'sit', 'door:inside']) assert.ok(seen.has(s), `${s} never happened (${[...seen]})`);
+  const night = buildStreetLife();
+  t = 1.7e9;
+  for (let i = 0; i < 30 * 30; i++) night.update((t += 1 / 30), 1 / 30, 1, { x: 14, z: 0 }, undefined, 3);
+  assert.ok(night.people.filter((p) => p.on).length <= 6 && night.vehicles.filter((v) => v.on).length < 16);
 });
