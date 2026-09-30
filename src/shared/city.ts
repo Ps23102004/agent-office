@@ -687,7 +687,8 @@ const cellKey = (cx: number, cz: number) => (cx + 4096) * 8192 + (cz + 4096);
 function solids(): Map<number, Area[]> {
   if (index) return index;
   const map = new Map<number, Area[]>();
-  const add = (a: Area) => {
+  const add = (a: Area, h = TALL) => {
+    heights.set(a, h);
     for (let cx = Math.floor(a.minX / CELL); cx <= Math.floor(a.maxX / CELL); cx++) {
       for (let cz = Math.floor(a.minZ / CELL); cz <= Math.floor(a.maxZ / CELL); cz++) {
         const k = cellKey(cx, cz);
@@ -714,9 +715,13 @@ function solids(): Map<number, Area[]> {
   }
   for (const p of parks) {
     // A hedge round the park, open where its paths come out, and the trees' trunks.
-    for (const a of parkHedges(p)) add(a);
+    for (const a of parkHedges(p)) add(a, 0.6);
     for (const t of p.trees) post(t.x, t.z, 0.3 * t.s);
   }
+/** How tall a solid is (m), for people on foot: a hedge or a bench can be hopped, a building can't. */
+const heights = new WeakMap<Area, number>();
+const TALL = 100;
+export const solidHeight = (a: Area): number => heights.get(a) ?? TALL;
   post(LIGHTHOUSE.x, LIGHTHOUSE.z, LIGHTHOUSE.radius);
   for (const s of [-1, 1]) {
     const x = PIER.x + s * (PIER.width / 2 - 0.1);
@@ -728,8 +733,8 @@ function solids(): Map<number, Area[]> {
   for (const p of s.props) {
     if (p.kind === 'bench') {
       const alongZ = Math.abs(Math.sin(p.rot)) > 0.5;
-      add(rect(p.x, p.z, alongZ ? 0.6 : 1.7, alongZ ? 1.7 : 0.6));
-    } else post(p.x, p.z, p.kind === 'bin' ? 0.3 : 0.2);
+      add(rect(p.x, p.z, alongZ ? 0.6 : 1.7, alongZ ? 1.7 : 0.6), 0.5);
+    } else add(rect(p.x, p.z, p.kind === 'bin' ? 0.6 : 0.4, p.kind === 'bin' ? 0.6 : 0.4), p.kind === 'bin' ? 0.9 : 0.6);
   }
   return (index = map);
 }

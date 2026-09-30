@@ -1176,6 +1176,9 @@ export class Person {
 
   /** `pace` speeds up the walk cycle for someone walking faster than usual. */
   update(dt: number, t: number, moving: boolean, airborne: boolean, pace = 1) {
+    // Off a bike (ride sets this after update, every frame): no sideways lean offset left over.
+    this.body.position.x = 0;
+    this.body.position.z = 0;
     const target = moving ? 1 : 0;
     this.walkPhase += dt * 11 * target * pace;
     const swing = Math.sin(this.walkPhase) * 0.7 * target;

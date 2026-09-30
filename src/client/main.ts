@@ -4828,6 +4828,7 @@ function frame(ts?: number) {
   // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
   if (inOffice() && !upTop && !atCircuit) {
     const pose = driver.driving ? driver.pose : null;
+  player.city = inOffice() && !upTop && !atCircuit; // W3: the city's solids are for the office's street world only
     const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
     office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid, sky.clockHour()); // W3: people and traffic keep the office's hours

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { PlayerController } from '../src/client/player.js';
 import type { Collider } from '../src/client/world/office.js';
-import { cityLayout, citySolids } from '../src/shared/city.js';
+import { cityLayout, citySolids, parkHedges, solidHeight } from '../src/shared/city.js';
 import { BALCONY, FLOOR, LOFT, SEATING_BY_ID, SLAB, STAIRS, STREET_Y, seatAt, seatPlace } from '../src/shared/layout.js';
 
 /** The office floor: upstairs, over the garage, so off it you'd drop to the street. */
@@ -211,6 +211,7 @@ test('walking on the street, you are stopped by a city building instead of walki
   const { player, keys, frames } = controller(t, []);
   const lot = cityLayout().lots.find((l) => !l.hand && citySolids(l.x, l.z + l.d / 2 + 1.5, 0.4).length === 0)!;
   player.street = STREET_Y;
+  player.city = true;
   player.pos.set(lot.x, STREET_Y, lot.z + lot.d / 2 + 1.5);
   player.grounded = true;
   keys('KeyW');
@@ -221,4 +222,27 @@ test('walking on the street, you are stopped by a city building instead of walki
   player.grounded = true;
   frames(60);
   assert.ok(player.pos.z < lot.z + lot.d / 2, 'up on an office floor nothing of the city is in the way');
+});
+
+test('a hedge or a bench can be hopped, a building cannot; and the city is only there in the street world', (t) => {
+  const { player, keys, frames } = controller(t, []);
+  const park = cityLayout().parks[0];
+  const hedge = parkHedges(park).find((a) => a.maxZ - a.minZ < 1)!;
+  assert.ok(solidHeight(citySolids((hedge.minX + hedge.maxX) / 2, (hedge.minZ + hedge.maxZ) / 2, 0.01)[0]) < 1);
+  const lot = cityLayout().lots.find((l) => !l.hand)!;
+  assert.ok(citySolids(lot.x, lot.z, 1).some((a) => solidHeight(a) >= 100));
+  player.street = STREET_Y;
+  player.city = true;
+  const mx = (hedge.minX + hedge.maxX) / 2;
+  player.pos.set(mx, STREET_Y, hedge.minZ - 1);
+  player.grounded = true;
+  keys('KeyS');
+  frames(20);
+  // Held by the hedge on foot...
+  assert.ok(player.pos.z < hedge.minZ + 0.2 || player.pos.z > hedge.maxZ, 'walked through the hedge');
+  // ...but not in a map of its own (the castle has street 0 and no city).
+  player.city = false;
+  player.pos.set(mx, STREET_Y, hedge.minZ - 1);
+  frames(120);
+  assert.ok(player.pos.z > hedge.maxZ, 'the hedge is only in the city');
 });

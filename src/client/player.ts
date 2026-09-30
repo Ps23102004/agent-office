@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, WING, inWing, wingMinZ, type SeatPlace } from '../shared/layout';
-import { citySolids } from '../shared/city';
+import { citySolids, solidHeight } from '../shared/city';
 import type { ViewMode } from './state';
 import type { Collider } from './world/office';
 
@@ -437,7 +437,7 @@ export class PlayerController {
     }
 
     // Never below the street: past the edge of the grass there's nothing else to stand on.
-    const ground = Math.max(groundAt(this.colliders, this.pos.x, this.pos.z, this.pos.y), this.street);
+    const ground = Math.max(groundAt(this.colliders, this.pos.x, this.pos.z, this.pos.y), groundAt(this.cityNear(this.pos.x, this.pos.z, this.pos.y), this.pos.x, this.pos.z, this.pos.y), this.street);
     const jump = this.enabled && k.has('Space') && this.grounded;
     if (jump) {
       this.vy = JUMP_V * this.jumpBoost;
@@ -610,13 +610,15 @@ export class PlayerController {
   /** The city's buildings, lamps, benches and trunks round (x, z), as colliders: only while you're down on the street. */
   private cityBoxes: Collider[] = [];
   private cityAt = { x: 1e9, z: 1e9, street: NaN };
+  /** Whether this is the office's street world (not a map of its own, the roof or the circuit): set by main. */
+  city = false;
   private cityNear(x: number, z: number, y: number): Collider[] {
-    if (y > this.street + 2.5) return NONE;
+    if (!this.city || y > this.street + 2.5) return NONE;
     const a = this.cityAt;
     // Fetched for 10 m round, and again once you've walked 4 m from where it was taken.
     if (Math.hypot(x - a.x, z - a.z) > 4 || a.street !== this.street) {
       this.cityAt = { x, z, street: this.street };
-      this.cityBoxes = citySolids(x, z, 10).map((c) => ({ ...c, bottom: this.street, top: this.street + 100 }));
+      this.cityBoxes = citySolids(x, z, 10).map((c) => ({ ...c, bottom: this.street, top: this.street + solidHeight(c) }));
     }
     return this.cityBoxes;
   }

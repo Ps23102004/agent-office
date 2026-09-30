@@ -174,3 +174,38 @@ test('at full lean a bike\'s wheels stay on its axles and its rider stays on the
     }
   }
 });
+
+// A car's springs move its body, not its wheels: however it rolls, dives or bobs, the tires stay on the road.
+test('every car tire stays on the ground at speed with steer, and under hard braking', () => {
+  for (const kind of ['lambo', 'ferrari'] as const) {
+    const i = CARS.findIndex((c) => c.kind === kind);
+    const fleet = new Fleet([], []);
+    const v = fleet.cars[i];
+    const low = () => {
+      v.root.updateMatrixWorld(true);
+      return v.wheels.map((w) => {
+        let min = Infinity;
+        w.traverse((o) => {
+          const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+          if (!g?.attributes.position) return;
+          const p = g.attributes.position;
+          for (let n = 0; n < p.count; n++) min = Math.min(min, new THREE.Vector3().fromBufferAttribute(p, n).applyMatrix4(o.matrixWorld).y);
+        });
+        return min - v.root.position.y;
+      });
+    };
+    const step = (speed: number, steer: number, frames: number) => {
+      for (let f = 0; f < frames; f++) {
+        fleet.place(i, { ...still, speed: speed + (f === 0 ? 0 : 0), steer });
+        fleet.update(1 / 30, [], [], 0, { car: i, driving: true }, new THREE.Vector3(0, STREET_Y, 0));
+        for (const y of low()) assert.ok(Math.abs(y) < 0.01, `${kind} tire ${y} m off the road`);
+      }
+    };
+    step(35, 0.4, 30);
+    assert.ok(Math.abs(v.body.rotation.z) > 0.02, 'the body rolls');
+    // Flat out to stopped in one step: a hard dive on the nose.
+    step(0, 0, 1);
+    assert.ok(Math.abs(v.body.rotation.x) > 0.01, 'the nose dives');
+    step(0, 0, 10);
+  }
+});

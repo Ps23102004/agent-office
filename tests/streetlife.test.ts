@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { PERIOD, RADIUS, STREET_X, STREET_Z } from '../src/shared/city.js';
-import { MAX_PEOPLE, MAX_VEHICLES, activity, buildStreetLife, canGo, canWalk, carOut, carProgress, crossRange, dodge, gapAhead, ghostCars, ghostPeds, hourAt, lightPhase, loopAt, loopLength, loopProgress, loopRoute, nextCrossing, pedAt, pedOut, ringAt, route, safeSpeed, stopForLight, trafficDensity, yieldsTo, type Road } from '../src/client/world/streetlife.js';
+import { PERIOD, RADIUS, STREET_X, STREET_Z, citySolids } from '../src/shared/city.js';
+import { MAX_PEOPLE, MAX_VEHICLES, activity, busStops, buildStreetLife, canGo, canWalk, carOut, carProgress, crossRange, dodge, gapAhead, ghostCars, ghostPeds, hourAt, lightPhase, loopAt, loopLength, loopProgress, loopRoute, nextCrossing, pedAt, pedOut, ringAt, route, safeSpeed, stopForLight, trafficDensity, yieldsTo, type Road } from '../src/client/world/streetlife.js';
 
 // The pure rules of the street life (lights, lanes, following, dodging) and a whole simulated minute of it, no WebGL.
 
@@ -272,4 +272,50 @@ test('people go in at doors, sit on benches and stand about; at night hardly any
   t = 1.7e9;
   for (let i = 0; i < 30 * 30; i++) night.update((t += 1 / 30), 1 / 30, 1, { x: 14, z: 0 }, undefined, 3);
   assert.ok(night.people.filter((p) => p.on).length <= 6 && night.vehicles.filter((v) => v.on).length < 16);
+});
+
+test('a ghost looks the same on every page, whichever slot draws it; a slept tab starts its people over', () => {
+  const run = (near: { x: number; z: number }, jump = 0) => {
+    const life = buildStreetLife();
+    let t = 1.7e9;
+    for (let i = 0; i < 30 * 40; i++) life.update((t += 1 / 30), 1 / 30, 0, near, [{ ...near, vx: 0, vz: 0 }], 12.5);
+    // A tab that slept for hours: the clock jumps.
+    t += jump;
+    for (let i = 0; i < 30 * 4; i++) life.update((t += 1 / 30), 1 / 30, 0, near, [{ ...near, vx: 0, vz: 0 }], 12.5);
+    return { life, t };
+  };
+  const a = run({ x: 14, z: 0 }).life;
+  const b = run({ x: 40, z: 40 }).life;
+  let same = 0;
+  for (const p of a.people) {
+    const q = b.people.find((q) => q.on && p.on && q.gj === p.gj && q.pairSide === p.pairSide);
+    if (!q) continue;
+    same++;
+    assert.deepEqual([p.skin, p.hair, p.shirt, p.pants, p.h], [q.skin, q.hair, q.shirt, q.pants, q.h]);
+  }
+  for (const v of a.vehicles) {
+    const w = b.vehicles.find((w) => w.on && v.on && w.gj === v.gj);
+    if (w) assert.equal(v.paint, w.paint);
+  }
+  assert.ok(same > 5);
+  // Hours later every person is where their ghost is, not kilometres behind it.
+  const { life, t } = run({ x: 14, z: 0 }, 6 * 3600);
+  for (const p of life.people) {
+    if (!p.on || p.pair >= 0 && p.id % 2) continue;
+    const g = ghostPeds()[p.gj];
+    assert.ok(Math.abs(pedAt(g, t).R - p.R) < 120, `person ${p.id} is ${Math.abs(pedAt(g, t).R - p.R)} m behind`);
+  }
+  for (const v of life.vehicles) if (v.on && v.gj >= 0) assert.ok(Math.hypot(v.x - 14, v.z) < 200);
+});
+
+test('bus shelters stand clear of hedges, benches, lamps and buildings', () => {
+  const stops = busStops();
+  assert.ok(stops.length > 5);
+  for (const b of stops) {
+    for (const lx of [-1.6, 0, 1.6]) {
+      const x = b.x + lx * Math.cos(b.face) + -1.2 * Math.sin(b.face);
+      const z = b.z - lx * Math.sin(b.face) + -1.2 * Math.cos(b.face);
+      assert.ok(!citySolids(x, z, 0.05).some((a) => x >= a.minX && x <= a.maxX && z >= a.minZ && z <= a.maxZ), `shelter at ${b.x},${b.z} is in something`);
+    }
+  }
 });

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase as signals, rng } from '../../shared/city';
+import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, citySolids, cityStreetscape, lightPhase as signals, rng } from '../../shared/city';
 import { HAIR_COLORS, SKIN_TONES } from '../../shared/avatar';
 import type { Box } from '../../shared/garage';
 import type { NightParts } from './outside';
@@ -686,8 +686,24 @@ const sideKey = (axis: Axis, coord: number): string => {
   return `${axis}:${k}:${sign}`;
 };
 /** Bus shelters: on some of the blocks' sidewalks, away from the benches and bins. */
-export function busStops(): { x: number; z: number; face: number; axis: Axis; coord: number; along: number }[] {
-  const out: ReturnType<typeof busStops> = [];
+let shelters: ReturnType<typeof busStopsNow> | null = null;
+export const busStops = () => (shelters ??= busStopsNow());
+
+/** Whether a shelter at (x, z) facing `face` has nothing solid under it (a park's hedge, a bench, a lamp, a building). */
+function shelterClear(x: number, z: number, face: number): boolean {
+  const sx = Math.sin(face), cz = Math.cos(face);
+  for (const lx of [-1.7, -0.85, 0, 0.85, 1.7, 2.1]) {
+    for (const lz of [-1.9, -1.2, -0.4, 0.2]) {
+      const wx = x + lx * cz + lz * sx;
+      const wz = z - lx * sx + lz * cz;
+      if (citySolids(wx, wz, 0.05).some((a) => wx >= a.minX - 0.05 && wx <= a.maxX + 0.05 && wz >= a.minZ - 0.05 && wz <= a.maxZ + 0.05)) return false;
+    }
+  }
+  return true;
+}
+
+function busStopsNow(): { x: number; z: number; face: number; axis: Axis; coord: number; along: number }[] {
+  const out: { x: number; z: number; face: number; axis: Axis; coord: number; along: number }[] = [];
   const R = Math.ceil(PROP_R / PERIOD);
   for (let i = -R; i <= R; i++) {
     for (let j = -R; j <= R; j++) {
@@ -698,8 +714,15 @@ export function busStops(): { x: number; z: number; face: number; axis: Axis; co
       for (const [alongX, sgn] of [[true, -1], [true, 1], [false, -1], [false, 1]] as const) {
         if (k() > 0.07) continue;
         const line = (alongX ? bz : bx) + sgn * (PERIOD / 2 - 5);
-        const u = 14 + k() * 3;
-        out.push({ x: alongX ? bx + u : line, z: alongX ? line : bz + u, face: alongX ? (sgn < 0 ? Math.PI : 0) : sgn < 0 ? -Math.PI / 2 : Math.PI / 2, axis: alongX ? 'x' : 'z', coord: line, along: alongX ? bx + u : bz + u });
+        const face = alongX ? (sgn < 0 ? Math.PI : 0) : sgn < 0 ? -Math.PI / 2 : Math.PI / 2;
+        // Where it fits: the first place along the sidewalk with nothing in the way, else none.
+        for (const u of [14 + k() * 3, -16, 21, -10, 4]) {
+          const x = alongX ? bx + u : line;
+          const z = alongX ? line : bz + u;
+          if (!shelterClear(x, z, face)) continue;
+          out.push({ x, z, face, axis: alongX ? 'x' : 'z', coord: line, along: alongX ? x : z });
+          break;
+        }
       }
     }
   }
@@ -964,11 +987,36 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const carTaken = new Map<number, number>();
   const pedTaken = new Map<number, number>();
   const vRetry = vehicles.map(() => 0);
+  const tmpColor = new THREE.Color();
+  /** Who goes first at a crossing: by ghost (the same on every page), not by which slot they're drawn in. */
+  const prio = (v: Vehicle) => (v.gj >= 0 ? v.gj : 1000 + v.id);
   const release = (v: Vehicle) => {
     v.on = false;
     if (carTaken.get(v.gj) === v.id) carTaken.delete(v.gj);
     v.gj = -1;
   };
+
+  /** Sets `v` on ghost `g` exactly where it is now (paint and all): false if that's in a crossing or on top of another car. */
+  function seat(v: Vehicle, g: CarGhost, t: number, within?: { x: number; z: number }): boolean {
+    const S = carProgress(g, t);
+    const r = loopAt(g.loop, S);
+    const q = (((r.s - alongO(r.axis)) % PERIOD) + PERIOD) % PERIOD;
+    if (q < 12 || q > PERIOD - 12) return false;
+    const w = onRoad(r.axis, r.line, r.s, laneOffset(r.axis, r.dir));
+    if (within && Math.hypot(w.x - within.x, w.z - within.z) > SPAWN_R) return false;
+    const keep = { x: v.x, z: v.z, yaw: v.yaw, axis: v.axis, dir: v.dir, line: v.line, s: v.s };
+    Object.assign(v, { axis: r.axis, dir: r.dir, line: r.line, s: r.s, x: w.x, z: w.z, yaw: yawOf(r.axis, r.dir) });
+    if (others(v, 9)) {
+      Object.assign(v, keep);
+      return false;
+    }
+    // Its paint is the ghost's, the same on every page.
+    const paints = SPECS[v.kind].paints;
+    v.paint = paints[Math.floor(roll(g.j, 77) * paints.length)];
+    meshes[v.kind].setColorAt(v.slot, tmpColor.set(v.paint));
+    Object.assign(v, { v: g.speed, path: null, plan: null, hold: 0, stuck: 0, braking: false, gj: g.j, S, acc: 0, pitch: 0, roll: 0 });
+    return true;
+  }
 
   /** Puts `v` where some ghost of its kind is now (one that's out at this hour), between `minR` and `maxR` from `at` and out of a crossing: false if there's none. */
   function place(v: Vehicle, at: { x: number; z: number }, minR: number, maxR: number, t: number): boolean {
@@ -977,15 +1025,10 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     for (let n = 0; n < gs.length; n++) {
       const g = gs[(first + n) % gs.length];
       if (g.kind !== v.kind || carTaken.has(g.j) || !carOut(g, hourNow.v)) continue;
-      const S = carProgress(g, t);
-      const r = loopAt(g.loop, S);
-      const q = (((r.s - alongO(r.axis)) % PERIOD) + PERIOD) % PERIOD;
-      if (q < 12 || q > PERIOD - 12) continue;
+      const r = loopAt(g.loop, carProgress(g, t));
       const w = onRoad(r.axis, r.line, r.s, laneOffset(r.axis, r.dir));
       const d = Math.hypot(w.x - at.x, w.z - at.z);
-      if (d < minR || d > maxR) continue;
-      Object.assign(v, { axis: r.axis, dir: r.dir, line: r.line, s: r.s, x: w.x, z: w.z, yaw: yawOf(r.axis, r.dir), v: g.speed, path: null, plan: null, hold: 0, stuck: 0, braking: false, gj: g.j, S, acc: 0, pitch: 0, roll: 0 });
-      if (others(v, 9)) continue;
+      if (d < minR || d > maxR || !seat(v, g, t)) continue;
       v.on = true;
       carTaken.set(g.j, v.id);
       return true;
@@ -1028,6 +1071,18 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   function start(q: Pedestrian, g: PedGhost, t: number) {
     const a = pedAt(g, t);
     Object.assign(q, { on: true, gj: g.j, R: a.R, stopN: a.done, at: null, dr: 0, state: 'walk', dx: 0, dz: 0, jx: 0, jz: 0, hop: 0, tilt: 0, cool: 0, look: 0, speed: g.speed, dog: g.dog, prev: 'walk' });
+    // Their looks are the ghost's (and which of a pair), the same on every page.
+    const r = rng(60000 + g.j * 3 + (q.pairSide > 0 ? 1 : 0));
+    Object.assign(q, { skin: Math.floor(r() * SKIN_TONES.length), hair: Math.floor(r() * HAIR_COLORS.length), shirt: Math.floor(r() * SHIRTS.length), pants: Math.floor(r() * PANTS.length), h: 0.92 + r() * 0.14 });
+    const bald = r() < 0.125;
+    torso.setColorAt(q.id, tmpColor.set(SHIRTS[q.shirt]));
+    head.setColorAt(q.id, tmpColor.set(SKIN_TONES[q.skin]));
+    hairM.setColorAt(q.id, tmpColor.set(bald ? SKIN_TONES[q.skin] : HAIR_COLORS[q.hair]));
+    dogs.setColorAt(q.id, tmpColor.set(['#c68642', '#f1dcb7', '#4a3222', '#d9d9d9', '#e0a96d'][Math.floor(r() * 5)]));
+    for (let k = 0; k < 2; k++) {
+      arms.setColorAt(q.id * 2 + k, tmpColor.set(SHIRTS[q.shirt]));
+      legs.setColorAt(q.id * 2 + k, tmpColor.set(PANTS[q.pants]));
+    }
     if (a.at >= 0) enter(q, g.stops[a.at], a.since > 4 ? 1 : 0);
     ground(q);
     q.yaw = ringHeading(g, q.R);
@@ -1111,11 +1166,11 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       else if (path && dist <= 0) v.path = path;
     }
     // Keep clear of what's ahead: cars (queue, give way), people crossing, and you.
-    const me = { id: v.id, yaw: v.yaw, left: (v.path?.turn ?? plan?.turn) === 'left', stuck: v.stuck, inside: !!v.path };
+    const me = { id: prio(v), yaw: v.yaw, left: (v.path?.turn ?? plan?.turn) === 'left', stuck: v.stuck, inside: !!v.path };
     for (const o of vehicles) {
       if (o === v || !o.on) continue;
       const g = gapAhead(v, o);
-      if (g === null || !yieldsTo(me, { id: o.id, yaw: o.yaw, v: o.v, left: (o.path?.turn ?? o.plan?.turn) === 'left', inside: !!o.path })) continue;
+      if (g === null || !yieldsTo(me, { id: prio(o), yaw: o.yaw, v: o.v, left: (o.path?.turn ?? o.plan?.turn) === 'left', inside: !!o.path })) continue;
       const vo = Math.max(0, o.v * Math.cos(o.yaw - v.yaw));
       target = Math.min(target, safeSpeed(g, vo, K.vmax));
       carAhead = true;
@@ -1257,6 +1312,11 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       const out = pedOut(g, hourNow.v);
       // Out of hours: in at the next door, or gone once they're too far to see go.
       if (!out && (hidden(p) || Math.hypot(p.x - near.x, p.z - near.z) > 45)) return retire(p);
+      // Hours behind (a tab that slept, a clock that jumped): start over on the ghost, with its stop and the door or bench as it is now.
+      if (Math.abs(a.R - p.R) > 100 || a.done - p.stopN > g.stops.length + 1 || p.stopN - a.done > g.stops.length + 1) {
+        for (const q of [p, p.pair >= 0 ? people[p.pair] : null]) if (q) start(q, g, t);
+        return;
+      }
       if (p.at) {
         const s = p.at;
         const over = a.done > p.stopN;
@@ -1449,8 +1509,15 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       for (const v of vehicles) {
         const gh = v.gj >= 0 ? ghostCars()[v.gj] : null;
         const away = Math.hypot(v.x - near.x, v.z - near.z);
-        // Gone from the road when it's too far, or (out of your sight) when it's not a busy hour for it, or when it's so far behind its ghost that someone else's street has a car there now.
-        if (v.on && (away > CULL_R || (gh && away > SPAWN_MIN && (!carOut(gh, hour) || Math.abs(((carProgress(gh, t) - v.S + loopLength(gh.loop) * 1.5) % loopLength(gh.loop)) - loopLength(gh.loop) / 2) > 40)))) release(v);
+        // Gone from the road when it's too far, or (out of your sight) when it's not a busy hour for it.
+        if (v.on && (away > CULL_R || (gh && away > SPAWN_MIN && !carOut(gh, hour)))) release(v);
+        if (v.on && gh) {
+          const P = loopLength(gh.loop);
+          const lag = ((carProgress(gh, t) - v.S + P * 1.5) % P) - P / 2;
+          // Far behind (or ahead of) its ghost: a clock that jumped, or a long queue it lost its place in. Back on its ghost if nobody's close, or off the road for a fresh one if it's hopeless.
+          if (Math.abs(lag) > 150) release(v);
+          else if (Math.abs(lag) > 30 && away > NEAR_R) seat(v, gh, t, near);
+        }
         if (!v.on) {
           // Looking for a ghost is a scan of them all: not every frame.
           if ((vRetry[v.id] -= dt) > 0 || !place(v, near, SPAWN_MIN, SPAWN_R, t)) {

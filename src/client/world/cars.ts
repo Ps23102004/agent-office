@@ -6,7 +6,7 @@ import type { Collider, Interactable } from './office';
 import { mergeByMaterial, mergeColored, mesh, toon } from './toon';
 
 const WIDTH = 1.9;
-const WHEEL_R = 0.36;
+const WHEEL_R = 0.37;
 const WHEEL_Y = 0.37;
 
 /** Wheel arches cut up into the bottom of a side profile, rear to front. */
@@ -197,9 +197,9 @@ export function supercar(kind: CarKind, color: string): CarModel {
   inside.visible = false;
   const bodyGroup = new THREE.Group();
   lights.traverse((o) => { o.castShadow = false; });
-  // The wheels ride in the body group: whatever it rolls, pitches or bobs, they go with it.
-  bodyGroup.add(packed(g, true), mergeByMaterial(lights), top, inside, ...wheels);
-  root.add(bodyGroup);
+  // A car's springs move its body, not its wheels: the tires stay on the road (only a bike's wheels lean with it).
+  bodyGroup.add(packed(g, true), mergeByMaterial(lights), top, inside);
+  root.add(bodyGroup, ...wheels);
   return { root, body: bodyGroup, top, open: inside, wheels };
 }
 
