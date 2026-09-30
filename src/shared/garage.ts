@@ -1,14 +1,21 @@
 import { FLOOR, ROAD, WALL_T } from './layout.js';
 import { cityPaved } from './city.js';
 
-// The Lambos and Ferraris in the garage, which anyone can drive: where they're parked, where you can
+// The cars and bikes in the garage, which anyone can drive: where they're parked, where you can
 // take them (the garage, the lots round it and the street), and the arcade physics a driver's own
 // page runs. Everyone else on the floor sees the car where its driver says it is.
 
-export type CarKind = 'lambo' | 'ferrari';
+export type CarKind = 'lambo' | 'ferrari' | 'motorbike' | 'bicycle';
 
-/** A car's footprint (nose to tail along its length), and how high its body and its roof come up. */
-export const CAR = { length: 4.6, width: 2, body: 0.82, roof: 1.12 } as const;
+/** Metres for the body, kg with riders for the mass, m/s at the top, m/s² on the gas, and tire grip. */
+export const SPECS = {
+  lambo: { length: 4.6, width: 2, body: 0.82, roof: 1.12, mass: 1450, top: 20, accel: 8, grip: 1.15, seats: 2, wheelbase: 2.8, reverse: 7 },
+  ferrari: { length: 4.6, width: 2, body: 0.82, roof: 1.16, mass: 1550, top: 22, accel: 7.6, grip: 1.2, seats: 2, wheelbase: 2.72, reverse: 7 },
+  motorbike: { length: 2.2, width: 0.78, body: 0.8, roof: 1.15, mass: 260, top: 24, accel: 6, grip: 1.05, seats: 2, wheelbase: 1.5, reverse: 3 },
+  bicycle: { length: 1.85, width: 0.62, body: 0.82, roof: 1.12, mass: 95, top: 7, accel: 1.8, grip: 0.9, seats: 1, wheelbase: 1.12, reverse: 2 },
+} as const;
+// Older callers mean a Lambo when they don't give a kind.
+export const CAR = SPECS.lambo;
 
 /** The building's footprint, walls included: the garage is under it. */
 const B = { minX: FLOOR.minX - WALL_T, maxX: FLOOR.maxX + WALL_T, minZ: FLOOR.minZ - WALL_T, maxZ: FLOOR.maxZ + WALL_T } as const;
@@ -19,6 +26,10 @@ export interface Box {
   maxX: number;
   minZ: number;
   maxZ: number;
+  /** Another vehicle: its mass and motion. A wall has no mass here (it never moves). */
+  mass?: number;
+  vx?: number;
+  vz?: number;
 }
 
 /** The paved lot in front of the garage, out to the sidewalk, and the one down its east side. */
@@ -64,6 +75,10 @@ export const CARS: readonly CarDef[] = [
   { kind: 'ferrari', color: '#e5383b', name: 'Scarlet Ferrari', x: 14.4, z: FRONT, rotY: 0 },
   // Left out front, for everyone upstairs to look at.
   { kind: 'lambo', color: '#00b4d8', name: 'Blue Lambo', x: 9, z: 18.2, rotY: Math.PI / 2 },
+  { kind: 'motorbike', color: '#f77f00', name: 'Orange Motorbike', x: B.maxX + 3, z: -10, rotY: Math.PI / 2 },
+  { kind: 'motorbike', color: '#4361ee', name: 'Blue Motorbike', x: B.maxX + 3, z: -6, rotY: Math.PI / 2 },
+  { kind: 'bicycle', color: '#2a9d8f', name: 'Green Bicycle', x: B.maxX + 3, z: -2, rotY: Math.PI / 2 },
+  { kind: 'bicycle', color: '#e9c46a', name: 'Yellow Bicycle', x: B.maxX + 3, z: 2, rotY: Math.PI / 2 },
 ];
 
 export type CarSeat = 'driver' | 'passenger';
@@ -76,6 +91,15 @@ export type CarSeat = 'driver' | 'passenger';
 export const SEATS: Record<CarSeat, { x: number; z: number }> = { driver: { x: 0.42, z: -0.5 }, passenger: { x: -0.42, z: -0.5 } };
 export const SEAT_HIPS = 0.45;
 
+/** A saddle runs down the middle; on a motorbike there's room behind you for a passenger. */
+export function seatOffset(kind: CarKind, seat: CarSeat): { x: number; z: number } {
+  return SPECS[kind].width < 1 ? { x: 0, z: seat === 'driver' ? -0.12 : -0.6 } : SEATS[seat];
+}
+
+export function seatHips(kind: CarKind): number {
+  return SPECS[kind].width < 1 ? 0.82 : SEAT_HIPS;
+}
+
 /** A car where it is and how it's going: `speed` in m/s along its nose (negative in reverse), `steer` the front wheels' angle (+ is left). */
 export interface CarPose {
   x: number;
@@ -83,6 +107,10 @@ export interface CarPose {
   rotY: number;
   speed: number;
   steer: number;
+  /** Across the body (+ toward your left), m/s. Old pages omit it: treat that as zero. */
+  slip?: number;
+  /** Turning speed, rad/s, kept by your own physics; it needn't travel on the wire. */
+  yaw?: number;
 }
 
 /** A car as the office has it: where it is, and who's in it (PeerInfo ids). */
@@ -93,13 +121,14 @@ export interface CarState extends CarPose {
 
 /** Every car in its spot, as the office starts. */
 export function parked(): CarState[] {
-  return CARS.map((c) => ({ x: c.x, z: c.z, rotY: c.rotY, speed: 0, steer: 0 }));
+  return CARS.map((c) => ({ x: c.x, z: c.z, rotY: c.rotY, speed: 0, steer: 0, slip: 0 }));
 }
 
 /** The pedals and the wheel: `gas` 1 forward, -1 back (braking first if you're going the other way), `turn` +1 hard left. */
 export interface Pedals {
   gas: number;
   turn: number;
+  /** Space: the handbrake on a car, an ordinary brake on a bike. */
   brake: boolean;
 }
 
@@ -127,8 +156,29 @@ export function steerLimit(speed: number): number {
   return DRIVE.steer / (1 + Math.abs(speed) / 9);
 }
 
-/** The car `dt` seconds on, with these pedals: a bicycle model, no sliding. */
-export function drive(p: CarPose, pedals: Pedals, dt: number): CarPose {
+/** A short physics step (seconds), the same at 30 fps as at 60. */
+export const DRIVE_STEP = 1 / 120;
+export const TIRES = { gravity: 9.81, stiffness: 18, height: 0.45, rearBrakeGrip: 0.16, inertia: 1.3, restitution: 0.22 } as const;
+
+/** How far a bike leans into a corner: upright at rest, never laid flat. */
+export function leanAngle(p: CarPose, kind: CarKind): number {
+  return SPECS[kind].width < 1 ? clamp(Math.atan(p.speed * p.speed * Math.tan(p.steer) / (SPECS[kind].wheelbase * TIRES.gravity)), -0.55, 0.55) : 0;
+}
+
+/** The car `dt` seconds on: tires push across the body and turn it about its middle. No world state. */
+export function drive(p: CarPose, pedals: Pedals, dt: number, kind: CarKind = 'lambo'): CarPose {
+  if (!Number.isFinite(dt) || dt <= 0) return { ...p };
+  // Also keep callers outside Driver stable when they give us a whole frame at once.
+  const n = Math.ceil(dt / DRIVE_STEP);
+  const h = dt / n;
+  let next = p;
+  for (let i = 0; i < n; i++) next = tireStep(next, pedals, h, kind);
+  return next;
+}
+
+function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPose {
+  const spec = SPECS[kind];
+  const bike = spec.width < 1;
   const want = clamp(pedals.turn, -1, 1) * steerLimit(p.speed);
   const steer = p.steer + clamp(want - p.steer, -DRIVE.steerRate * dt, DRIVE.steerRate * dt);
   let v = p.speed;
@@ -137,20 +187,60 @@ export function drive(p: CarPose, pedals: Pedals, dt: number): CarPose {
   if (pedals.brake) toward(0, DRIVE.brake);
   else if (gas > 0) {
     if (v < 0) toward(0, DRIVE.brake);
-    else v = Math.min(DRIVE.top, v + DRIVE.accel * gas * dt);
+    else v = Math.min(spec.top, v + spec.accel * gas * dt);
   } else if (gas < 0) {
     if (v > 0) toward(0, DRIVE.brake);
-    else v = Math.max(-DRIVE.reverse, v + DRIVE.reverseAccel * gas * dt);
-  } else toward(0, DRIVE.coast);
-  const yaw = (v * Math.tan(steer)) / DRIVE.wheelbase;
-  const mid = p.rotY + (yaw * dt) / 2;
+    else v = Math.max(-spec.reverse, v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
+  } else toward(0, bike ? 0.65 : DRIVE.coast);
+
+  let yaw = p.yaw ?? 0;
+  let slip = p.slip ?? 0;
+  if (bike || Math.abs(v) < 3) {
+    // At walking speed the tires settle before another step: no jitter, and no sideways bikes.
+    const target = v * Math.tan(steer) / spec.wheelbase;
+    yaw += (target - yaw) * (1 - Math.exp(-dt * 18));
+    slip = bike ? 0 : slip * Math.exp(-dt * 12);
+  } else {
+    const axle = spec.wheelbase / 2;
+    const acceleration = (v - p.speed) / dt;
+    const transfer = spec.mass * acceleration * TIRES.height / spec.wheelbase;
+    const weight = spec.mass * TIRES.gravity;
+    const frontLoad = clamp(weight / 2 - transfer, weight * 0.15, weight * 0.85);
+    const rearLoad = weight - frontLoad;
+    const frontAngle = Math.atan2(slip + axle * yaw, Math.abs(v)) - steer * Math.sign(v);
+    const rearAngle = Math.atan2(slip - axle * yaw, Math.abs(v));
+    const frontGrip = spec.grip * frontLoad;
+    const rearGrip = spec.grip * rearLoad * (pedals.brake ? TIRES.rearBrakeGrip : 1);
+    const front = clamp(-frontAngle * spec.mass * TIRES.stiffness, -frontGrip, frontGrip);
+    const rear = clamp(-rearAngle * spec.mass * TIRES.stiffness, -rearGrip, rearGrip);
+    const inertia = spec.mass * (spec.length ** 2 + spec.width ** 2) / 12 * TIRES.inertia;
+    yaw += axle * (front - rear) / inertia * dt;
+    slip += ((front + rear) / spec.mass - v * yaw) * dt;
+  }
+  v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top);
+  slip = clamp(slip, -spec.top * 0.75, spec.top * 0.75);
+  if (v === 0 && Math.abs(slip) < 0.01) { slip = 0; yaw = 0; }
+  const mid = p.rotY + yaw * dt / 2;
   return {
-    x: p.x + Math.sin(mid) * v * dt,
-    z: p.z + Math.cos(mid) * v * dt,
+    x: p.x + (Math.sin(mid) * v + Math.cos(mid) * slip) * dt,
+    z: p.z + (Math.cos(mid) * v - Math.sin(mid) * slip) * dt,
     rotY: Math.atan2(Math.sin(p.rotY + yaw * dt), Math.cos(p.rotY + yaw * dt)),
-    speed: v,
-    steer,
+    speed: v, steer, slip, yaw,
   };
+}
+
+/** A hit takes away the motion into it, leaving the motion along it: mass matters for another vehicle. */
+export function impact(p: CarPose, kind: CarKind, nx: number, nz: number, other: Pick<Box, 'mass' | 'vx' | 'vz'> = {}): CarPose {
+  const s = Math.sin(p.rotY), c = Math.cos(p.rotY);
+  let vx = s * p.speed + c * (p.slip ?? 0);
+  let vz = c * p.speed - s * (p.slip ?? 0);
+  const into = (vx - (other.vx ?? 0)) * nx + (vz - (other.vz ?? 0)) * nz;
+  if (into >= 0) return { ...p };
+  const share = other.mass ? other.mass / (SPECS[kind].mass + other.mass) : 1;
+  const impulse = -(1 + TIRES.restitution) * into * share;
+  vx += nx * impulse;
+  vz += nz * impulse;
+  return { ...p, speed: vx * s + vz * c, slip: SPECS[kind].width < 1 ? 0 : vx * c - vz * s, yaw: 0 };
 }
 
 /** A point in the car's own frame (x across, +x left; z toward the nose), out in the world. */
@@ -166,9 +256,9 @@ export function paved(x: number, z: number): boolean {
 }
 
 /** Whether the whole car is on the pavement: its corners, and halfway along each side. */
-export function onPavement(p: { x: number; z: number; rotY: number }): boolean {
-  const w = CAR.width / 2;
-  const l = CAR.length / 2;
+export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarKind = 'lambo'): boolean {
+  const w = SPECS[kind].width / 2;
+  const l = SPECS[kind].length / 2;
   for (const [lx, lz] of [
     [w, l],
     [-w, l],
@@ -186,9 +276,9 @@ export function onPavement(p: { x: number; z: number; rotY: number }): boolean {
 }
 
 /** Whether the car's footprint (a rectangle turned by rotY) overlaps box `b` (separating axes). */
-export function overlaps(p: { x: number; z: number; rotY: number }, b: Box): boolean {
-  const hx = CAR.width / 2;
-  const hz = CAR.length / 2;
+export function overlaps(p: { x: number; z: number; rotY: number }, b: Box, kind: CarKind = 'lambo'): boolean {
+  const hx = SPECS[kind].width / 2;
+  const hz = SPECS[kind].length / 2;
   const ex = (b.maxX - b.minX) / 2;
   const ez = (b.maxZ - b.minZ) / 2;
   const dx = (b.minX + b.maxX) / 2 - p.x;
@@ -206,8 +296,8 @@ export function overlaps(p: { x: number; z: number; rotY: number }, b: Box): boo
 }
 
 /** Whether the car can be at `p`: on the pavement, clear of all of `solids`. */
-export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>): boolean {
-  if (!onPavement(p)) return false;
-  for (const b of solids) if (overlaps(p, b)) return false;
+export function carFits(p: { x: number; z: number; rotY: number }, solids: Iterable<Box>, kind: CarKind = 'lambo'): boolean {
+  if (!onPavement(p, kind)) return false;
+  for (const b of solids) if (overlaps(p, b, kind)) return false;
   return true;
 }

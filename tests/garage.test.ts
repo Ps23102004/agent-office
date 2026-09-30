@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CAR, CARS, DRIVE, PAVEMENT, carFits, carPoint, drive, onPavement, overlaps, parked, paved, steerLimit, type CarPose, type Pedals } from '../src/shared/garage.js';
+import { CAR, CARS, SPECS, DRIVE, PAVEMENT, carFits, carPoint, drive, onPavement, overlaps, parked, paved, steerLimit, type CarPose, type Pedals } from '../src/shared/garage.js';
 import { ELEVATOR, ELEVATOR_FRONT, FLOOR, ROAD } from '../src/shared/layout.js';
 import { Garage } from '../src/server/garage.js';
 
@@ -18,14 +18,15 @@ const still = (x = 0, z = 0, rotY = 0): CarPose => ({ x, z, rotY, speed: 0, stee
 test('every car is parked on the pavement, clear of the others and of the elevator', () => {
   const lift = { minX: ELEVATOR.x - ELEVATOR.width / 2, maxX: ELEVATOR.x + ELEVATOR.width / 2, minZ: FLOOR.minZ, maxZ: ELEVATOR_FRONT };
   const boxes = CARS.map((c) => {
-    const a = carPoint(c, -CAR.width / 2, -CAR.length / 2);
-    const b = carPoint(c, CAR.width / 2, CAR.length / 2);
+    const spec = SPECS[c.kind];
+    const a = carPoint(c, -spec.width / 2, -spec.length / 2);
+    const b = carPoint(c, spec.width / 2, spec.length / 2);
     return { minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z) };
   });
   CARS.forEach((c, i) => {
-    assert.ok(onPavement(c), `${c.name} is on the pavement`);
-    assert.ok(!overlaps(c, lift), `${c.name} is out of the elevator`);
-    boxes.forEach((b, j) => assert.ok(i === j || !overlaps(c, b), `${c.name} is clear of ${CARS[j].name}`));
+    assert.ok(onPavement(c, c.kind), `${c.name} is on the pavement`);
+    assert.ok(!overlaps(c, lift, c.kind), `${c.name} is out of the elevator`);
+    boxes.forEach((b, j) => assert.ok(i === j || !overlaps(c, b, c.kind), `${c.name} is clear of ${CARS[j].name}`));
   });
   assert.equal(new Set(CARS.map((c) => c.name)).size, CARS.length, 'no two cars go by the same name');
 });
@@ -111,8 +112,8 @@ test('the garage: one driver and one passenger a car, and only the driver moves 
   assert.deepEqual(g.seatOf('bob'), { car: 1, seat: 'passenger' });
   const pose = { x: 0, z: 18, rotY: 1, speed: 12, steer: 0.1 };
   assert.ok(!g.drive('bob', 1, pose), "the passenger doesn't steer");
-  assert.deepEqual(g.drive('ann', 1, pose), pose);
-  assert.deepEqual({ ...g.state()[1], driver: undefined, passenger: undefined }, { ...pose, driver: undefined, passenger: undefined });
+  assert.deepEqual(g.drive('ann', 1, pose), { ...pose, slip: 0 });
+  assert.deepEqual({ ...g.state()[1], driver: undefined, passenger: undefined }, { ...pose, slip: 0, driver: undefined, passenger: undefined });
   assert.ok(!g.drive('ann', 1, { ...pose, x: -60 }), 'not off onto the grass');
   assert.ok(!g.drive('ann', 1, { ...pose, speed: Number.NaN }), 'nor any nonsense');
   assert.equal(g.drive('ann', 1, { ...pose, speed: 999 })?.speed, DRIVE.top, 'no faster than a car goes');

@@ -1559,7 +1559,7 @@ export async function startServer(cfg: Config) {
       case 'car.drive': {
         const floor = floorOf(c);
         const car = Math.trunc(num(msg.car));
-        const now = floor?.garage.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer) });
+        const now = floor?.garage.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer), slip: msg.slip === undefined ? 0 : num(msg.slip) });
         if (now) toNeighbors(c, { t: 'car.move', car, ...now }, true);
         break;
       }

@@ -33,7 +33,7 @@ import { ROUND, score, targetFrame, type BarGame, type Score, type Toss } from '
 import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
-import { CARS, SEAT_HIPS, type CarSeat } from '../shared/garage';
+import { CARS, SPECS, seatHips, type CarSeat } from '../shared/garage';
 import { Smoke } from './world/smoke';
 import { HAZE_MAX, Sky, describeSky } from './world/sky';
 import { Laptop } from './world/laptop';
@@ -374,7 +374,7 @@ const settings = loadSettings();
 const player = new PlayerController(camera, canvas, office.colliders);
 // Behind the wheel of one of the garage's cars (see "The cars in the garage" below). Up here, since placing you anywhere gets you out first.
 const driver = new Driver(player, office.cars, {
-  moved: (car, p) => net.send({ t: 'car.drive', car, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer }),
+  moved: (car, p) => net.send({ t: 'car.drive', car, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0 }),
   bump: (at, speed) => {
     sound.crash({ x: at.x, y: player.street + 0.5, z: at.z }, speed);
     if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 15));
@@ -779,13 +779,13 @@ function getIn(i: number) {
   if (trip || climber.active || driver.active || !c || !def) return;
   if (carrying) return toast('🗂️ Your hands are full: put the card back first (Q)', 'warn');
   if (holdingBall()) return toast('🏀 Put the ball down first (Q)', 'warn');
-  const seat: CarSeat | null = !c.driver ? 'driver' : !c.passenger ? 'passenger' : null;
+  const seat: CarSeat | null = !c.driver ? 'driver' : SPECS[def.kind].seats > 1 && !c.passenger ? 'passenger' : null;
   if (!seat) return toast(`🏎️ The ${def.name} is full`, 'warn');
   if (player.seat) standUp();
   if (hanger.active) hanger.cancel();
   if (walkingTo) stopWalking();
   driver.enter(i, seat);
-  me.sit(SEAT_HIPS);
+  me.sit(seatHips(def.kind));
   carPending++;
   net.send({ t: 'car.enter', car: i, seat });
   sound.carDoor(carAt(i));
@@ -865,7 +865,7 @@ function carAgain() {
   carPending++;
   net.send({ t: 'car.enter', car: i, seat });
   const p = driver.driving ? driver.pose : null;
-  if (p) net.send({ t: 'car.drive', car: i, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer });
+  if (p) net.send({ t: 'car.drive', car: i, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0 });
 }
 
 /** Where someone on your floor is sitting in a car, if they're in one. */
@@ -885,7 +885,7 @@ function renderDriveHint(el: HTMLElement) {
     const other = name(c?.passenger);
     hint = {
       k: `drive|${kmh}|${other}`,
-      parts: [h('span.title', {}, `🏎️ ${CARS[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', 'Brake'), key('H', 'Honk'), key('E', 'Get out')],
+      parts: [h('span.title', {}, `🏎️ ${CARS[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[CARS[i].kind].width < 1 ? 'Brake' : 'Handbrake'), key('H', 'Honk'), key('E', 'Get out')],
     };
   } else {
     const at = name(c?.driver);
@@ -1298,7 +1298,7 @@ window.addEventListener('pagehide', () => {
   saveSpot();
   // Mid-drive, the car stops right where you left it, not where the office last heard it was.
   const p = driver.driving ? driver.pose : null;
-  if (p) net.send({ t: 'car.drive', car: driver.car!, x: p.x, z: p.z, rotY: p.rotY, speed: 0, steer: p.steer });
+  if (p) net.send({ t: 'car.drive', car: driver.car!, x: p.x, z: p.z, rotY: p.rotY, speed: 0, steer: p.steer, slip: 0 });
 });
 
 /** You asked to come back to floor `was`, and it's gone (taken off the building, or its checkout deleted): the office sent you up to the roof. */
@@ -1787,7 +1787,7 @@ function syncPeers() {
     r.person.holdDrink(peer.drink ? (DRINK_BY_ID.get(peer.drink) ?? null) : null);
     r.person.carry(peer.carrying);
     r.person.read(!!peer.reading);
-    r.person.sit(store.carOf(id) ? SEAT_HIPS : peer.seat ? (seatOn(plan(), peer.seat)?.hips ?? null) : null);
+    r.person.sit(store.carOf(id) ? seatHips(CARS[store.carOf(id)!.car].kind) : peer.seat ? (seatOn(plan(), peer.seat)?.hips ?? null) : null);
     r.person.setDoing(whereabouts(peer, store.carOf(id), plan()));
   }
   for (const [id, r] of remotes) {
@@ -3674,9 +3674,9 @@ function hintFor(it: Interactable): Hint {
       const name = (id?: string) => (id ? clip(store.peers.get(id)?.name ?? 'Someone', 20) : '');
       const [at, beside] = [name(c.driver), name(c.passenger)];
       const k = `${it.car}|${at}|${beside}`;
-      if (!at) return { k, parts: [title(`🏎️ ${def.name}`), aside(beside ? `${beside} is waiting in it` : 'keys in the ignition'), key('E', 'Drive it')] };
-      if (!beside) return { k, parts: [title(`🏎️ ${def.name}`), aside(`${at} is driving`), key('E', 'Hop in')] };
-      return { k, parts: [title(`🏎️ ${def.name}`), aside(`${at} and ${beside} · full`)] };
+      if (!at) return { k, parts: [title(`🏎️ ${def.name}`), aside(beside ? `${beside} is waiting in it` : def.kind === 'bicycle' ? 'ready to pedal' : 'keys in the ignition'), key('E', SPECS[def.kind].width < 1 ? 'Ride it' : 'Drive it')] };
+      if (!beside && SPECS[def.kind].seats > 1) return { k, parts: [title(`🏎️ ${def.name}`), aside(`${at} is driving`), key('E', 'Hop in')] };
+      return { k, parts: [title(`🏎️ ${def.name}`), aside(`${at}${beside ? ` and ${beside}` : ''} · full`)] };
     }
     case 'expand': {
       const level = store.floorPlan.wing;
@@ -4641,6 +4641,7 @@ function frame(ts?: number) {
   const grip = climber.grip;
   me.setGrip(grip);
   me.update(dt, t, (player.moving && player.grounded) || (grip === 'ladder' && player.moving), !player.grounded && !grip && !golf.active && !thrower.active && !driver.active, player.speedBoost);
+  if (driver.active) office.cars.poseRider(me, driver.car!, driver.seat!);
   me.setVoiceLevel(voice.inVoice ? voice.localLevel : 0);
   const firstPerson = player.view === 'first';
   // In first person you are the camera; in third, hide yourself when it's zoomed in right behind your head.
@@ -4713,6 +4714,8 @@ function frame(ts?: number) {
     r.person.setGrip(holding);
     const walking = !sat && p.moving && !airborne;
     r.person.update(dt, t, walking || (holding === 'ladder' && p.moving), airborne && !holding && Math.abs(pos.y - r.target.y) > 0.01);
+    const seated = store.carOf(id);
+    if (seated) office.cars.poseRider(r.person, seated.car, seated.seat);
     // Their walk cycle takes a step every π/11 seconds.
     r.stepT = walking ? r.stepT + dt : 0.2;
     if (r.stepT >= Math.PI / 11) {

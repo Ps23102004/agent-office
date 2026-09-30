@@ -9,6 +9,7 @@
  * the jukebox has a volume of its own.
  */
 import { CABINET, DESKS, DJ_BOOTH, FLOOR, GONG, JUKEBOX, WINDOWS as OPENINGS, inWing } from '../shared/layout';
+import { CARS } from '../shared/garage';
 import type { GongWhy } from '../shared/protocol';
 import { STREAM } from '../shared/jukebox';
 import { TunePlayer } from './music';
@@ -802,6 +803,8 @@ export class OfficeSound {
     const now = ctx.currentTime;
     const on = new Set<number>();
     for (const e of running) {
+      const kind = CARS[e.car]?.kind;
+      if (kind === 'bicycle') continue; // Pedals don't have an engine note.
       on.add(e.car);
       let m = this.motors.get(e.car);
       if (!m) {
@@ -815,7 +818,7 @@ export class OfficeSound {
       const push = Math.abs(e.gas);
       // Up through the gears: the revs climb in each one and drop back as it shifts up.
       const gear = Math.min(3, Math.floor(v / 5.5));
-      const f = 44 + gear * 7 + Math.min(1.5, (v - gear * 5.5) / 5.5) * 46 + push * 5;
+      const f = (44 + gear * 7 + Math.min(1.5, (v - gear * 5.5) / 5.5) * 46 + push * 5) * (kind === 'motorbike' ? 1.65 : 1);
       m.saw.frequency.setTargetAtTime(f, now, 0.06);
       m.sub.frequency.setTargetAtTime(f / 2, now, 0.06);
       m.tone.frequency.setTargetAtTime(240 + f * 5 + push * 450, now, 0.08);
