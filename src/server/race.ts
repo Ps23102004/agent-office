@@ -1,8 +1,18 @@
-import { CHECKPOINTS, checkpoint, crossed } from '../shared/circuit.js';
+import { CHECKPOINTS, checkpoint, crossed, gridPose, track } from '../shared/circuit.js';
+import { SPECS } from '../shared/garage.js';
 import { RACE, idleRace, type RaceState, type Racer } from '../shared/race.js';
 
 /** Further than this between two of a driver's reports (m) isn't driving: it's a jump, and crosses nothing. */
 const JUMP = 40;
+/** Faster than any car goes, with room for a slide and a laggy report (m/s). */
+const FASTEST = Math.max(...Object.values(SPECS).map((s) => s.top)) * 1.3;
+/** No lap is quicker than this (ms): flat out all the way round the centre line. */
+const QUICKEST_LAP = (track().length / FASTEST) * 1000;
+/** A race ends after this long whatever (ms a lap), or when nobody's got through a checkpoint for STALL. */
+const LAP_CAP = 5 * 60_000;
+const STALL = 3 * 60_000;
+/** Held off from where they said they were this long (ms), a driver's car is taken to be where it now says, but that report crosses nothing. */
+const REANCHOR = 3000;
 
 /**
  * The race at the circuit, as the office keeps it: who's on the grid, the countdown, and each
@@ -11,10 +21,15 @@ const JUMP = 40;
  */
 export class RaceControl {
   private race: RaceState = idleRace();
-  /** Where each racer's car was when they last said. */
-  private last = new Map<string, { x: number; z: number }>();
+  /**
+   * Where each racer's car was when they last said, and when. `jumped`: it got there some way other
+   * than driving (a long gap in its reports), so the next move from there crosses no line.
+   */
+  private last = new Map<string, { x: number; z: number; at: number; jumped?: boolean; held?: number }>();
   /** When the results come down, once it's finished. */
   private over = 0;
+  /** When anyone last got through a checkpoint (or the lights went out). */
+  private progressAt = 0;
 
   /** The race as it is now, for everyone. */
   state(): RaceState {
@@ -36,19 +51,32 @@ export class RaceControl {
     return true;
   }
 
-  /** `id` pulls out (or got out of the car, or left the circuit). Says whether they were in it. */
+  /**
+   * `id` pulls out (or got out of the car, or left the circuit, or lost their connection: a
+   * reconnect is a new PeerInfo id, so there's no keeping their place for them). Anyone who's
+   * finished stays in the results, and the results stay up. Says whether anything changed.
+   */
   leave(id: string, now = Date.now()): boolean {
     const r = this.race;
     const i = r.racers.findIndex((x) => x.id === id);
     if (i < 0) return false;
-    r.racers.splice(i, 1);
     this.last.delete(id);
+    if (r.phase === 'finished' || r.racers[i].finishedAt !== undefined) return false;
+    r.racers.splice(i, 1);
     if (!r.racers.length) this.reset();
     else {
       this.settle(now);
       this.order();
     }
     return true;
+  }
+
+  /** Whether `id`'s car at (x, z) is off their slot while the lights count down: the office doesn't take that move. */
+  offGrid(id: string, x: number, z: number): boolean {
+    const racer = this.race.racers.find((r) => r.id === id);
+    if (this.race.phase !== 'countdown' || !racer) return false;
+    const g = gridPose(racer.slot);
+    return Math.hypot(x - g.x, z - g.z) > 2;
   }
 
   /** Someone on the grid starts the countdown. */
@@ -66,11 +94,18 @@ export class RaceControl {
     if (r.phase === 'countdown' && now >= (r.startsAt ?? 0)) {
       r.phase = 'racing';
       // Over the line on the grid already counts as the first: from the lights going out, it's a lap.
-      for (const x of r.racers) Object.assign(x, { lap: 0, checkpoint: 0, lapStartedAt: r.startsAt });
+      // Everyone starts from their slot: from anywhere else, the first move is a jump.
+      for (const x of r.racers) {
+        Object.assign(x, { lap: 0, checkpoint: 0, lapStartedAt: r.startsAt });
+        this.last.set(x.id, { ...gridPose(x.slot), at: r.startsAt! });
+      }
+      this.progressAt = now;
       this.order();
       return true;
     }
-    if (r.phase === 'racing' && r.firstHomeAt !== undefined && now >= r.firstHomeAt + RACE.grace * 1000) {
+    // The winner's home and the rest have had their while; or it's gone on far too long, or nobody's getting anywhere.
+    const capped = now >= (r.startsAt ?? 0) + r.laps * LAP_CAP || now >= this.progressAt + STALL;
+    if (r.phase === 'racing' && ((r.firstHomeAt !== undefined && now >= r.firstHomeAt + RACE.grace * 1000) || capped)) {
       this.finish(now);
       return true;
     }
@@ -87,14 +122,27 @@ export class RaceControl {
     const racer = this.race.racers.find((r) => r.id === id);
     if (!racer) return changed;
     const from = this.last.get(id);
-    this.last.set(id, { x, z });
-    if (this.race.phase !== 'racing' || racer.finishedAt !== undefined || !from || Math.hypot(x - from.x, z - from.z) > JUMP) return changed;
+    if (this.race.phase !== 'racing' || !from) {
+      this.last.set(id, { x, z, at: now });
+      return changed;
+    }
+    if (racer.finishedAt !== undefined) return changed;
+    // Further than a car could have gone since: not driving. Where it was stands, unless it stays
+    // away a while (a bad connection), when it's taken to be here, but can't cross a line from here.
+    const far = Math.hypot(x - from.x, z - from.z);
+    if (far > JUMP || far > (FASTEST * (now - from.at)) / 1000 + 2) {
+      const held = from.held ?? now;
+      this.last.set(id, now - held >= REANCHOR ? { x, z, at: now, jumped: true } : { ...from, held });
+      return changed;
+    }
+    this.last.set(id, { x, z, at: now });
     const next = (racer.checkpoint + 1) % CHECKPOINTS;
-    if (!crossed(next, from, { x, z })) {
+    if (from.jumped || !crossed(next, from, { x, z })) {
       // Positions shift as people pass each other between the lines, too.
       return this.order() || changed;
     }
     racer.checkpoint = next;
+    this.progressAt = now;
     if (next === 0) this.lapped(racer, now);
     this.order();
     changed = true;
@@ -105,8 +153,10 @@ export class RaceControl {
   private lapped(racer: Racer, now: number) {
     const r = this.race;
     const ms = now - (racer.lapStartedAt ?? now);
-    racer.lap++;
     racer.lapStartedAt = now;
+    // Quicker than a car can go round: not a lap.
+    if (ms < QUICKEST_LAP) return;
+    racer.lap++;
     if (ms > 0 && (racer.bestLap === undefined || ms < racer.bestLap)) racer.bestLap = ms;
     if (ms > 0 && (!r.record || ms < r.record.ms)) r.record = { name: racer.name, ms };
     if (racer.lap < r.laps) return;
@@ -128,6 +178,7 @@ export class RaceControl {
 
   /** Back to nobody lined up; the record stays. */
   private reset() {
+    this.progressAt = 0;
     const record = this.race.record;
     this.race = { ...idleRace(), ...(record ? { record } : {}) };
     this.last.clear();

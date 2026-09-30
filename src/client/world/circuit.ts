@@ -22,6 +22,14 @@ const TILE = 8;
 /** Where the asphalt's edge is, and where the grass stops at the barriers. */
 const EDGE = TRACK.width / 2;
 const BAND = TRACK.width / 2 + TRACK.runoff;
+/**
+ * The barriers stand just past where a car can go (BAND, shared/circuit.ts circuitGround), the tyre
+ * walls in front of them touching it, and the boards behind them: so a car stops at the tyres, and
+ * nothing it could drive through is drawn on the grass.
+ */
+const RAIL = BAND + 1;
+const TYRES = BAND + 0.45;
+const BOARDS = RAIL + 0.35;
 
 export interface Circuit {
   group: THREE.Group;
@@ -392,8 +400,8 @@ export function buildCircuit(): Circuit {
     const k = bend(s + step);
     for (const side of [-1, 1]) {
       const a = pointAt(s), b = pointAt(s + step * 2);
-      const ax = a.x + a.tz * BAND * side, az = a.z - a.tx * BAND * side;
-      const bx = b.x + b.tz * BAND * side, bz = b.z - b.tx * BAND * side;
+      const ax = a.x + a.tz * RAIL * side, az = a.z - a.tx * RAIL * side;
+      const bx = b.x + b.tz * RAIL * side, bz = b.z - b.tx * RAIL * side;
       if (inPaddock(ax, az) || inPaddock(bx, bz)) continue;
       const len = Math.hypot(bx - ax, bz - az);
       box(solid, 0.35, 0.9, len + 0.05, (i / 2) % 2 ? '#f8f9fa' : '#1d3557', (ax + bx) / 2, 0, (az + bz) / 2, Math.atan2(bx - ax, bz - az));
@@ -401,7 +409,7 @@ export function buildCircuit(): Circuit {
       const outside = k > 0 ? -1 : 1;
       if (Math.abs(k) > 1 / 110 && side === outside) {
         for (let f = 0; f < 1; f += 0.34) {
-          const x = ax + (bx - ax) * f - a.tz * side * 0.6, z = az + (bz - az) * f + a.tx * side * 0.6;
+          const x = ax + (bx - ax) * f - a.tz * side * (RAIL - TYRES), z = az + (bz - az) * f + a.tx * side * (RAIL - TYRES);
           tyres.push({ x, z, color: ['#e63946', '#f8f9fa', '#ffd166', '#118ab2'][Math.floor(s / 12) % 4] });
         }
       }
@@ -464,14 +472,14 @@ export function buildCircuit(): Circuit {
   for (let x = W.minX + 6, k = 0; x < W.maxX - 4; x += 10, k++) boards.push({ x, z: W.maxZ + 0.02, rotY: 0, banner: k });
   for (let s = L - 90, k = 3; s < L + 140; s += 10, k++) {
     const p = pointAt(s);
-    boards.push({ x: p.x - p.tz * (BAND - 0.2), z: p.z + p.tx * (BAND - 0.2), rotY: Math.atan2(p.tz, -p.tx), banner: k, free: true });
+    boards.push({ x: p.x - p.tz * BOARDS, z: p.z + p.tx * BOARDS, rotY: Math.atan2(p.tz, -p.tx), banner: k, free: true });
   }
   for (const s0 of [260, 480, 700, 1000, 1240]) {
     for (let j = 0; j < 4; j++) {
       const s = s0 + j * 9;
       const p = pointAt(s);
       const out = bend(s) > 0 ? -1 : 1;
-      const d = (BAND - 0.25) * out;
+      const d = BOARDS * out;
       boards.push({ x: p.x + p.tz * d, z: p.z - p.tx * d, rotY: Math.atan2(-p.tz * out, p.tx * out), banner: j + s0, free: true });
     }
   }

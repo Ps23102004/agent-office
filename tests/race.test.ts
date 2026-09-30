@@ -183,3 +183,99 @@ test('going round the wrong way, or skipping a checkpoint, never makes a lap', (
   assert.equal(race.state().racers[0].lap, 0);
   assert.equal(race.state().racers[0].checkpoint, 0);
 });
+
+/** A race of `ids` from the grid, the lights out at `now.t`. */
+function started(ids: string[], now: { t: number }): RaceControl {
+  const race = new RaceControl();
+  ids.forEach((id, i) => race.join(id, id.toUpperCase(), i, now.t));
+  race.start(ids[0], now.t);
+  now.t += RACE.countdown * 1000;
+  race.tick(now.t);
+  return race;
+}
+
+test('teleporting up to each line and stepping over it counts nothing, and sets no record', () => {
+  const now = { t: 1_000_000 };
+  const race = started(['a'], now);
+  const L = track().length;
+  for (let lap = 0; lap < RACE.laps; lap++) {
+    for (let k = 1; k <= CHECKPOINTS; k++) {
+      const s = ((k % CHECKPOINTS) * L) / CHECKPOINTS;
+      for (const p of [pointAt(s - 1), pointAt(s + 1)]) {
+        now.t += 16;
+        race.drove('a', p.x, p.z, now.t);
+      }
+    }
+  }
+  const r = race.state();
+  assert.equal(r.racers[0].lap, 0);
+  assert.equal(r.record, undefined);
+  // Even sitting a while by each line before stepping over (the office then takes the car to be there), nothing counts.
+  for (let k = 1; k <= 3; k++) {
+    const s = (k * L) / CHECKPOINTS;
+    const b = pointAt(s - 1), a = pointAt(s + 1);
+    now.t += 16;
+    race.drove('a', b.x, b.z, now.t);
+    now.t += 4000;
+    race.drove('a', b.x, b.z, now.t);
+    now.t += 100;
+    race.drove('a', a.x, a.z, now.t);
+  }
+  assert.equal(race.state().racers[0].checkpoint, 0);
+});
+
+test('someone who never drives off can’t keep the circuit forever', () => {
+  const now = { t: 0 };
+  const race = started(['a', 'b'], now);
+  now.t += 3 * 60_000 + 1;
+  assert.ok(race.tick(now.t));
+  assert.equal(race.state().phase, 'finished');
+  // Crawling round, checkpoint by checkpoint, it still ends in the end.
+  const slow = started(['a'], { t: 0 });
+  let t = 0;
+  const cap = RACE.laps * 5 * 60_000;
+  for (let s = -7; t < cap - 1000; s += 1) {
+    const p = pointAt(s);
+    t += 1000;
+    slow.drove('a', p.x, p.z, t);
+  }
+  assert.equal(slow.state().phase, 'racing', 'still going, a line every couple of minutes');
+  assert.ok(slow.state().racers[0].checkpoint > 0);
+  assert.ok(slow.tick(RACE.countdown * 1000 + cap + 1), 'the lights went out that long ago');
+  assert.equal(slow.state().phase, 'finished');
+});
+
+test('the finishers stay in the results when they get out or go home', () => {
+  const now = { t: 0 };
+  const race = started(['a', 'b'], now);
+  driveOn(race, 'a', -7, track().length * RACE.laps + 10, now);
+  assert.equal(race.leave('a', now.t), false, 'Ada is home: she stays in');
+  assert.ok(race.leave('b', now.t));
+  let r = race.state();
+  assert.equal(r.phase, 'finished');
+  assert.deepEqual(r.racers.map((x) => [x.name, x.position]), [['A', 1]]);
+  race.leave('a', now.t);
+  assert.equal(race.state().phase, 'finished', 'the results stay up');
+  now.t += RACE.results * 1000 + 1;
+  race.tick(now.t);
+  r = race.state();
+  assert.equal(r.phase, 'idle');
+});
+
+test('counting down, a car stays on its slot; starting from anywhere else counts for nothing', () => {
+  const race = new RaceControl();
+  race.join('a', 'Ada', 0, 0);
+  race.start('a', 0);
+  const g = gridPose(0);
+  assert.equal(race.offGrid('a', g.x + 1, g.z), false);
+  assert.ok(race.offGrid('a', g.x + 10, g.z));
+  assert.equal(race.offGrid('nobody', g.x + 10, g.z), false);
+  race.tick(RACE.countdown * 1000);
+  assert.equal(race.offGrid('a', g.x + 10, g.z), false, 'once it’s on, it’s racing');
+  // Over the first line from somewhere up the road: too far from the grid to have driven it.
+  const s = track().length / CHECKPOINTS;
+  const b = pointAt(s - 1), a = pointAt(s + 1);
+  race.drove('a', b.x, b.z, RACE.countdown * 1000 + 100);
+  race.drove('a', a.x, a.z, RACE.countdown * 1000 + 200);
+  assert.equal(race.state().racers[0].checkpoint, 0);
+});

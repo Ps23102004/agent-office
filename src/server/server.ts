@@ -1418,7 +1418,7 @@ export async function startServer(cfg: Config) {
         }
         if (typeof msg.golf === 'boolean') {
           // The tee's on an office floor's balcony; there's none up on the roof.
-          const golf = msg.golf && c.peer.floor !== ROOF;
+          const golf = msg.golf && c.peer.floor !== ROOF && c.peer.floor !== CIRCUIT;
           if (golf === !!c.peer.golfing) break;
           if (golf) c.peer.golfing = true;
           else delete c.peer.golfing;
@@ -1526,6 +1526,11 @@ export async function startServer(cfg: Config) {
           break;
         }
         const floor = floors.get(str(msg.floor, 64));
+        // Off the race circuit with no building left to go back to: out to the lobby.
+        if (!floor && !floors.size && c.peer.floor === CIRCUIT) {
+          toLobby(c);
+          break;
+        }
         if (!floor) warn(c, building.pending().some((d) => d.id === msg.floor) ? "That floor is still being cloned — it'll be ready in a moment" : 'No such floor');
         else goToFloor(c, floor, arrivalSpot(msg.at));
         break;
@@ -1601,6 +1606,8 @@ export async function startServer(cfg: Config) {
       case 'car.drive': {
         const garage = garageOf(c);
         const car = Math.trunc(num(msg.car));
+        // Counting down on the grid, a car stays on its slot (no creeping, no starting from anywhere else).
+        if (garage === circuitCars && race.offGrid(c.id, num(msg.x), num(msg.z))) break;
         const now = garage?.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer), slip: msg.slip === undefined ? 0 : num(msg.slip) });
         if (now) toNeighbors(c, { t: 'car.move', car, ...now }, true);
         if (now && garage === circuitCars && race.drove(c.id, now.x, now.z, Date.now())) raceChanged();

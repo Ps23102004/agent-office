@@ -139,8 +139,6 @@ scene.background = new THREE.Color('#bfe3ff');
 scene.fog = new THREE.Fog('#bfe3ff', 40, 90);
 /** How far the camera sees in the office: as far as the haze ever is, from the top floor. */
 const FAR = HAZE_MAX + 20;
-/** W1 island: down on the street, out to the sea's horizon. */
-const SHORE_FAR = 600;
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, FAR);
 
 const hemi = new THREE.HemisphereLight('#fff5e6', '#c9a27a', 1.5);
@@ -965,7 +963,12 @@ function toCircuit() {
 function leaveCircuit(to?: string) {
   const floors = builtFloors();
   const floor = to ?? (floors.some((f) => f.id === raceFrom?.floor) ? raceFrom!.floor : floors[0]?.id);
-  if (!floor || trip) return;
+  if (trip) return;
+  // No floors left in the building: out to the lobby, where the elevator waits for one.
+  if (!floor) {
+    placeOnArrival = true;
+    return goThrough('');
+  }
   if (to) {
     // Arriving by elevator, in its car.
     placeOnArrival = true;
@@ -4853,22 +4856,11 @@ function frame(ts?: number) {
     splashes.burst(x, player.street - 0.3, z, 1);
     sound.splash({ x, y: player.street, z }, 1);
     fade(true);
-    // Only if you're still where you went in: a trip or a gate since then is somewhere else, with its own fade.
-    const here = `${store.floor}|${upTop}|${atCircuit}|${player.street}`;
     setTimeout(() => {
-      wadedAt = 0;
-      if (trip || gateTrip) return;
-      if (`${store.floor}|${upTop}|${atCircuit}|${player.street}` === here && !driver.active && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
+      if (!driver.active && !upTop && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
       fade(false);
+      wadedAt = 0;
     }, 700);
-  }
-  // W1 island: down on the street the camera sees out past the haze to the sea's horizon (world/ocean.ts fades the sea out before it).
-  if (!upTop && !atCircuit) {
-    const far = inOffice() && Math.abs(player.pos.y - player.street) < 3 ? SHORE_FAR : FAR;
-    if (camera.far !== far) {
-      camera.far = far;
-      camera.updateProjectionMatrix();
-    }
   }
   // Walked into a pole's hole: you grab the pole on your way down it.
   const hole = inOffice() && office.stack.polesGoDown() ? office.stack.poles().find((s) => Math.hypot(player.pos.x - s.x, player.pos.z - s.z) < POLE.hole - 0.15) : undefined;
@@ -4989,7 +4981,7 @@ function frame(ts?: number) {
       const mine = driver.car === i && driver.driving;
       if (!c.driver && !mine) continue;
       const pose = fleet().cars[i]?.pose ?? c;
-      engines.push({ car: i, at: { x: pose.x, y: streetY() + 0.5, z: pose.z }, speed: pose.speed, gas: mine ? driver.gas : Math.min(1, Math.abs(pose.speed) / 10) });
+      engines.push({ car: i, at: { x: pose.x, y: streetY() + 0.5, z: pose.z }, speed: pose.speed, gas: mine ? driver.gas : Math.min(1, Math.abs(pose.speed) / 10), kind: carDefs()[i]?.kind });
     }
   }
   sound.setEngines(engines);
@@ -5033,6 +5025,8 @@ function frame(ts?: number) {
   splashes.update(dt);
   confetti.update(dt);
   hanger.update();
+  // W2: the sun's shadows round you at the circuit, before the sky puts the sun where it goes from there.
+  followSun();
   sky.update(dt, t, camera);
   // A map of its own lights itself its own way (the castle's torchlit hall), after the sky's had its say.
   if (!upTop && !atCircuit) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
@@ -5040,7 +5034,6 @@ function frame(ts?: number) {
   // W2: the circuit's lights and crowd; through a gate, to it or back; the sun's shadows follow you round it.
   if (atCircuit && circuit) circuit.update(dt, t, store.race, store.officeNow(), circuit.fleet.cars.map((v) => v.pose));
   gates();
-  followSun();
   sound.setWeather(sky.rain, 1 - sky.daylight);
   if (upTop && roof) {
     // Everything up there moves to the DJ's set; strobes flash the whole roof as a drop lands.

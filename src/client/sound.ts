@@ -9,7 +9,7 @@
  * the jukebox has a volume of its own.
  */
 import { CABINET, DESKS, DJ_BOOTH, FLOOR, GONG, JUKEBOX, WINDOWS as OPENINGS, inWing } from '../shared/layout';
-import { CARS } from '../shared/garage';
+import { CARS, type CarKind } from '../shared/garage';
 import type { GongWhy } from '../shared/protocol';
 import { STREAM } from '../shared/jukebox';
 import { TunePlayer } from './music';
@@ -797,13 +797,14 @@ export class OfficeSound {
    * The engines running: one for each car somebody's driving, where it is, how fast it's going and
    * how hard it's pushed. One that's dropped off the list dies away.
    */
-  setEngines(running: { car: number; at: Pos; speed: number; gas: number }[]) {
+  setEngines(running: { car: number; at: Pos; speed: number; gas: number; kind?: CarKind }[]) {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
     const on = new Set<number>();
     for (const e of running) {
-      const kind = CARS[e.car]?.kind;
+      // The circuit's cars say what they are; the garage's are by their place in CARS.
+      const kind = e.kind ?? CARS[e.car]?.kind;
       if (kind === 'bicycle') continue; // Pedals don't have an engine note.
       on.add(e.car);
       let m = this.motors.get(e.car);
