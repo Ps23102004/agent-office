@@ -230,7 +230,8 @@ export class Driver {
         const slid = { ...along.to, yaw: 0 };
         // Backing along it, it's the tail that leads.
         const heading = along.heading + (next.speed < 0 ? Math.PI : 0);
-        const rotY = wrap(slid.rotY + wrap(heading - slid.rotY) * 0.7);
+        // Three tenths of the way round each 1/120 s, however short the step: it settles along it without a pop.
+        const rotY = wrap(slid.rotY + wrap(heading - slid.rotY) * (1 - 0.7 ** (h * 120)));
         // Swinging round about its middle takes its far end into it: a nudge off it, the way it came.
         const off = along.heading === 0 || along.heading === Math.PI ? { x: -Math.sign(dx), z: 0 } : { x: 0, z: -Math.sign(dz) };
         const turned = [0, 0.03, 0.08].map((d) => ({ ...slid, rotY, x: slid.x + off.x * d, z: slid.z + off.z * d })).find((q) => fits(q));

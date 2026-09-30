@@ -131,3 +131,9 @@ test('a car stopped by the handbrake mid-slide drives off again on the gas', () 
   for (let i = 0; i < 60; i++) p = drive(p, { gas: 1, turn: 0, brake: false }, 1 / 30);
   assert.ok(p.speed > 5, `speed ${p.speed}`);
 });
+
+test('a motorbike flat out on full lock turns no tighter than its tires hold', () => {
+  let p: CarPose = { x: 0, z: 0, rotY: 0, speed: SPECS.motorbike.top, steer: 0, slip: 0, yaw: 0 };
+  for (let i = 0; i < 30; i++) p = drive(p, { gas: 1, turn: 1, brake: false }, 1 / 30, 'motorbike');
+  assert.ok(Math.abs(p.speed * (p.yaw ?? 0)) <= SPECS.motorbike.grip * 9.81 + 1e-6, `lateral ${p.speed * (p.yaw ?? 0)}`);
+});

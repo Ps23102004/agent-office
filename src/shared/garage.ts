@@ -193,13 +193,15 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind): CarPos
   } else if (gas < 0) {
     if (v > 0) toward(0, DRIVE.brake);
     else v = Math.max(-spec.reverse, v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
-  } else toward(0, bike ? 0.65 : DRIVE.coast);
+  } else toward(0, kind === 'bicycle' ? 0.65 : kind === 'motorbike' ? 2 : DRIVE.coast);
 
   let yaw = p.yaw ?? 0;
   let slip = p.slip ?? 0;
   if (bike || Math.abs(v) < 3) {
     // At walking speed the tires settle before another step: no jitter, and no sideways bikes.
-    const target = v * Math.tan(steer) / spec.wheelbase;
+    // No sharper than the tires can hold: sideways, v × yaw is at most grip × g.
+    const most = (spec.grip * TIRES.gravity) / Math.max(1, Math.abs(v));
+    const target = clamp((v * Math.tan(steer)) / spec.wheelbase, -most, most);
     yaw += (target - yaw) * (1 - Math.exp(-dt * 18));
     slip = bike ? 0 : slip * Math.exp(-dt * 12);
   } else {
