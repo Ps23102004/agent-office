@@ -639,6 +639,11 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       target = Math.min(target, safeSpeed(g, vo, K.vmax));
       carAhead = true;
     }
+    for (const p of people) {
+      if (!p.on || (p.state !== 'cross' && p.state !== 'down')) continue;
+      const g = gapAhead(v, { x: p.x + p.dx, z: p.z + p.dz, yaw: 0, len: 0.7, wid: 0.7 });
+      if (g !== null) target = Math.min(target, safeSpeed(g, 0, K.vmax));
+    }
     for (const b of avoidBodies) {
       const g = gapAhead(v, b);
       if (g !== null) target = Math.min(target, safeSpeed(g, 0, K.vmax));
@@ -819,7 +824,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
 
   function writeVehicle(v: Vehicle) {
     const m = meshes[v.kind];
-    const hi = v.slot * 2;
+    const hi = v.id * 2;
     if (!v.on) {
       m.setMatrixAt(v.slot, ZERO);
       lamps.setMatrixAt(hi, ZERO);
@@ -903,8 +908,8 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       }
       for (const v of vehicles) writeVehicle(v);
       for (const v of vehicles) {
-        lamps.setColorAt(v.slot * 2, HEAD);
-        lamps.setColorAt(v.slot * 2 + 1, TAIL.set(v.braking ? '#ff3030' : night > 0.3 ? '#c81e1e' : '#8a2a2a'));
+        lamps.setColorAt(v.id * 2, HEAD);
+        lamps.setColorAt(v.id * 2 + 1, TAIL.set(v.braking ? '#ff3030' : night > 0.3 ? '#c81e1e' : '#8a2a2a'));
       }
       for (const p of people) writePerson(p);
       for (const m of [...KINDS.map((k) => meshes[k]), lamps, torso, head, hairM, arms, legs]) {
