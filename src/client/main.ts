@@ -34,9 +34,9 @@ import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
 import { CARS, SPECS, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
-import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
+import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
-import { joinGrid, myRacer, startRace, wireRace } from './race';
+import { joinGrid, leaveRace, myRacer, startRace, wireRace } from './race';
 import { RACE } from '../shared/race';
 import { Smoke } from './world/smoke';
 // W1 island: splashes in the sea, and where you come back out of it.
@@ -98,7 +98,7 @@ import { EmoteWheel } from './ui/emotes';
 import { whereabouts } from './ui/whereabouts';
 // W4 UI + features: race screens and the shared hangout window.
 import { RaceUI } from './ui/race';
-import { raceAdapter } from './ui/race-adapter';
+import { raceAdapter, wireRaceUI } from './ui/race-adapter';
 import { openHangout } from './ui/hangout';
 import { wayTo } from './walkto';
 import { DESK_KEYS, interactionAvailable, type DeskKey } from './interaction';
@@ -4584,6 +4584,26 @@ $('project').addEventListener('click', () => {
 // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu ----------------------------
 // W4 UI + features: W2 only needs to swap the race adapter for its live store/actions.
 const raceUI = new RaceUI($('hud'), raceAdapter);
+// The race screens read the circuit's own store and actions (client/race.ts); the map is the track's line, thinned, and everyone's car there.
+const trackOutline = track().points.filter((_, i) => i % 6 === 0);
+wireRaceUI({
+  store,
+  available: () => true,
+  atCircuit: () => atCircuit,
+  peerAtCircuit: (p) => p.floor === CIRCUIT,
+  now: () => store.officeNow(),
+  carName: (car) => CIRCUIT_CARS[car]?.name ?? `Car ${car + 1}`,
+  map: () =>
+    atCircuit
+      ? {
+          outline: trackOutline,
+          dots: store.cars.flatMap((c, i) => (c.driver ? [{ id: c.driver, name: c.driver === store.you ? 'You' : (store.peers.get(c.driver)?.name ?? CIRCUIT_CARS[i]?.name ?? '?'), x: c.x, z: c.z }] : [])),
+        }
+      : null,
+  startRace,
+  joinGrid: () => void joinGrid(),
+  leaveRace,
+});
 function showHangout() {
   openHangout({ net, voice, toggleVoice, jumpTo: walkTo, peerAtCircuit: (p) => raceAdapter.peerAtCircuit(p),
     jumpBlocked: (p) => raceAdapter.peerAtCircuit(p) ? 'Meet them through the circuit gate' : undefined });
