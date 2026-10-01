@@ -81,7 +81,7 @@ export function openHangout(opts: HangoutOptions) {
       incoming, h('h3', {}, 'Meet here'), h('p.note', {}, 'Post a spot in chat for everyone to click and travel to. Café Corner and The Night Owl are out on the city street.'), meets,
       h('h3', {}, 'Who’s around'), rideHelp, list),
     h('footer', {}, h('span.grow', {}, h('span.key', {}, 'G'), 'hold for the emote wheel · ', h('span.key', {}, '1–6'), 'quick emotes · ', h('span.key', {}, 'V'), 'hold to talk')));
-  const openInvite = () => [...(store.me.admin ? store.accounts?.invites ?? [] : [])].find((v) => !v.name && v.role === 'member' && v.expiresAt > Date.now());
+  const openInvite = () => [...(store.me.admin ? store.accounts?.invites ?? [] : [])].find((v) => !v.name && v.role === 'member' && v.expiresAt > store.officeNow());
   const render = () => {
     const peers = [...store.peers.values()];
     const talking = peers.filter((p) => p.id === store.you ? opts.voice.inVoice : p.voice).length;

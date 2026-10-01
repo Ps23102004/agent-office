@@ -943,7 +943,11 @@ function carAgain() {
 
 /** Hands free, on your feet and not on your way anywhere, to get into a car: false, with a word why, if you can't. */
 function readyToRide(): boolean {
-  if (trip || climber.active || driver.active) return false;
+  const unavailable = trip ? 'Finish your trip before accepting a ride' : climber.active ? 'Finish climbing before accepting a ride' : driver.active ? 'Get out of your current vehicle before accepting a ride' : '';
+  if (unavailable) {
+    toast(unavailable, 'warn');
+    return false;
+  }
   const busy = carrying ? '🗂️ Your hands are full: put the card back first (Q)' : holdingBall() ? '🏀 Put the ball down first (Q)' : '';
   if (busy) {
     toast(busy, 'warn');
