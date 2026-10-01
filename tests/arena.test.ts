@@ -143,3 +143,23 @@ test('first to the limit wins; the results come down and a new match starts; one
   m.a.leave('b', m.now);
   assert.equal(m.a.state().phase, 'warmup');
 });
+
+test('a shot after someone is due back leaves their respawn to the timer; late shots still count', () => {
+  const m = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
+  m.wait(RULES.safe * 1000);
+  for (let i = 0; i < 4; i++) m.shoot('a', 'b');
+  // Past b's respawn, a fires before the timer comes round: the timer still has b's spawn to tell.
+  const at = m.now + RULES.respawn * 1000 + 50;
+  m.a.fire('a', { x: C.x - 20, y: EYE_Y, z: C.z - 30 }, { x: 0, y: -1, z: 0.1 }, at);
+  assert.deepEqual(m.a.tick(at + 10).spawned.map((s) => s.id), ['b']);
+  // Shots 100 ms apart, the middle one 40 ms late: all three taken.
+  const m2 = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
+  const o = { x: C.x - 20, y: EYE_Y, z: C.z - 30 }, d = { x: 0, y: -1, z: 0.1 };
+  const t0 = m2.now + 5000;
+  assert.ok(m2.a.fire('a', o, d, t0));
+  assert.ok(m2.a.fire('a', o, d, t0 + 140));
+  assert.ok(m2.a.fire('a', o, d, t0 + 200));
+  assert.equal(m2.a.fire('a', o, d, t0 + 210), undefined, 'but not faster than the rifle');
+  // Nor from over the top of cover, out of their own eyes' sight.
+  assert.equal(m2.a.fire('a', { ...o, y: o.y + 2 }, d, t0 + 1000), undefined);
+});

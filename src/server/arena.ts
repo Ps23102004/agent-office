@@ -4,6 +4,10 @@ import { BODY_R, EYE_Y, RULES, SPAWNS, idleArena, rayPerson, rayWorld, type Aren
 const REACH = 2.5;
 /** People are this much wider to hit than they are (m): where the office has them is a moment behind. */
 const LAG_R = 0.25;
+/** Slack (ms) for shots and reloads bunched up on their way: the average rate still can't beat RULES.every. */
+const JITTER = RULES.every / 2;
+/** How far (m) the eyes a shot leaves from can be off where the office has them, up or down: a step, a bob, a moment's lag. */
+const REACH_Y = 0.7;
 /** Kills kept in the feed. */
 const FEED = 6;
 
@@ -81,18 +85,27 @@ export class ArenaControl {
    * not where they say they are), else what it hit. The office's word, not the page's.
    */
   fire(id: string, o: V3, d: V3, now: number): ShotResult | undefined {
-    this.tick(now);
-    const me = this.arena.players.find((p) => p.id === id);
+    // Only the reload: respawns, healing and the match clock are the timer's (tick), which tells everyone.
     const g = this.guns.get(id);
+    if (g?.reloadAt !== undefined && now >= g.reloadAt - JITTER) {
+      g.ammo = RULES.mag;
+      delete g.reloadAt;
+    }
+    const me = this.arena.players.find((p) => p.id === id);
     const at = this.where(id);
     if (!me || !g || !at || !me.alive || this.arena.phase === 'over') return undefined;
-    if (g.reloadAt !== undefined || g.ammo <= 0 || now < g.ready - 15) return undefined;
+    if (g.reloadAt !== undefined || g.ammo <= 0 || now < g.ready - JITTER) return undefined;
     const len = Math.hypot(d.x, d.y, d.z);
     if (!(len > 0.5) || ![o.x, o.y, o.z].every(Number.isFinite)) return undefined;
     const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
-    if (Math.hypot(o.x - at.x, o.z - at.z) > REACH || Math.abs(o.y - (at.y + EYE_Y)) > REACH) return undefined;
+    if (Math.hypot(o.x - at.x, o.z - at.z) > REACH || Math.abs(o.y - (at.y + EYE_Y)) > REACH_Y) return undefined;
+    // Not round a corner or over cover from behind it: the eyes have to see where the shot leaves from.
+    const eye = { x: at.x, y: at.y + EYE_Y, z: at.z };
+    const gap = Math.hypot(o.x - eye.x, o.y - eye.y, o.z - eye.z);
+    if (gap > 0.05 && rayWorld(eye, { x: (o.x - eye.x) / gap, y: (o.y - eye.y) / gap, z: (o.z - eye.z) / gap }, gap) < gap - 0.05) return undefined;
     g.ammo--;
-    g.ready = now + RULES.every;
+    // From the last shot's slot, not when this one got here: a late one doesn't push the next back.
+    g.ready = Math.max(g.ready, now - JITTER) + RULES.every;
     g.safeUntil = 0;
     let t = rayWorld(o, dir);
     let hit: { id: string; head: boolean } | undefined;

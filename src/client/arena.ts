@@ -33,8 +33,10 @@ const KICK = { up: 0.012, side: 0.004, settle: 9 };
 /** The view's width (degrees) aiming down the sights. */
 const ADS_FOV = 48;
 /** Where the rifle sits in front of you, from the hip and aiming down its sights. */
-const HIP = new THREE.Vector3(0.2, -0.2, -0.38);
-const ADS = new THREE.Vector3(0, -0.122, -0.28);
+const HIP = new THREE.Vector3(0.17, -0.2, -0.52);
+const ADS = new THREE.Vector3(0, -0.112, -0.38);
+/** The rifle's size in your hands. */
+const GUN_SCALE = 0.75;
 
 const v = new THREE.Vector3();
 const dir = new THREE.Vector3();
@@ -56,6 +58,8 @@ export class ArenaPlay {
   private recoilZ = 0;
   private flashT = 0;
   private killedBy: string | undefined;
+  /** The view you had before the arena put you in first person, to go back to. */
+  private viewWas: ReturnType<() => PlayerController['view']> | null = null;
   /** Kills in quick succession, for the medals. */
   private recent: number[] = [];
   /** Guns in everyone else's hands, by peer id. */
@@ -63,6 +67,7 @@ export class ArenaPlay {
 
   constructor(private w: ArenaWiring) {
     this.gun.group.visible = false;
+    this.gun.group.scale.setScalar(GUN_SCALE);
     w.hands.scene.add(this.gun.group);
     this.flash = new THREE.Mesh(
       new THREE.PlaneGeometry(0.16, 0.16),
@@ -85,6 +90,7 @@ export class ArenaPlay {
     if (on === this.active) return;
     this.active = on;
     this.firing = this.aiming = false;
+    this.adsK = this.kick = this.recoilZ = this.bloom = 0;
     this.gun.group.visible = on;
     this.w.hands.gunPose = on ? { right: new THREE.Vector3(), left: new THREE.Vector3() } : null;
     this.hud.show(on);
@@ -93,12 +99,15 @@ export class ArenaPlay {
       this.ammo = RULES.mag;
       this.reloadAt = 0;
       this.killedBy = undefined;
+      this.viewWas = this.w.player.view;
       this.w.player.setView('first');
     } else {
       for (const g of this.held.values()) g.removeFromParent();
       this.held.clear();
       if (!this.w.player.enabled && this.killedBy !== undefined) this.w.player.enabled = true;
       this.killedBy = undefined;
+      if (this.viewWas) this.w.player.setView(this.viewWas);
+      this.viewWas = null;
     }
   }
 
@@ -143,6 +152,7 @@ export class ArenaPlay {
 
   /** The view's width for aiming down the sights, blended in; null to leave it alone. */
   fov(base: number): number {
+    if (!this.active) return base;
     return base + (ADS_FOV - base) * this.adsK;
   }
 
@@ -152,6 +162,11 @@ export class ArenaPlay {
     const now = performance.now();
     const p = this.w.player;
     const alive = this.alive();
+    // Back in some way other than arena.spawn (a reconnect while dead): on your feet again.
+    if (alive && this.killedBy !== undefined) {
+      this.killedBy = undefined;
+      p.enabled = true;
+    }
     if (this.reloadAt && now >= this.reloadAt) {
       this.reloadAt = 0;
       this.ammo = RULES.mag;
@@ -191,8 +206,8 @@ export class ArenaPlay {
     // Hands on it: the right at the grip, the left under the handguard.
     const pose = this.w.hands.gunPose;
     if (pose) {
-      pose.right.set(0.0, -0.09, 0.03).applyEuler(g.rotation).add(g.position);
-      pose.left.set(0.0, -0.03, -0.4).applyEuler(g.rotation).add(g.position);
+      pose.right.set(0.0, -0.09, 0.03).multiplyScalar(GUN_SCALE).applyEuler(g.rotation).add(g.position);
+      pose.left.set(0.0, -0.03, -0.4).multiplyScalar(GUN_SCALE).applyEuler(g.rotation).add(g.position);
     }
     g.visible = alive;
     this.flashT -= dt;

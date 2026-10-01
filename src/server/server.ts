@@ -54,7 +54,7 @@ import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
 import { ArenaControl } from './arena.js';
-import { ARENA, ARENA_GATE } from '../shared/arena.js';
+import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF } from '../shared/arena.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
 
 const MIME: Record<string, string> = {
@@ -1461,6 +1461,14 @@ export async function startServer(cfg: Config) {
         p.z = num(msg.z);
         p.rotY = num(msg.rotY);
         p.moving = !!msg.moving;
+        // In the arena, inside its walls and no higher than the tops of the stacked containers: nobody shoots from (or hides in) the sky or under the ground.
+        // ponytail: no speed check yet, so a modified page can still teleport about inside the yard.
+        if (p.floor === ARENA) {
+          const lim = ARENA_HALF - 0.3;
+          p.x = Math.min(ARENA_CENTER.x + lim, Math.max(ARENA_CENTER.x - lim, p.x));
+          p.z = Math.min(ARENA_CENTER.z + lim, Math.max(ARENA_CENTER.z - lim, p.z));
+          p.y = Math.min(6.5, Math.max(0, p.y));
+        }
         toNeighbors(c, { t: 'peer.move', id: c.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving }, true);
         break;
       }

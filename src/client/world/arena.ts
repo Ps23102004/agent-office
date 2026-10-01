@@ -142,6 +142,8 @@ export function buildArena(): ArenaWorld {
   // The ground: concrete, with painted bays and lanes.
   const ground = mesh(new THREE.PlaneGeometry(600, 600).rotateX(-Math.PI / 2), toon(GROUND), C.x, 0, C.z, false);
   group.add(ground);
+  // Something to stand on: the street's far below, out here.
+  colliders.push({ minX: C.x - 300, maxX: C.x + 300, minZ: C.z - 300, maxZ: C.z + 300, bottom: -1, top: 0 });
   for (let i = -3; i <= 3; i++) {
     block(solid, 0.18, 0.012, ARENA_HALF * 2 - 2, '#e9ecef', C.x + i * 10, 0.002, C.z, false);
     block(solid, ARENA_HALF * 2 - 2, 0.012, 0.18, '#d8dadd', C.x, 0.002, C.z + i * 10, false);
