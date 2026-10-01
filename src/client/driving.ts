@@ -1,5 +1,5 @@
 import { SPECS, DRIVE_STEP, seatOffset, carFits, carPoint, collide, contact, drive, onPavement, type Box, type CarKind, type CarPose, type CarSeat, type Contact, type Pedals } from '../shared/garage';
-import { shoreRespawns, surfaceAt, vehicleSolids } from '../shared/city';
+import { shoreRespawns, surfaceAt, vehicleSolids, type Surface } from '../shared/city';
 import type { PlayerController } from './player';
 import type { ViewMode } from './state';
 import type { Fleet } from './world/cars';
@@ -21,6 +21,8 @@ export interface DriveHooks {
   fade?(on: boolean): void;
   /** Where a car can be, if not the pavement (at the race circuit: the track, its grass and the paddock). */
   ground?(): ((x: number, z: number) => boolean) | undefined;
+  /** What's under the tires at (x, z) where `ground` says (the circuit's track or its grass); the city's surface otherwise. */
+  surfaceAt?(x: number, z: number): Surface;
   /** What the ground does to the car after a step of `dt` (grass slows it): the car as it is then. */
   surface?(p: CarPose, dt: number): CarPose;
   /** Held on the brakes, whatever you press (on the grid, counting down). */
@@ -349,9 +351,8 @@ export class Driver {
     const h = dt / n;
     let pose = from;
     for (let i = 0; i < n; i++) {
-      // The grip under the tires, where the car is: road, grass, sand (shared/garage.ts GROUND). At the
-      // circuit (its own ground), the circuit's surface hook does that instead.
-      const driven = drive(pose, pedals, h, kind, ground ? 'road' : surfaceAt(pose.x, pose.z));
+      // The grip under the tires, where the car is: road, grass, sand (shared/garage.ts GROUND); at the circuit, its own.
+      const driven = drive(pose, pedals, h, kind, ground ? (this.hooks.surfaceAt?.(pose.x, pose.z) ?? 'road') : surfaceAt(pose.x, pose.z));
       let next = this.hooks.surface ? this.hooks.surface(driven, h) : driven;
       // Over the circuit's edge (from on it: one that's off can drive back on): back where it was, off the barrier.
       const on = (q: CarPose) => !ground || onPavement(q, kind, ground);

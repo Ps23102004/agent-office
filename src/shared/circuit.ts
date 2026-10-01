@@ -53,13 +53,14 @@ const LEGS: readonly Leg[] = [
   { turn: 90, r: 40, name: 'Carousel' },
   { straight: 30 },
   { turn: 90, r: 40, name: 'Carousel' },
-  { straight: 566.8 },
+  { straight: 536.8 },
+  // Its legs longer than the grass either side of them twice over, so there's no cutting across it.
   { turn: 90, r: 18, name: 'Complex', brake: true },
-  { straight: 40 },
+  { straight: 60 },
   { turn: -90, r: 18, name: 'Complex' },
-  { straight: 30 },
+  { straight: 60 },
   { turn: 90, r: 22, name: 'Complex' },
-  { straight: 191.2 },
+  { straight: 171.2 },
   { turn: 20, r: 260, name: 'Kink' },
   { straight: 60 },
   { turn: -20, r: 260, name: 'Kink' },
@@ -250,15 +251,44 @@ export function crossed(i: number, a: { x: number; z: number }, b: { x: number; 
 /** How far past a checkpoint's line a car put back on the track is set down (m). */
 const RESET_PAST = 3;
 
+/** As fast as a car goes on the circuit's grass (m/s): slower than round any of its corners. */
+export const GRASS_TOP = 12;
+
 /**
- * Where a car goes back to on the track (off it too long, stuck, or the wrong way round), the last
- * checkpoint it went through being `last`: on the centre line just past that line, facing the way
- * round. Before its first time over the start line (-1), just short of that. The office takes a car
- * turning up here as a fair reset rather than a jump (server/race.ts).
+ * How far round the lap (x, z) is past the line of checkpoint `last` (m; - is short of it, and so
+ * is anywhere before the first time over the start line). For telling a reset that's behind a car
+ * from one that's ahead of it.
  */
-export function resetPose(last: number): { x: number; z: number; rotY: number } {
-  const p = pointAt(last < 0 ? -10 : (last * track().length) / CHECKPOINTS + RESET_PAST);
-  return { x: p.x, z: p.z, rotY: Math.atan2(p.tx, p.tz) };
+export function pastLine(last: number, x: number, z: number): number {
+  const L = track().length;
+  const gap = L / CHECKPOINTS;
+  const past = (nearestProgress(x, z).s - Math.max(0, last) * gap + L) % L;
+  return past > L - gap ? past - L : past;
+}
+
+/**
+ * Where a car goes back on the track (off it too long, stuck, or the wrong way round), in the order
+ * to try them till there's one with room: just past the last checkpoint it went through (`t`, its
+ * timing), facing the way round; then a little to either side, and further back. Racing, before the
+ * first line after the start, its own grid slot and behind it; before its first time over the start
+ * line on practice laps, just short of that. The office takes a car turning up on one of these, and
+ * no further round than it was, as a fair reset rather than a jump (server/race.ts).
+ */
+export function resetSpots(t: { checkpoint: number; lap?: number; slot?: number }): { x: number; z: number; rotY: number }[] {
+  const base =
+    t.slot !== undefined && t.lap === 0 && t.checkpoint <= 0
+      ? nearestProgress(gridPose(t.slot).x, gridPose(t.slot).z)
+      : { s: t.checkpoint < 0 ? -10 : (t.checkpoint * track().length) / CHECKPOINTS + RESET_PAST, d: 0 };
+  const spots: { x: number; z: number; rotY: number }[] = [];
+  for (let back = 0; back <= 24; back += 8) {
+    for (const across of [0, 4, -4]) {
+      const d = base.d + across;
+      if (Math.abs(d) > TRACK.width / 2 - 1.5) continue;
+      const p = pointAt(base.s - back);
+      spots.push({ x: p.x + p.tz * d, z: p.z - p.tx * d, rotY: Math.atan2(p.tx, p.tz) });
+    }
+  }
+  return spots;
 }
 
 /** Grid slot `slot`'s spot behind the start line: two by two, staggered, the odd ones on the right. */

@@ -34,8 +34,8 @@ import { ROUND, score, targetFrame, type BarGame, type Score, type Toss } from '
 import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
-import { CARS, SPECS, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
-import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, resetPose, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
+import { CARS, SPECS, carFits, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
+import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, GRASS_TOP, gridPose, inGate, resetSpots, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
 import { ARENA, ARENA_GATE, ARENA_NAME, CITY_ARENA_GATE } from '../shared/arena';
 import { buildArena, type ArenaWorld } from './world/arena';
@@ -435,11 +435,11 @@ const fleet = () => (store.floor === CIRCUIT ? theCircuit().fleet : office.cars)
 const carDefs = (): readonly CarDef[] => (store.floor === CIRCUIT ? CIRCUIT_CARS : CARS);
 /** How high the ground the cars are on is: the street under your floor, or the circuit's. */
 const streetY = () => (away() ? 0 : player.street);
-/** Off the track, the grass slows a car right down. */
+/** Off the track, the grass (slippery already: shared/garage.ts GROUND, and no boost there) bogs a car down to a crawl, slower than any corner. */
 function onGrass(p: CarPose, dt: number): CarPose {
   if (trackSurface(p.x, p.z) !== 'grass') return p;
   const drag = Math.exp(-dt * 0.8);
-  const speed = Math.abs(p.speed) > 11 ? p.speed - Math.sign(p.speed) * 9 * dt : p.speed * drag;
+  const speed = Math.abs(p.speed) > GRASS_TOP ? p.speed - Math.sign(p.speed) * Math.min(Math.abs(p.speed) - GRASS_TOP, 16 * dt) : p.speed;
   return { ...p, speed, slip: (p.slip ?? 0) * drag };
 }
 /** Where you came to the circuit from (a floor, and the garage's car you drove through the gate in), to go back to. */
@@ -488,6 +488,7 @@ const driver = new Driver(player, office.cars, {
   // W2: at the circuit a car goes on its track, grass and paddock; the grass slows it; on the grid the brakes are on till the lights go out.
   ground: () => (atCircuit ? circuitGround : undefined),
   surface: (p, dt) => (atCircuit ? onGrass(p, dt) : p),
+  surfaceAt: (x, z) => (trackSurface(x, z) === 'grass' ? 'grass' : 'road'),
   hold: () => atCircuit && store.race.phase === 'countdown' && !!myRacer(),
 });
 const telescope = new TelescopeView(
@@ -1304,7 +1305,12 @@ function resetCar() {
     resetting = 0;
     fade(false, true);
     if (!atCircuit || !driver.driving) return;
-    const pose = { ...resetPose(myTiming()?.checkpoint ?? -1), speed: 0, steer: 0, slip: 0 };
+    // The first of the spots for where you've got to with room for your car, clear of the others (or the first anyway).
+    const car = driver.car!;
+    const spots = resetSpots(myTiming() ?? { checkpoint: -1 });
+    const others = fleet().solids(car);
+    const kind = carDefs()[car].kind;
+    const pose = { ...(spots.find((p) => carFits(p, others, kind, circuitGround)) ?? spots[0]), speed: 0, steer: 0, slip: 0 };
     fleet().place(driver.car!, pose);
     // Not driven there: it went through no lines on the way.
     coachFrom = null;
@@ -1339,7 +1345,7 @@ function raceFrame(dt: number, c: Circuit) {
   live.racers = r ? race.racers.length : 0;
   live.gapAhead = at?.ahead ?? null;
   live.gapBehind = at?.behind ?? null;
-  const ghostAt = onLap && t!.lapStartedAt !== undefined ? (ghost.record(t!.lapStartedAt, t!.bestLap, store.officeNow(), pose!), ghost.at(store.officeNow() - t!.lapStartedAt)) : null;
+  const ghostAt = onLap && t!.lapStartedAt !== undefined ? (ghost.record(t!.lapStartedAt, t!.lastLap, store.officeNow(), pose!), ghost.at(store.officeNow() - t!.lapStartedAt)) : null;
   c.ghost(ghostAt ? carDefs()[driver.car!] : null, ghostAt);
   live.ghost = !!ghostAt;
 }
