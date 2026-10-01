@@ -284,8 +284,9 @@ export function cityLayout(): CityLayout {
         const dz = lz - bz;
         if (Math.abs(dx) > Math.abs(dz) + 0.01) lot.fx = Math.sign(dx);
         else if (Math.abs(dz) > Math.abs(dx) + 0.01) lot.fz = Math.sign(dz);
-        else if ((i + j) & 1) lot.fx = k() < 0.5 ? -1 : 1;
-        else lot.fz = k() < 0.5 ? -1 : 1;
+        // A corner plot faces out of the block, onto one of its two streets (the dice still roll, so the rest stays as it was).
+        else if ((i + j) & 1) lot.fx = k() < 0.5 ? Math.sign(dx) || -1 : Math.sign(dx) || 1;
+        else lot.fz = k() < 0.5 ? Math.sign(dz) || -1 : Math.sign(dz) || 1;
         lot.hand = handBuilt.some((a) => touches(a, rect(lx, lz, lw, ld)));
         const kr = k();
         if (glassy) lot.kind = 'glass';

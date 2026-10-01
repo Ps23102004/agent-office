@@ -106,3 +106,15 @@ test('shop fronts come as one door each, and the street names are the same for e
   assert.equal(streetName('z', 0), 'Main Street');
   assert.equal(streetName('x', 9), '10th Avenue');
 });
+
+test('every building faces out of its block, onto a street', async () => {
+  const { cityLayout, STREET_X, STREET_Z, PERIOD } = await import('../src/shared/city.ts');
+  for (const l of cityLayout().lots) {
+    if (l.fx === 0 && l.fz === 0) continue;
+    // The block's middle: the front points away from it (or it's the only plot, dead centre).
+    const bx = STREET_X - PERIOD / 2 + PERIOD * Math.round((l.x - STREET_X + PERIOD / 2) / PERIOD);
+    const bz = STREET_Z - PERIOD / 2 + PERIOD * Math.round((l.z - STREET_Z + PERIOD / 2) / PERIOD);
+    const out = (l.x - bx) * l.fx + (l.z - bz) * l.fz;
+    assert.ok(out >= -0.01, `lot at ${l.x.toFixed(1)},${l.z.toFixed(1)} faces into its block`);
+  }
+});
