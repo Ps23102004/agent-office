@@ -135,6 +135,8 @@ export interface CarPose {
   slip?: number;
   /** Turning speed, rad/s, kept by your own physics; it needn't travel on the wire. */
   yaw?: number;
+  /** How far the tail's been let go of for a drift (0 to 1: see DRIFT), kept by your own physics like `yaw`. */
+  drift?: number;
 }
 
 /** A car as the office has it: where it is, and who's in it (PeerInfo ids). */
@@ -154,10 +156,12 @@ export function parked(defs: readonly CarDef[] = CARS): CarState[] {
 export interface Pedals {
   gas: number;
   turn: number;
-  /** Space: the handbrake on a car, an ordinary brake on a bike. */
+  /** Space: the handbrake on a car (it swings the tail round: a drift), an ordinary brake on a bike. */
   brake: boolean;
   /** Shift, with boost in the tank (client/driving.ts keeps the meter): faster, and on past top speed. */
   boost?: boolean;
+  /** Held hard on the brakes whatever else is pressed, and kept stopped (no reverse): on the grid counting down, or with a window open over the game. */
+  stop?: boolean;
 }
 
 /** Boost: how far past top speed it takes you, and the extra shove (m/s²) on top of the engine's. */
@@ -169,33 +173,71 @@ export const DRIVE = {
   /** Flat out, forward and in reverse (m/s): a Lambo's. */
   top: SPECS.lambo.top,
   reverse: SPECS.lambo.reverse,
-  /** Speeding up, forward and back, and slowing down on the brake or rolling (m/s²). */
+  /** Speeding up, forward and back, and slowing down on the brake (m/s²). */
   accel: 8,
   reverseAccel: 5,
   brake: 20,
-  coast: 2.5,
+  /** Rolling off the gas (m/s²): gentle, so lifting mid-corner never throws the car off it. */
+  coast: 1.2,
   /** The air, off the gas: m/s² for each (m/s)², so a fast car slows quicker than a slow one. */
-  drag: 0.0015,
-  /** Between the axles (m): how tight it turns. */
+  drag: 0.0006,
+  /** The handbrake: how hard it slows you (m/s²), and how much grip the locked rear tires keep. It swings the tail round; it doesn't stop you. */
+  handbrake: 2.5,
+  handbrakeGrip: 0.2,
+  /** Between the axles (m): how tight a Lambo turns (every kind has its own: SPECS). */
   wheelbase: 2.8,
   /** How far the front wheels turn at a crawl (radians): less the faster you go, so it doesn't spin out. */
   steer: 0.6,
-  /** How fast they turn (radians a second). */
+  /** How fast they turn at a crawl (radians a second). */
   steerRate: 2.8,
-  /** How hard a turn full lock asks for at speed (m/s² sideways): a little past what the tires hold, so you can lean on them. */
-  turn: 14,
+  /** At speed, how long the wheel takes from the middle to full lock, and back (s): quick, but never a twitch. */
+  steerIn: 0.14,
+  steerOut: 0.08,
+  /** How hard a turn full lock asks for at speed, of what the tires hold: a little past it, so you can lean on them. */
+  lock: 1.1,
+  /** Under this speed (m/s, sideways too) the tires just follow the wheels: no sliding at a crawl. */
+  crawl: 2.5,
 } as const;
+
+/**
+ * The help a driver gets, as in an arcade racer: the car grips and goes where it's pointed, and you
+ * drift it on purpose (the handbrake: see DRIFT), never by accident.
+ * - `assist`: sliding, the front wheels turn into the slide by this much of its angle past `deadzone` (radians): the countersteer.
+ * - `guard`: past this much slide (radians) drifting, the spin is caught; `guardOff` not drifting, much sooner. Never on the handbrake.
+ * - `settle`: gripping (less slide than `deadzone`), how fast the turn eases to what the wheels ask (1/s): no wobble after a flick.
+ * - `stability`: not drifting, it never turns faster than this much of what the tires can carry it round (the stability control).
+ * - `power`: of the engine's push, the share the rear tires spend of their grip (the gas mid-corner steps the tail out); `traction`: of that, what's left with the wheel straight (the traction control).
+ * - `brakeGrip`: braking spends grip too, the fronts most, but this much of it is always left to steer with (the ABS).
+ * - `downforce`: grip grows by this much of (speed / top)², up to `downforceTop` of top speed, on cars.
+ */
+export const AIDS = { assist: 0.8, deadzone: 0.1, guard: 0.75, guardOff: 0.15, settle: 3, stability: 1.05, power: 0.7, traction: 0.4, brakeGrip: 0.55, downforce: 0.12, downforceTop: 1.2 } as const;
+
+/**
+ * A drift, on purpose: a tug on the handbrake at speed lets the tail go (`in` seconds to all the way).
+ * It stays let go while the gas is down and the wheel turned into the turn (and, still sliding, a turn
+ * back into it lets it go again), and grips again in `out` seconds once either isn't. Let go, the rear tires keep `rear` of their grip, and the car holds the
+ * slide the wheel asks for: `angle` (radians) with it turned all the way into the turn, less with it
+ * turned less, straight with it let go, easing there in about `ease` seconds (`hold`: how firmly, 1/s).
+ * Sideways, the tires scrub off speed: `scrub` g at right angles. Under `slow` m/s there's no drifting.
+ */
+export const DRIFT = { in: 0.12, out: 0.35, rear: 0.8, angle: 0.55, ease: 0.25, hold: 8, scrub: 0.6, slow: 8 } as const;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** How far the front wheels can turn at `speed`: less the faster you go, down to what keeps the turn on the tires. */
-export function steerLimit(speed: number): number {
-  return Math.min(DRIVE.steer / (1 + Math.abs(speed) / 9), Math.atan((DRIVE.wheelbase * DRIVE.turn) / Math.max(1, speed * speed)));
+/** How far the front wheels can turn at `speed`: less the faster you go, down to what keeps the turn on `kind`'s tires (of `grip`). */
+export function steerLimit(speed: number, kind: CarKind = 'lambo', grip: number = SPECS[kind].grip): number {
+  return Math.min(DRIVE.steer / (1 + Math.abs(speed) / 9), Math.atan((SPECS[kind].wheelbase * grip * TIRES.gravity * DRIVE.lock) / Math.max(1, speed * speed)));
 }
 
 /** A short physics step (seconds), the same at 30 fps as at 60. */
 export const DRIVE_STEP = 1 / 120;
-export const TIRES = { gravity: 9.81, stiffness: 40, height: 0.45, rearBrakeGrip: 0.16, inertia: 1.3, restitution: 0.25 } as const;
+/**
+ * The tires: how stiff they are sideways (N a radian of slip, for each kg on the axle), and how the grip
+ * falls past its peak (`shape`: sliding, it keeps sin(shape × 90°) of it); how high the weight sits, and
+ * how far it can shift front to back (`load`, the front's share); the car's turning inertia over a plain
+ * box's, and how much a hit bounces.
+ */
+export const TIRES = { gravity: 9.81, stiffness: 110, shape: 1.35, height: 0.3, load: [0.4, 0.6], inertia: 1.3, restitution: 0.25 } as const;
 
 /** How far a bike leans into a corner: upright at rest, never laid flat. */
 export function leanAngle(p: CarPose, kind: CarKind): number {
@@ -229,33 +271,72 @@ export function drive(p: CarPose, pedals: Pedals, dt: number, kind: CarKind = 'l
   return next;
 }
 
+/** How much of an axle's grip its tires push back with, slipping at `angle` (radians): a curve, stiff `b` at first, peaking about 10°. */
+const tire = (angle: number, b: number) => Math.sin(TIRES.shape * Math.atan(b * angle));
+
 function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground: (typeof GROUND)[Surface]): CarPose {
   const spec = SPECS[kind];
-  const grip = spec.grip * ground.grip;
+  const bike = spec.width < 1;
   // No boost off the road: the grass and the sand only spin the wheels.
-  const boost = !!pedals.boost && pedals.gas > 0 && !ground.drag;
+  const boost = !!pedals.boost && pedals.gas > 0 && !pedals.stop && !ground.drag;
   const fastest = spec.top * (boost ? BOOST.top : 1);
   const top = fastest * ground.top;
-  const bike = spec.width < 1;
-  // On the handbrake you can throw it in harder: that's how a drift starts.
-  const want = clamp(pedals.turn, -1, 1) * (pedals.brake && !bike ? DRIVE.steer / (1 + Math.abs(p.speed) / 9) : steerLimit(p.speed));
-  const steer = p.steer + clamp(want - p.steer, -DRIVE.steerRate * dt, DRIVE.steerRate * dt);
-  // Crumbs of speed left from a slide count as stopped, so the gas isn't read as braking out of reverse forever.
   let v = Math.abs(p.speed) < 1e-3 ? 0 : p.speed;
+  let yaw = p.yaw ?? 0;
+  let slip = p.slip ?? 0;
+  const moving = Math.hypot(v, slip);
+  // The air presses a fast car down onto its tires (a bike leans instead).
+  const grip = spec.grip * ground.grip * (bike ? 1 : 1 + AIDS.downforce * Math.min(AIDS.downforceTop, moving / spec.top) ** 2);
+  // How far it's sliding: the angle between where it's pointed and where it's going (+ toward its left).
+  const slide = !bike && moving > DRIVE.crawl ? Math.atan2(slip, Math.abs(v) + 1e-6) : 0;
+  const handbrake = pedals.brake && !bike;
+  const onGas = pedals.gas > 0 && !pedals.stop;
+  // Let go of on the handbrake, kept on the gas while it's sliding, caught again otherwise.
+  let drift = p.drift ?? 0;
+  // Which way it's drifting (+ round to the left: its tail out to the right), and whether the wheel's turned that way.
+  const way = Math.abs(slide) > 0.02 ? -Math.sign(slide) : Math.sign(yaw);
+  const into = pedals.turn * way > 0;
+  if (bike || Math.abs(v) < DRIFT.slow) drift = 0;
+  else if (handbrake || (drift > 0 && onGas && into && Math.abs(slide) > AIDS.deadzone)) drift = Math.min(1, drift + dt / DRIFT.in);
+  else if (!(drift > 0 && onGas && into)) drift = Math.max(0, drift - dt / DRIFT.out);
+  const limit = steerLimit(v, kind, grip);
+  // Sliding, the wheels turn into it by themselves (the countersteer), past a little.
+  const assist = AIDS.assist * Math.sign(slide) * Math.max(0, Math.abs(slide) - AIDS.deadzone);
+  // On the handbrake you can throw it in harder: that's how a drift starts.
+  const want = clamp(clamp(pedals.turn, -1, 1) * (handbrake ? DRIVE.steer / (1 + Math.abs(v) / 9) : limit) + assist, -DRIVE.steer, DRIVE.steer);
+  // A keyboard's wheel: to full lock in steerIn and back in steerOut, whatever the speed; never slower than at a crawl.
+  const rate = Math.max(limit / (Math.abs(want) < Math.abs(p.steer) ? DRIVE.steerOut : DRIVE.steerIn), assist ? 3 : 0, Math.abs(v) < 8 ? DRIVE.steerRate : 0);
+  const steer = p.steer + clamp(want - p.steer, -rate * dt, rate * dt);
+
+  // Along the nose: the engine, the brakes and the air.
+  const was = v;
   const toward = (target: number, rate: number) => (v += clamp(target - v, -rate * dt, rate * dt));
-  const gas = clamp(pedals.gas, -1, 1);
-  // A car's handbrake locks only the rear wheels: it slows you less, and lets the tail come round.
+  const gas = pedals.stop ? 0 : clamp(pedals.gas, -1, 1);
   // Brakes bite as hard as the ground lets the tires.
   const brake = DRIVE.brake * Math.min(1, ground.grip * 1.25);
-  if (pedals.brake) toward(0, bike ? brake : brake * 0.5);
-  else if (gas > 0) {
+  // How hard the engine's pushing and the brakes pulling (m/s²): both spend the tires' grip.
+  let push = 0, braking = 0;
+  if (pedals.stop) {
+    toward(0, brake);
+    braking = brake;
+  } else if (gas > 0) {
     if (v < 0) toward(0, brake);
     // The pull falls away toward top speed (a fifth of it left there, so it gets there): quick off the line, a long haul to the top.
-    else if (v < top) v = Math.min(top, v + (spec.accel * (1 - 0.8 * (v / top) ** 2) + (boost ? BOOST.accel : 0)) * gas * dt);
+    else if (v < top) {
+      // The boost's shove is on top: it doesn't spin the wheels.
+      push = spec.accel * (1 - 0.8 * (v / top) ** 2) * gas;
+      v = Math.min(top, v + (push + (boost ? BOOST.accel * gas : 0)) * dt);
+    }
   } else if (gas < 0) {
-    if (v > 0) toward(0, brake);
-    else v = Math.max(-spec.reverse * Math.max(0.5, ground.top), v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
+    if (v > 0) {
+      toward(0, brake * -gas);
+      braking = brake * -gas;
+    } else v = Math.max(-spec.reverse * Math.max(0.5, ground.top), v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
   } else toward(0, kind === 'bicycle' ? 0.65 : (kind === 'motorbike' ? 2 : DRIVE.coast) + DRIVE.drag * v * v);
+  // A car's handbrake locks only the rear wheels: it slows you a little (the gas still pulls), and lets the tail come round.
+  if (pedals.brake) toward(0, bike ? brake : DRIVE.handbrake);
+  // Sideways, the tires scrub off speed: a drift costs a little.
+  if (drift > 0) toward(0, DRIFT.scrub * drift * Math.abs(Math.sin(slide)) * TIRES.gravity);
   // Off the boost, past top speed: the air slows you back to it.
   if (!boost && v > spec.top * ground.top) toward(spec.top * ground.top, 4);
   // Off the road: the ground drags at the wheels, and bogs you down to what it lets you do.
@@ -265,41 +346,69 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
     if (Math.abs(v) > top) toward(Math.sign(v) * top, 3 + ground.drag);
   }
 
-  let yaw = p.yaw ?? 0;
-  let slip = p.slip ?? 0;
-  if (bike || Math.abs(v) < 3) {
+  if (bike || moving < DRIVE.crawl) {
     // At walking speed the tires settle before another step: no jitter, and no sideways bikes.
     // No sharper than the tires can hold: sideways, v × yaw is at most grip × g.
     const most = (grip * TIRES.gravity) / Math.max(1, Math.abs(v));
     const target = clamp((v * Math.tan(steer)) / spec.wheelbase, -most, most);
     yaw += (target - yaw) * (1 - Math.exp(-dt * 18));
-    slip = bike ? 0 : slip * Math.exp(-dt * 12);
+    // Any sideways creep left stops as fast as the tires can stop it, not all at once.
+    slip = bike ? 0 : slip - Math.sign(slip) * Math.min(Math.abs(slip), grip * TIRES.gravity * dt);
   } else {
     const axle = spec.wheelbase / 2;
-    const acceleration = (v - p.speed) / dt;
-    const transfer = spec.mass * acceleration * TIRES.height / spec.wheelbase;
     const weight = spec.mass * TIRES.gravity;
-    const frontLoad = clamp(weight / 2 - transfer, weight * 0.15, weight * 0.85);
+    // Speeding up sits it back on its rear tires; braking, onto the fronts.
+    const transfer = (spec.mass * ((v - was) / dt) * TIRES.height) / spec.wheelbase;
+    const frontLoad = clamp(weight / 2 - transfer, weight * TIRES.load[0], weight * TIRES.load[1]);
     const rearLoad = weight - frontLoad;
-    const frontAngle = Math.atan2(slip + axle * yaw, Math.abs(v)) - steer * Math.sign(v);
-    const rearAngle = Math.atan2(slip - axle * yaw, Math.abs(v));
-    const frontGrip = grip * frontLoad;
-    const rearGrip = grip * rearLoad * (pedals.brake ? TIRES.rearBrakeGrip : 1);
-    const front = clamp(-frontAngle * spec.mass * TIRES.stiffness, -frontGrip, frontGrip);
-    const rear = clamp(-rearAngle * spec.mass * TIRES.stiffness, -rearGrip, rearGrip);
-    const inertia = spec.mass * (spec.length ** 2 + spec.width ** 2) / 12 * TIRES.inertia;
-    yaw += axle * (front - rear) / inertia * dt;
+    const along = Math.max(Math.abs(v), 1);
+    const frontAngle = Math.atan2(slip + axle * yaw, along) - steer * Math.sign(v || 1);
+    const rearAngle = Math.atan2(slip - axle * yaw, along);
+    // The curve's stiffness, so the first of it is TIRES.stiffness a kg at the car's own weight on the axle.
+    const b = (2 * TIRES.stiffness) / (TIRES.shape * grip * TIRES.gravity);
+    const frontMost = grip * frontLoad;
+    const rearMost = grip * rearLoad * (handbrake ? DRIVE.handbrakeGrip : 1 - (1 - DRIFT.rear) * drift);
+    // A tire has only so much grip: what the engine and the brakes spend of it isn't there for cornering (but some always is).
+    const drivePush = spec.mass * AIDS.power * push * (AIDS.traction + (1 - AIDS.traction) * Math.min(1, Math.abs(pedals.turn)));
+    // Braking spends the fronts' (the rears keep rolling, so the tail stays put).
+    const rearSpent = drivePush;
+    const frontSpent = spec.mass * braking;
+    const rearSide = Math.max(rearMost * AIDS.brakeGrip, Math.sqrt(Math.max(0, rearMost ** 2 - rearSpent ** 2)));
+    const frontSide = Math.max(frontMost * AIDS.brakeGrip, Math.sqrt(Math.max(0, frontMost ** 2 - frontSpent ** 2)));
+    const front = -frontSide * tire(frontAngle, b);
+    const rear = -rearSide * tire(rearAngle, b);
+    yaw += (axle * (front - rear)) / inertia(kind) * dt;
+    // As sharp a turn as the tires can carry the car round (rad/s).
+    const most = (grip * TIRES.gravity) / Math.max(1, Math.abs(v));
+    if (handbrake) {
+      // Nothing helps: the tail's yours to throw.
+    } else if (drift > 0) {
+      // Drifting: it turns as fast as its path does, plus what takes the slide to the angle the wheel asks for.
+      const asked = -way * DRIFT.angle * clamp(pedals.turn * way, 0, 1);
+      const path = (front + rear) / spec.mass / Math.max(1, Math.abs(v));
+      yaw += (path - (asked - slide) / DRIFT.ease - yaw) * Math.min(1, DRIFT.hold * drift * dt);
+    } else {
+      // Gripping, it never turns faster than the tires can carry it (lifting off, braking: no spin), and
+      // with hardly any slide the turn eases to what the wheels ask: no wobble after a flick.
+      if (Math.abs(yaw) > most * AIDS.stability) yaw += (Math.sign(yaw) * most * AIDS.stability - yaw) * Math.min(1, 10 * dt);
+      if (Math.abs(slide) < AIDS.deadzone) yaw += (clamp((v * Math.tan(steer)) / spec.wheelbase, -most, most) - yaw) * Math.min(1, AIDS.settle * dt);
+    }
+    // Sliding too far off the handbrake (drifting, it can go further), the spin is caught.
+    const guard = AIDS.guardOff + (AIDS.guard - AIDS.guardOff) * drift;
+    if (!handbrake && Math.abs(slide) > guard) yaw *= 1 - Math.min(1, (dt * 6 * (Math.abs(slide) - guard)) / 0.3);
     slip += ((front + rear) / spec.mass - v * yaw) * dt;
   }
-  v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top * boostTop(kind));
-  slip = clamp(slip, -spec.top * 0.75, spec.top * 0.75);
+  // Reverse's top speed is the engine's, not a spin's: sliding backwards keeps its speed.
+  v = clamp(v + yaw * slip * dt, gas < 0 ? Math.min(-spec.reverse, was) : -spec.top, spec.top * boostTop(kind));
+  // Sideways no faster than it can go at all (a spin swaps speed between the two).
+  slip = clamp(slip, -spec.top * boostTop(kind), spec.top * boostTop(kind));
   if (Math.abs(v) < 1e-3 && Math.abs(slip) < 0.01) { v = 0; slip = 0; yaw = 0; }
   const mid = p.rotY + yaw * dt / 2;
   return {
     x: p.x + (Math.sin(mid) * v + Math.cos(mid) * slip) * dt,
     z: p.z + (Math.cos(mid) * v - Math.sin(mid) * slip) * dt,
     rotY: Math.atan2(Math.sin(p.rotY + yaw * dt), Math.cos(p.rotY + yaw * dt)),
-    speed: v, steer, slip, yaw,
+    speed: v, steer, slip, yaw, drift,
   };
 }
 
@@ -491,13 +600,14 @@ export function advance(from: CarPose, pedals: Pedals, dt: number, kind: CarKind
   for (let i = 0; i < n; i++) {
     const driven = drive(pose, pedals, h, kind, under(pose.x, pose.z));
     let next = course.surface ? course.surface(driven, h) : driven;
-    // Over the edge (from on it: one that's off can drive back on): back where it was, off the barrier.
+    // Over the edge (from on it: one that's off can drive back on): off the barrier, and on along it from
+    // where it was, the way the hit left it going (still over, it stays where it was this step).
     if (!on(next) && on(pose)) {
       const c = edge(next, kind, ground!);
-      next = collide({ ...next, x: pose.x, z: pose.z, rotY: pose.rotY }, kind, c);
+      const b = hit({ ...next, x: pose.x, z: pose.z, rotY: pose.rotY }, kind, c);
       course.bumped?.(c, closing(driven, c), false);
-      pose = next;
-      continue;
+      const s = Math.sin(pose.rotY), co = Math.cos(pose.rotY), slip = b.slip ?? 0;
+      next = { ...b, x: pose.x + (s * b.speed + co * slip) * h, z: pose.z + (co * b.speed - s * slip) * h, rotY: pose.rotY + (b.yaw ?? 0) * h };
     }
     const out = unstick(next, kind, solids, course.bumped);
     next = out.p;
@@ -511,20 +621,53 @@ export function advance(from: CarPose, pedals: Pedals, dt: number, kind: CarKind
 /** The car at `p` pushed out of `solids`, deepest first, bouncing off each it was going into; `clear` if it's out of them all. */
 function unstick(p: CarPose, kind: CarKind, solids: Box[], bumped: Course['bumped']): { p: CarPose; clear: boolean } {
   for (let k = 0; k < 5; k++) {
-    let hit: { c: Contact; b: Box } | null = null;
+    let deepest: { c: Contact; b: Box } | null = null;
     for (const b of solids) {
       const c = contact(p, b, kind);
-      if (c && (!hit || c.depth > hit.c.depth)) hit = { c, b };
+      if (c && (!deepest || c.depth > deepest.c.depth)) deepest = { c, b };
     }
-    if (!hit) return { p, clear: true };
+    if (!deepest) return { p, clear: true };
     // Out of goes (four pushes): still in something.
     if (k === 4) break;
-    const { c, b } = hit;
+    const { c, b } = deepest;
     bumped?.(c, closing(p, c, b), !!b.mass);
-    p = collide(p, kind, c, b);
+    p = hit(p, kind, c, b);
     p = { ...p, x: p.x + c.nx * (c.depth + 1e-4), z: p.z + c.nz * (c.depth + 1e-4) };
   }
   return { p, clear: false };
+}
+
+/**
+ * A hit, as a game has it (collide is the bare physics). Nose first, the car's swung round to run
+ * along what it hit, taking `align` seconds to get there. Otherwise it takes `spin` of the turn the
+ * hit would give it and its turning is scrubbed to `scrub` of what it was, so a scrape along a barrier
+ * never sets it spinning. Whatever's still going into what it hit afterwards (the impulse went into
+ * the turn, or a corner caught) comes off at `bounce`, the scrape taking up to `scrape` of the motion
+ * along it. A parked car is as good as a wall: it doesn't give.
+ */
+export const CONTACT = { align: 0.25, spin: 0.35, scrub: 0.5, bounce: 0.15, scrape: 0.25 } as const;
+
+function hit(p: CarPose, kind: CarKind, c: Contact, other: Pick<Box, 'mass' | 'vx' | 'vz'> = {}): CarPose {
+  const moving = !!other.mass && Math.hypot(other.vx ?? 0, other.vz ?? 0) > 0.5;
+  const q = collide(p, kind, c, moving ? other : {});
+  const s = Math.sin(q.rotY), co = Math.cos(q.rotY);
+  // Nose first into it, the hit swings the nose away to run along it (in about `align` seconds, no
+  // further: a glance, not a ricochet). A tail slapped round into it is mostly scrubbed away.
+  const ahead = Math.sign(q.speed || 1);
+  const facing = -ahead * (s * c.nx + co * c.nz);
+  const turned = (q.yaw ?? 0) - (p.yaw ?? 0);
+  const yaw = facing > 0 && ahead * (co * c.nx - s * c.nz) * turned > 0
+    ? clamp(q.yaw ?? 0, -Math.asin(Math.min(1, facing)) / CONTACT.align, Math.asin(Math.min(1, facing)) / CONTACT.align)
+    : ((p.yaw ?? 0) + turned * CONTACT.spin) * CONTACT.scrub;
+  let vx = s * q.speed + co * (q.slip ?? 0), vz = co * q.speed - s * (q.slip ?? 0);
+  const into = vx * c.nx + vz * c.nz - (moving ? (other.vx ?? 0) * c.nx + (other.vz ?? 0) * c.nz : 0);
+  if (into < 0) {
+    const ax = vx - into * c.nx, az = vz - into * c.nz;
+    const keep = Math.max(0.5, 1 - (CONTACT.scrape * -into) / Math.max(1, Math.hypot(ax, az)));
+    vx = ax * keep - CONTACT.bounce * into * c.nx;
+    vz = az * keep - CONTACT.bounce * into * c.nz;
+  }
+  return { ...q, speed: vx * s + vz * co, slip: SPECS[kind].width < 1 ? 0 : vx * co - vz * s, yaw };
 }
 
 /** How far into `solids` the car at `p` is, all told (m); 0 clear of them all. */

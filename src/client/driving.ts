@@ -233,13 +233,14 @@ export class Driver {
       const held = this.hooks.hold?.() ?? false;
       const kind = this.fleet.cars[car].def.kind;
       const pedals: Pedals = {
-        gas: held ? 0 : (p.holding('KeyW', 'ArrowUp') ? 1 : 0) - (p.holding('KeyS', 'ArrowDown') ? 1 : 0),
+        gas: (p.holding('KeyW', 'ArrowUp') ? 1 : 0) - (p.holding('KeyS', 'ArrowDown') ? 1 : 0),
         turn: (p.holding('KeyA', 'ArrowLeft') ? 1 : 0) - (p.holding('KeyD', 'ArrowRight') ? 1 : 0),
+        brake: p.holding('Space'),
         // A window open over the game (the map, the controls) takes your hands off: the brakes go on rather than it rolling on unsteered.
-        brake: held || !p.enabled || p.holding('Space'),
+        stop: held || !p.enabled,
       };
       // Shift with the gas down, while there's boost left (pedals have no boost); run dry, it takes a tenth of a tank to light again.
-      this.boosting = pedals.gas > 0 && this.boost > (this.boosting ? 0 : 0.1) && kind !== 'bicycle' && this.sinking === null && p.holding('ShiftLeft', 'ShiftRight');
+      this.boosting = pedals.gas > 0 && !pedals.stop && this.boost > (this.boosting ? 0 : 0.1) && kind !== 'bicycle' && this.sinking === null && p.holding('ShiftLeft', 'ShiftRight');
       pedals.boost = this.boosting;
       this.fleet.cars[car].boosting = this.boosting;
       this.gas = pedals.gas;

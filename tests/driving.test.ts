@@ -223,4 +223,12 @@ test("grazing a circuit's edge at speed, the car slides along it: speed kept, no
   assert.ok(car.speed > 60, `speed mostly kept (${car.speed.toFixed(1)} m/s)`);
   assert.ok(Math.abs(car.slip ?? 0) < 6, `not sliding sideways (${car.slip?.toFixed(1)} m/s)`);
   assert.ok(car.x > -70, `on along it (x ${car.x.toFixed(1)})`);
+  // And on: it was once pinned there, frozen in place and spinning on the spot.
+  for (let f = 0; f < 150; f++) {
+    const was = { ...s.car() };
+    s.frames(1);
+    const now = s.car();
+    assert.ok(Math.hypot(now.x - was.x, now.z - was.z) > 0.5, `frame ${f}: moving on (${now.speed.toFixed(1)} m/s)`);
+    assert.ok(Math.abs(now.yaw ?? 0) < 1.5, `frame ${f}: not spinning (${now.yaw?.toFixed(2)} rad/s)`);
+  }
 });

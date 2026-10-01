@@ -37,15 +37,20 @@ test('a car on the gas gets up to top speed and no faster, and rolls to a dead s
   p = run(p, GAS, 10);
   assert.equal(p.speed, DRIVE.top);
   assert.ok(Math.abs(p.x) < 1e-9 && p.z > 100, 'straight ahead, along its nose');
-  p = run(p, COAST, 20);
+  // Off the gas it rolls on a long way (lifting mid-corner never throws you off it), but it stops.
+  assert.ok(run(p, COAST, 1).speed > DRIVE.top - 5, 'a gentle lift');
+  p = run(p, COAST, 40);
   assert.equal(p.speed, 0, 'stopped, not creeping');
   const z = p.z;
   assert.equal(run(p, COAST, 1).z, z);
 });
 
-test('the handbrake stops it, and S brakes before it reverses', () => {
+test('held on the brakes it stops whatever you press, the handbrake only slows it, and S brakes before it reverses', () => {
   const fast = { ...still(), speed: DRIVE.top };
-  assert.equal(run(fast, { ...GAS, brake: true }, DRIVE.top / (DRIVE.brake / 2) + 0.1).speed, 0, 'the handbrake beats the gas');
+  const held = run(fast, { ...GAS, stop: true }, DRIVE.top / DRIVE.brake + 0.1);
+  assert.equal(held.speed, 0, 'the brakes beat the gas');
+  assert.equal(run(held, { gas: -1, turn: 0, brake: false, stop: true }, 1).speed, 0, 'and it stays stopped, not backing up');
+  assert.ok(run(fast, { ...GAS, brake: true }, 1).speed > DRIVE.top - DRIVE.handbrake - 0.5, 'the handbrake swings the tail, it doesn\'t stop you');
   const back = { gas: -1, turn: 0, brake: false };
   const braking = run(fast, back, 0.5);
   assert.ok(braking.speed > 0 && braking.speed < fast.speed, 'still going forward, slower');
@@ -69,7 +74,7 @@ test('it turns tighter slowly than flat out, so it never spins at speed', () => 
   // The wheel takes a moment to turn all the way, and then holds there.
   const p = run({ ...still(), speed: 10 }, { gas: 0, turn: 1, brake: false }, 0.05);
   assert.ok(p.steer > 0 && p.steer < steerLimit(10));
-  const on = run(p, { gas: 1, turn: 1, brake: false }, 1);
+  const on = run(p, { gas: 0, turn: 1, brake: false }, 1);
   assert.ok(Math.abs(on.steer - steerLimit(on.speed)) < 0.05);
 });
 

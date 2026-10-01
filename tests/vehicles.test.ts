@@ -40,7 +40,7 @@ test('tire steps are pure, repeatable, and agree across frame sizes', () => {
   assert.ok(Math.abs(fine.x + right.x) < 1e-10 && Math.abs(fine.rotY + right.rotY) < 1e-10);
   const long = run(fine, turn, 3600);
   assert.ok(Object.values(long).every(Number.isFinite));
-  assert.ok(Math.abs(long.slip ?? 0) <= SPECS.lambo.top * 0.75);
+  assert.ok(Math.abs(long.slip ?? 0) <= SPECS.lambo.top * boostTop('lambo'));
 });
 
 test('a tug on the handbrake breaks rear grip, and the tires catch again when released', () => {
@@ -122,8 +122,8 @@ test('the office accepts old poses, clamps each kind, rejects nonsense slip, and
     const p = { ...still, x: def.x, z: def.z, speed: 999, slip: 999 };
     const checked = g.drive('driver', i, p)!;
     assert.equal(checked.speed, SPECS[def.kind].top * boostTop(def.kind), 'top speed, on the boost if it has one');
-    assert.equal(checked.slip, SPECS[def.kind].width < 1 ? 0 : SPECS[def.kind].top * 0.75);
-    assert.equal(g.drive('driver', i, { ...p, speed: -999 })?.speed, -SPECS[def.kind].reverse);
+    assert.equal(checked.slip, SPECS[def.kind].width < 1 ? 0 : SPECS[def.kind].top * boostTop(def.kind));
+    assert.equal(g.drive('driver', i, { ...p, speed: -999 })?.speed, -SPECS[def.kind].top, 'backwards out of a spin, no faster than it goes');
     assert.equal(g.drive('driver', i, { ...p, slip: NaN }), undefined);
     assert.equal(g.drive('driver', i, { ...p, slip: Infinity }), undefined);
     assert.equal(g.drive('driver', i, { ...p, slip: undefined })?.slip, 0);
