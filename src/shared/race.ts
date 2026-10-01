@@ -7,25 +7,62 @@
 /** Where the race is: nobody lined up, lining up, counting down, going, or everyone's in. */
 export type RacePhase = 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished';
 
+/**
+ * The lap split in three sectors: each starts at one of these checkpoints (the first at the start
+ * line) and ends at the next one's. The office times them (server/race.ts), racing or practising.
+ */
+export const SECTORS = [0, 5, 10] as const;
+
+/** A sector just done: which, how long it took (ms), and against your best before it (ms, - is quicker). */
+export interface Split {
+  sector: number;
+  ms: number;
+  delta?: number;
+}
+
+/** A driver's timing round the circuit, as the office keeps it (racing, or practice laps). */
+export interface Timing {
+  /** The last checkpoint they went through on this lap (-1: not on a lap yet). */
+  checkpoint: number;
+  /** When they started the lap they're on (epoch ms), for the live lap clock. */
+  lapStartedAt?: number;
+  /** Their fastest whole lap, ms. */
+  bestLap?: number;
+  /** This lap's sector times so far (ms), in SECTORS order. */
+  sectors?: number[];
+  /** Their fastest time for each sector (ms; null: none yet). */
+  bestSectors?: (number | null)[];
+  /** The sector they've just done. */
+  lastSplit?: Split;
+}
+
 /** Someone in the race (PeerInfo id), and how they're getting on. */
-export interface Racer {
+export interface Racer extends Timing {
   id: string;
   name: string;
   /** What they drive: an index into the circuit's own cars (see client/world/circuit.ts). */
   car: number;
   /** Their grid slot, from the front. */
   slot: number;
-  /** Laps done, and the last checkpoint they went through on this one (-1 before the first). */
+  /** Laps done (checkpoint is the last one they went through on this one). */
   lap: number;
-  checkpoint: number;
   /** When they crossed the line for the last time (epoch ms), once they have. */
   finishedAt?: number;
-  /** Their fastest whole lap, ms. */
-  bestLap?: number;
-  /** When they started the lap they're on (epoch ms), for the live lap clock. */
-  lapStartedAt?: number;
   /** Where they are in the order, 1 first. */
   position: number;
+  /** How far (ms) they went through their last checkpoint behind whoever went through it first on the same lap: 0 for them. */
+  gap?: number;
+}
+
+/** Someone driving practice laps at the circuit, on their own, outside the race. */
+export interface Practicer extends Timing {
+  id: string;
+  name: string;
+  car: number;
+  /** Whole practice laps done this time out. */
+  laps: number;
+  /** The last whole lap's time (ms). */
+  lastLap?: number;
 }
 
 export interface RaceState {
@@ -38,6 +75,10 @@ export interface RaceState {
   racers: Racer[];
   /** The fastest lap anyone's done here since the office started: who and how long (ms). */
   record?: { name: string; ms: number };
+  /** Everyone at the circuit driving a car and not in the race: their practice laps. */
+  practice: Practicer[];
+  /** The fastest practice lap since the office started, kept apart from the race record. */
+  practiceRecord?: { name: string; ms: number };
 }
 
 export const RACE = {
@@ -54,5 +95,12 @@ export const RACE = {
 } as const;
 
 export function idleRace(): RaceState {
-  return { phase: 'idle', laps: RACE.laps, racers: [] };
+  return { phase: 'idle', laps: RACE.laps, racers: [], practice: [] };
+}
+
+/** Which sector checkpoint `i` is in. */
+export function sectorOf(i: number): number {
+  let k = 0;
+  while (k + 1 < SECTORS.length && i >= SECTORS[k + 1]) k++;
+  return k;
 }

@@ -12,7 +12,7 @@ export function raceOrder(state: RaceState): Racer[] {
   return [...state.racers].sort((a, b) => (a.position || Infinity) - (b.position || Infinity) || a.slot - b.slot);
 }
 
-/** No live split times in the contract yet: say how many laps or checkpoints behind, never invent seconds. */
+/** Laps behind, else the office-timed gap at the last line (Racer.gap), else checkpoints behind: never invented seconds. */
 export function raceGap(state: RaceState, racer: Racer): string {
   const leader = raceOrder(state)[0];
   if (!leader) return '—';
@@ -22,6 +22,8 @@ export function raceGap(state: RaceState, racer: Racer): string {
   }
   const laps = Math.max(0, leader.lap - racer.lap);
   if (laps) return `+${laps} lap${laps === 1 ? '' : 's'}`;
+  // The office's own clock at the last line they went through: how long after the first one through it.
+  if (racer.gap !== undefined && racer.gap > 0) return `+${(racer.gap / 1000).toFixed(2)}s`;
   const gates = Math.max(0, leader.checkpoint - racer.checkpoint);
   return gates ? `+${gates} checkpoint${gates === 1 ? '' : 's'}` : 'Same checkpoint';
 }

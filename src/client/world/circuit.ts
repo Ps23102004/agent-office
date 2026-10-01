@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { CENTER, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
+import { CENTER, CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
 import { RACE_PLAZA, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
 import { decorTicker } from '../quality';
@@ -41,6 +41,8 @@ export interface Circuit {
   fleet: Fleet;
   /** Each frame while you're there: the start lights, the crowd, the gate's shimmer. `now` is the office's clock (ms). */
   update(dt: number, t: number, race: RaceState, now: number, cars: readonly { x: number; z: number; speed: number }[]): void;
+  /** The checkpoint coach: one arrow floating over checkpoint `next`'s line, pointing the way round (null: none). Each frame. */
+  coach(next: number | null): void;
 }
 
 /** Vertex-colored flat pieces of ground, all in one mesh: triangles facing up. */
@@ -610,7 +612,37 @@ export function buildCircuit(): Circuit {
     crowd.heads.instanceMatrix.needsUpdate = true;
   };
 
-  return { group, colliders, interactables, pickables: [fleet.group], fleet, update };
+  // ---- The checkpoint coach: a big chevron over the next line you're to go through. One draw call.
+  const chevron = new THREE.Shape([
+    new THREE.Vector2(-1.6, -1.2),
+    new THREE.Vector2(0, 0.6),
+    new THREE.Vector2(1.6, -1.2),
+    new THREE.Vector2(1.6, 0.2),
+    new THREE.Vector2(0, 2),
+    new THREE.Vector2(-1.6, 0.2),
+  ]);
+  // Lying flat, its point (+y of the shape) towards +z, the way round the track once turned.
+  const arrowGeo = new THREE.ExtrudeGeometry(chevron, { depth: 0.35, bevelEnabled: false }).rotateX(Math.PI / 2);
+  const arrow = new THREE.Mesh(arrowGeo, toon('#ffd60a', { emissive: '#7a5c00' }));
+  arrow.visible = false;
+  group.add(arrow);
+  let arrowAt = -1;
+  let clock = 0;
+  const coach: Circuit['coach'] = (next) => {
+    arrow.visible = next !== null && next >= 0 && next < CHECKPOINTS;
+    if (!arrow.visible) return;
+    if (next !== arrowAt) {
+      arrowAt = next!;
+      const c = checkpoint(arrowAt);
+      const p = pointAt((arrowAt * L) / CHECKPOINTS);
+      arrow.position.set(c.x, 0, c.z);
+      arrow.rotation.y = Math.atan2(p.tx, p.tz);
+    }
+    clock += 1 / 60;
+    arrow.position.y = 4.5 + Math.sin(clock * 3) * 0.4;
+  };
+
+  return { group, colliders, interactables, pickables: [fleet.group], fleet, update, coach };
 }
 
 /** Geometries of the same kind into one. */

@@ -42,6 +42,8 @@ test('live gaps report verified progress; finish gaps use line-crossing timestam
   assert.equal(raceGap(state, me), '+2 checkpoints');
   me.checkpoint = 4;
   assert.equal(raceGap(state, me), 'Same checkpoint');
+  me.gap = 1234;
+  assert.equal(raceGap(state, me), '+1.23s', 'the office timed it at the line');
   lead.finishedAt = 100_000; me.finishedAt = 102_345;
   assert.equal(raceGap(state, me), '+2.35s');
 });

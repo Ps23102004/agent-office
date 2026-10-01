@@ -14,6 +14,7 @@ import type { CustomMap } from './maps/index.js';
 import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { RaceState } from './race.js';
+import type { MeetPin, MeetSpotId } from './meet.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
 export type WorkerStatus =
@@ -1048,6 +1049,8 @@ export interface ChatLine {
   at: number;
   /** Said by someone signed in with their own account. */
   account?: boolean;
+  /** A meeting spot they posted ('meet.post'): click to go there. */
+  meet?: MeetPin;
 }
 
 /** A line of a worker's terminal that matched a search. */
@@ -1273,6 +1276,12 @@ export type ClientMsg =
   | { t: 'race.start' }
   /** Pull out of the race (or off the grid). */
   | { t: 'race.leave' }
+  /** Post a meeting spot to the office chat (shared/meet.ts): on or under your floor where it's one of those. */
+  | { t: 'meet.post'; spot: MeetSpotId }
+  /** Driving, offer the empty seat beside you to `to` (a peer id) nearby on your floor: they're seated only once they say yes. */
+  | { t: 'car.invite'; to: string }
+  /** Answer the ride `from` (the driver's peer id) offered you: yes seats you beside them, if the seat's still yours to take. */
+  | { t: 'car.invite.answer'; from: string; accept: boolean }
   /** Give the dog on your floor a pat; it has to be within reach. */
   | { t: 'dog.pet' }
   /** Name the dog on your floor ('' gives it back its first name). */
@@ -1375,6 +1384,10 @@ export type ServerMsg =
   | { t: 'car.honk'; car: number }
   /** The race at the circuit, whenever it changes (and as you come in): to everyone, wherever they are. */
   | { t: 'race'; state: RaceState }
+  /** A driver nearby offers you the seat beside them in their car (`car`, on your floor), until `until` (office clock, ms). Answer with car.invite.answer. */
+  | { t: 'car.invited'; from: string; name: string; car: number; until: number }
+  /** You said yes to a ride and the office seated you: into `seat` of `car` (sent before the cars that show you there). */
+  | { t: 'car.seated'; car: number; seat: CarSeat }
   | { t: 'jukebox'; state: JukeboxState }
   /** Who's at the arcade cabinet on your floor now, and the building's high scores. */
   | { t: 'cabinet'; state: CabinetState }
