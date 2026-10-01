@@ -419,8 +419,8 @@ export function buildCircuit(): Circuit {
   }
   // The pit wall: concrete, a red top and the sponsors along it (below).
   const W = PIT_WALL;
-  box(solid, W.maxX - W.minX, 1.1, W.maxZ - W.minZ, '#d6d8de', (W.minX + W.maxX) / 2, 0, (W.minZ + W.maxZ) / 2, Math.PI / 2);
-  box(solid, W.maxX - W.minX, 0.12, W.maxZ - W.minZ + 0.1, '#e63946', (W.minX + W.maxX) / 2, 1.1, (W.minZ + W.maxZ) / 2, Math.PI / 2);
+  box(solid, W.maxX - W.minX, 1.1, W.maxZ - W.minZ, '#d6d8de', (W.minX + W.maxX) / 2, 0, (W.minZ + W.maxZ) / 2);
+  box(solid, W.maxX - W.minX, 0.12, W.maxZ - W.minZ + 0.1, '#e63946', (W.minX + W.maxX) / 2, 1.1, (W.minZ + W.maxZ) / 2);
   colliders.push({ ...W, top: 1.2 });
   // The garages' block, and the grandstands' (from the layout below), before their models come in.
   colliders.push({ ...GARAGES, top: 5.6 });
