@@ -32,8 +32,14 @@ const toggle = (el: HTMLElement, name: string, on: boolean) => {
   if (el.classList.contains(name) !== on) el.classList.toggle(name, on);
 };
 const visible = (el: HTMLElement, on: boolean) => { if (el.hidden === on) el.hidden = !on; };
+/** The last value each element was given for each property: the browser normalises what it reports back. */
+const written = new WeakMap<HTMLElement, Map<string, string>>();
 const style = (el: HTMLElement, name: string, value: string) => {
-  if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+  let m = written.get(el);
+  if (!m) written.set(el, (m = new Map()));
+  if (m.get(name) === value) return;
+  m.set(name, value);
+  el.style.setProperty(name, value);
 };
 const clamp = (value: number, max = 1) => Math.min(max, Math.max(0, value));
 const clock = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
@@ -173,7 +179,8 @@ export class ArenaHUD {
     visible(this.death, v.killedBy !== undefined);
     if (v.killedBy !== undefined) {
       text(this.deathText, `KILLED BY ${v.killedBy}`);
-      text(this.respawn, `Back in ${Math.max(0, Math.ceil(((me?.respawnAt ?? v.now) - v.now) / 1000))}`);
+      const left = me?.respawnAt === undefined ? 0 : Math.ceil((me.respawnAt - v.now) / 1000);
+      text(this.respawn, left > 0 ? `Back in ${left}` : 'Respawning…');
     }
     text(this.boardPhase, phase === 'warmup' ? 'WARM-UP' : phase === 'over' ? 'MATCH OVER' : 'LIVE');
     text(this.boardClock, phase === 'warmup' ? '—' : clock(seconds));

@@ -5,7 +5,7 @@
   --arena-edge: clamp(12px, 2.6vw, 40px);
   position: fixed;
   inset: 0;
-  z-index: 45;
+  z-index: 35;
   pointer-events: none !important;
   overflow: hidden;
   color: #fff;
@@ -113,7 +113,7 @@
 .arena-hud .arena-scoreboard tr.you td:first-child { box-shadow: inset 3px 0 var(--arena-accent); }
 .arena-hud .arena-scoreboard footer { padding: 14px 24px; color: #bcc3c8; }
 
-@media (max-width: 800px) {
+@media (max-width: 1050px) {
   .arena-hud .arena-feed { top: 160px; width: min(260px, 46vw); }
 }
 @media (max-width: 480px) {
@@ -155,3 +155,7 @@
   @keyframes arena-medal-a { 0% { opacity: 0; } 12%, 75% { opacity: 1; } 100% { opacity: 0; } }
   @keyframes arena-medal-b { 0% { opacity: 0; } 12%, 75% { opacity: 1; } 100% { opacity: 0; } }
 }
+
+/* Chat, toasts and the reconnecting banner stay over the arena's HUD; health sits clear of the chat. */
+#hud:has(.arena-hud:not(.hidden)) :is(#toasts, #conn, .chat) { z-index: 36; }
+.arena-hud .arena-health { bottom: calc(max(var(--arena-edge), env(safe-area-inset-bottom)) + 64px); }
