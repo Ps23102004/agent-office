@@ -6,6 +6,7 @@ import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
 import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, parkHedges, rng, type Light, type Lot } from '../../shared/city';
 import { buildIsland } from './ocean';
+import type { Canopy, Fringe } from './dressing';
 
 // The city around the rooftop bar: the building's own floors going down to the street (as the tower
 // looks from outside, world/tower.ts), a grid of streets with cars running along them, parks, and
@@ -858,8 +859,11 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   const tree = (x: number, z: number, s: number, tone: number) => {
     soup.add(cyl, '#8a5a3b', x, 1.2 * s, z, 0.28 * s, 2.4 * s, 0.28 * s);
-    soup.add(ball, TREE_GREENS[tone], x, 3.4 * s, z, 1.9 * s, 1.9 * s, 1.9 * s);
+    // The canopy is dressing.ts's, so it can sway in the wind.
+    canopies.push({ x, y: 3.4 * s, z, r: 1.9 * s, color: TREE_GREENS[tone] });
   };
+  const canopies: Canopy[] = [];
+  const fringes: Fringe[] = [];
 
   // A shop's storey: its front in modules of shop front, an awning over each; the other walls plain.
   const face = (l: Lot) => (l.fz > 0 ? 1 : l.fz < 0 ? 2 : l.fx > 0 ? 4 : 8);
@@ -897,6 +901,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
         const sz = -Math.sin(yaw) * off;
         soup.add(box, k % 2 ? '#f6f1e4' : awning, cx + n[0] * 0.75 + sx, 3.25, cz + n[2] * 0.75 + sz, (step * 0.94) / stripes, 0.07, 1.5, yaw, 0.32);
       }
+      // A fringe hanging off its front edge, swaying (dressing.ts).
+      fringes.push({ x: cx + n[0] * 1.46, y: 3.02, z: cz + n[2] * 1.46, yaw, w: step * 0.94, color: awning });
     }
   };
 
@@ -1098,8 +1104,10 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   lit.onBeforeRender = signals;
   group.add(lit);
 
-  // Everything vertex-colored (trees, roofs, furniture, gas station...) in the one mesh.
+  // Everything vertex-colored (trees' trunks, roofs, furniture, gas station...) in the one mesh.
   group.add(soup.mesh());
+  // Signs, parasols, flags and birds (world/dressing.ts), loaded once the city's up: their models come in as files, so the module stays out of the first download (and out of the tests).
+  void import('./dressing').then(({ buildDressing }) => group.add(buildDressing(canopies, fringes)));
 
   // The red lights blinking on the masts, and the street lamps' glow, brighter with the dark.
   const beaconMat = new THREE.PointsMaterial({ size: 5, map: glow, color: '#ff3b30', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });

@@ -7,6 +7,7 @@
 // and signals along the streets, where a car can go (cityPaved) and what's in its way (citySolids).
 
 import { GOLF_HOLE } from './layout.js';
+import { placeDressing, type Dressing } from './dressing.js';
 
 /** A block and the street beside it (m). */
 export const PERIOD = 56;
@@ -80,7 +81,7 @@ const CLEAR: Area[] = [
   { minX: 17, maxX: 31, minZ: -16, maxZ: 18 },
   { minX: -46, maxX: 46, minZ: 20, maxZ: 34 },
 ];
-const keepClear = (x: number, z: number) => CLEAR.some((a) => x > a.minX && x < a.maxX && z > a.minZ && z < a.maxZ);
+export const keepClear = (x: number, z: number) => CLEAR.some((a) => x > a.minX && x < a.maxX && z > a.minZ && z < a.maxZ);
 
 /** The block behind the office, east of it, left open as a paved plaza with the gate to the race circuit on it (circuit.ts). */
 export const RACE_PLAZA: Area = rect(STREET_X + PERIOD / 2, STREET_Z - PERIOD * 1.5, INNER, INNER);
@@ -773,7 +774,18 @@ function solids(): Map<number, Area[]> {
       add(rect(p.x, p.z, alongZ ? 0.6 : 1.7, alongZ ? 1.7 : 0.6), 0.5);
     } else add(rect(p.x, p.z, p.kind === 'bin' ? 0.6 : 0.4, p.kind === 'bin' ? 0.6 : 0.4), p.kind === 'bin' ? 0.9 : 0.6);
   }
-  return (index = map);
+  // Signs, parasols, flagpoles: placed against what's above, and their poles are solid too.
+  index = map;
+  dressed = placeDressing((x, z, r) => !citySolids(x, z, r).some((a) => x + r > a.minX && x - r < a.maxX && z + r > a.minZ && z - r < a.maxZ));
+  for (const d of dressed.solids) add(d.area, d.h);
+  return map;
+}
+
+let dressed: Dressing | null = null;
+/** The street dressing (shared/dressing.ts): signs, parasols, roadworks, flagpoles and birds, the same for everyone. */
+export function cityDressing(): Dressing {
+  solids();
+  return dressed!;
 }
 
 /**
