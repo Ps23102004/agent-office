@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, roofDrop } from '../../shared/layout';
 import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
-import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
+import { mergeByMaterial, mesh, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, type Light, type Lot } from '../../shared/city';
+import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, shopModules, SHOP_H, type Light, type Lot } from '../../shared/city';
+import { districtAt } from '../../shared/places';
+import { buildLandmarks } from './landmarks';
 import { VENUES } from '../../shared/venues';
 import { buildIsland } from './ocean';
 import { buildSway, type Canopy, type Fringe } from './dressing';
@@ -77,9 +79,32 @@ const PAINTS: Paint[] = [
   { wall: '#b5573f', glass: '#a9d6f5', wide: 0.42, tall: 0.55, brick: true },
   { wall: '#9c4a3a', glass: '#bfe3ff', wide: 0.46, tall: 0.55, brick: true },
   { wall: '#b7b6ae', glass: '#2f323b', wide: 0.92, tall: 0.5, open: true },
+  // Pastel houses for the suburbs.
+  { wall: '#bfe3cf', glass: '#a9d6f5', wide: 0.45, tall: 0.55 },
+  { wall: '#d4c8ee', glass: '#bfe3ff', wide: 0.45, tall: 0.55 },
+  { wall: '#f7d3c1', glass: '#a9d6f5', wide: 0.45, tall: 0.55 },
+  // Colourful fronts for Market Row.
+  { wall: '#f2a65a', glass: '#bfe3ff', wide: 0.5, tall: 0.55 },
+  { wall: '#7cc6a4', glass: '#a9d6f5', wide: 0.5, tall: 0.55 },
+  { wall: '#e8787f', glass: '#bfe3ff', wide: 0.5, tall: 0.55 },
 ];
 const BRICKS = [9, 10];
 const DECK = 11;
+/** What each district's buildings are painted in, so you can tell where you are (shared/places.ts districtAt). Glass towers keep their own. */
+const DISTRICT_PAINTS: Record<string, number[]> = {
+  // Steel, slate and glass.
+  Downtown: [3, 4, 7, 8],
+  // Warm brick and terracotta.
+  'Old Town': [0, 1, 9, 10],
+  'Market Row': [5, 6, 12 + 3, 12 + 4, 12 + 5, 0],
+  Suburbs: [12, 13, 14, 2, 6],
+};
+/** The paint a lot gets: the district's, picked by the lot's own number, and glass towers as they were. */
+function paintFor(lot: Lot): number {
+  if (lot.kind === 'glass') return lot.paint;
+  const set = DISTRICT_PAINTS[districtAt(lot.x, lot.z)];
+  return set ? set[(lot.ou + lot.ov * 3 + lot.paint) % set.length] : lot.paint;
+}
 
 /** One bay of one storey: the wall with a window in it. */
 function bayTexture(p: Paint): THREE.CanvasTexture {
@@ -265,7 +290,7 @@ const newBatch = (): Batch => ({ walls: new Map(), tops: new Walls(), beacons: [
  * to do (see Walls.box) and `flat`: whether to put a flat roof on. Returns how high its top ended up.
  */
 function stack(b: Batch, lot: Lot, k: number, o: { paint?: number; y0?: number; flat?: boolean } = {}): number {
-  const paint = o.paint ?? lot.paint;
+  const paint = o.paint ?? paintFor(lot);
   let bucket = b.walls.get(paint);
   if (!bucket) b.walls.set(paint, (bucket = new Walls()));
   const y0 = o.y0 ?? 0;
@@ -684,8 +709,6 @@ const SHOPS: [name: string, wall: string, sign: string, ink: string][] = [
 const CELL_W = 256;
 const CELL_H = 160;
 const COLS = 4;
-/** Height of a shop's ground floor, and how far its awning comes out. */
-const SHOP_H = 4;
 
 /** Every shop front side by side: the wall, a sign, a window with wares in it, a door. `lit` draws only what glows at night. */
 function shopAtlas(lit: boolean): THREE.CanvasTexture {
@@ -883,30 +906,27 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   // A shop's storey: its front in modules of shop front, an awning over each; the other walls plain.
   const face = (l: Lot) => (l.fz > 0 ? 1 : l.fz < 0 ? 2 : l.fx > 0 ? 4 : 8);
+  /** An awning's middle height and how far it tilts: its top edge at the wall is 2.82 m, under the sign's 2.95. */
+  const AWNING_Y = 2.62;
+  const AWNING_TILT = 0.22;
   const awnings = ['#e63946', '#2a9d8f', '#f4a261', '#457b9d', '#8e5bbf', '#e9c46a'];
   const shopFront = (l: Lot) => {
-    const span = l.fz !== 0 ? l.w : l.d;
-    const count = Math.max(1, Math.round(span / 6.5));
-    const step = span / count;
     const pick = rng(l.ou * 31 + l.ov * 7 + Math.round(l.x) + Math.round(l.z) * 3);
     const awning = awnings[Math.floor(pick() * awnings.length)];
-    let cell = Math.floor(pick() * SHOPS.length);
-    for (let m = 0; m < count; m++) {
-      cell = (cell + 5 + Math.floor(pick() * 3)) % SHOPS.length;
-      const col = cell % COLS;
-      const row = Math.floor(cell / COLS);
-      const rows = SHOPS.length / COLS;
-      const e = 0.5 / CELL_W;
-      const uv: [number, number, number, number] = [col / COLS + e, 1 - (row + 1) / rows + e, (col + 1) / COLS - e, 1 - row / rows - e];
-      let a: [number, number, number];
-      let u: [number, number, number];
-      let n: [number, number, number];
-      if (l.fz > 0) [a, u, n] = [[l.x - l.w / 2 + step * m, 0, l.z + l.d / 2], [step, 0, 0], [0, 0, 1]];
-      else if (l.fz < 0) [a, u, n] = [[l.x + l.w / 2 - step * m, 0, l.z - l.d / 2], [-step, 0, 0], [0, 0, -1]];
-      else if (l.fx > 0) [a, u, n] = [[l.x + l.w / 2, 0, l.z + l.d / 2 - step * m], [0, 0, -step], [1, 0, 0]];
-      else [a, u, n] = [[l.x - l.w / 2, 0, l.z - l.d / 2 + step * m], [0, 0, step], [-1, 0, 0]];
+    // One business to a building: every front of it is the same shop.
+    const cell = Math.floor(pick() * SHOPS.length);
+    const col = cell % COLS;
+    const row = Math.floor(cell / COLS);
+    const rows = SHOPS.length / COLS;
+    const e = 0.5 / CELL_W;
+    const uv: [number, number, number, number] = [col / COLS + e, 1 - (row + 1) / rows + e, (col + 1) / COLS - e, 1 - row / rows - e];
+    for (const m of shopModules(l)) {
+      const a: [number, number, number] = [m.a[0], 0, m.a[1]];
+      const u: [number, number, number] = [m.u[0], 0, m.u[1]];
+      const n: [number, number, number] = [m.n[0], 0, m.n[1]];
+      const step = Math.hypot(u[0], u[2]);
       stores.quad(a, u, SHOP_H, n, uv);
-      // An awning over it, striped, sloping down to its front edge.
+      // An awning over its window and door, striped, sloping down to its front edge: its top is under the sign (which fills the picture from 2.95 m up).
       const cx = a[0] + u[0] / 2;
       const cz = a[2] + u[2] / 2;
       const yaw = Math.atan2(n[0], n[2]);
@@ -915,10 +935,10 @@ export function buildStreetCity(night: NightParts): THREE.Group {
         const off = ((k + 0.5) / stripes - 0.5) * step * 0.94;
         const sx = Math.cos(yaw) * off;
         const sz = -Math.sin(yaw) * off;
-        soup.add(box, k % 2 ? '#f6f1e4' : awning, cx + n[0] * 0.75 + sx, 3.25, cz + n[2] * 0.75 + sz, (step * 0.94) / stripes, 0.07, 1.5, yaw, 0.32);
+        soup.add(box, k % 2 ? '#f6f1e4' : awning, cx + n[0] * 0.75 + sx, AWNING_Y, cz + n[2] * 0.75 + sz, (step * 0.94) / stripes, 0.07, 1.5, yaw, AWNING_TILT);
       }
       // A fringe hanging off its front edge, swaying (dressing.ts).
-      fringes.push({ x: cx + n[0] * 1.46, y: 3.02, z: cz + n[2] * 1.46, yaw, w: step * 0.94, color: awning });
+      fringes.push({ x: cx + n[0] * 1.46, y: AWNING_Y - 0.75 * Math.sin(AWNING_TILT) - 0.03, z: cz + n[2] * 1.46, yaw, w: step * 0.94, color: awning });
     }
   };
 
@@ -956,6 +976,7 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   };
 
   // The gas station's forecourt, canopy, pumps and sign, with the lot's shop behind them.
+  const GAS_POLE = 11.6;
   const station = () => {
     if (!gas) return;
     const p = gas.plot;
@@ -976,23 +997,16 @@ export function buildStreetCity(night: NightParts): THREE.Group {
       soup.add(box, '#e63946', x, 0.75, z, a.maxX - a.minX, 1.5, a.maxZ - a.minZ);
       soup.add(box, '#f5f5f5', x, 1.6, z, a.maxX - a.minX + 0.05, 0.25, a.maxZ - a.minZ + 0.05);
     }
-    // A price sign on a pole out by the street.
-    const { fx, fz } = gas;
-    const { x: sx, z: sz } = gas.sign;
-    soup.add(cyl, '#3d405b', sx, 3.2, sz, 0.12, 6.4, 0.12);
-    const sign = textPlane('⛽ GAS', { bg: '#e63946', color: '#ffffff', size: 64, border: '#ffffff' });
-    sign.scale.multiplyScalar(1.5);
-    sign.position.set(sx + fx * 0.2, 6.6, sz + fz * 0.2);
-    sign.rotation.y = Math.atan2(fx, fz);
-    group.add(sign);
+    // A tall pole out by the street for the price sign (landmarks.ts puts the board on it).
+    soup.add(cyl, '#3d405b', gas.sign.x, GAS_POLE / 2, gas.sign.z, 0.14, GAS_POLE, 0.14);
   };
 
   for (const lot of lots) {
     if (lot.hand) continue;
     switch (lot.kind) {
       case 'shop': {
-        const bucket = batch.walls.get(lot.paint) ?? new Walls();
-        batch.walls.set(lot.paint, bucket);
+        const bucket = batch.walls.get(paintFor(lot)) ?? new Walls();
+        batch.walls.set(paintFor(lot), bucket);
         // The other three walls of its ground floor are plain; the front is the shop's.
         bucket.box(lot.x, lot.z, lot.w, lot.d, 0, SHOP_H, lot.ou, lot.ov, 15 & ~face(lot));
         stack(batch, lot, 1, { y0: SHOP_H });
@@ -1000,7 +1014,7 @@ export function buildStreetCity(night: NightParts): THREE.Group {
         break;
       }
       case 'walkup':
-        stack(batch, lot, 1, { paint: BRICKS[(lot.ou + lot.ov) & 1] });
+        stack(batch, lot, 1, { paint: districtAt(lot.x, lot.z) === 'Downtown' ? 3 : BRICKS[(lot.ou + lot.ov) & 1] });
         break;
       case 'deck':
         stack(batch, lot, 1, { paint: DECK });
@@ -1122,6 +1136,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   // Everything vertex-colored (trees' trunks, roofs, furniture, gas station...) in the one mesh.
   group.add(soup.mesh());
+  // The tall lit signs that say where the gates, the gas station, the parking deck, the café and the bar are.
+  group.add(buildLandmarks(() => darkOf(storeMat), GAS_POLE));
   // The trees' tops and the awnings' fringes sway in the wind (world/dressing.ts): they're the trees and awnings, so they're here at once.
   group.add(buildSway(canopies, fringes));
   // Signs, parasols, flags and birds (world/dressingModels.ts), loaded once the city's up: their models come in as files, so the module stays out of the first download (and out of the tests).

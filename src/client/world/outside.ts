@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ELEVATOR, ELEVATOR_FRONT, FLOOR, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
+import { ELEVATOR, ELEVATOR_FRONT, FLOOR, OFFICE_TREES, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
 import { LOT, SIDE_LOT } from '../../shared/garage';
 import { NEIGHBOURS, neighbourArea, neighbourFacing } from '../../shared/city';
 import type { Collider } from './office';
@@ -298,26 +298,8 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
 
   const forest = new THREE.Group();
 
-  // Trees along the sidewalks and around the building.
-  const trees: [number, number, number][] = [
-    [-38, 22, 1.1],
-    [-19.5, 22, 1],
-    [19.5, 22, 1.05],
-    [38, 22, 0.95],
-    [-40, 32.5, 1.1],
-    [-12, 32.5, 1],
-    [14, 32.5, 1.15],
-    [42, 32.5, 1],
-    [-20.5, -8, 1.2],
-    [-20.5, 9, 1],
-    [-20.5, 14, 0.9],
-    [21, -6, 1.1],
-    [21, 6, 1.25],
-    [-12, -22, 1.2],
-    [4, -24, 1],
-    // Clear of the back office, when a floor's built out into one (see WING).
-    [23, -19, 1.1],
-  ];
+  // Trees along the sidewalks and around the building (shared/layout.ts keeps them off the stairs).
+  const trees = OFFICE_TREES;
   for (const [x, z, s] of trees) {
     const t = tree(s);
     t.position.set(x, G, z);

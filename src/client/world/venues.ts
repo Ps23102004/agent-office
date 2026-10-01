@@ -1,3 +1,4 @@
+import { buildRoofSign } from './landmarks';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -536,6 +537,8 @@ export function buildVenues(night: NightParts): Venues {
       }
     }
     shell.add(mergeColored(trim));
+    // Its blade sign up on the roof goes with the shell when you're inside.
+    shell.add(buildRoofSign(v));
 
     // ---- What's always out front: the sign, the awning, the terrace, the glass.
     const outside = new THREE.Group();

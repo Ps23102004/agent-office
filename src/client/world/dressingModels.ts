@@ -135,6 +135,46 @@ function poles(list: { x: number; z: number; h: number }[]): THREE.InstancedMesh
   });
 }
 
+/** The street's name on a green blade above each street sign's pole, its face along the street it names so you read it coming up it. */
+function nameplates(group: THREE.Group, list: Dress[]) {
+  const named = list.filter((d) => d.kind === 'streetSign' && d.name);
+  if (!named.length) return;
+  const mats = new Map<string, THREE.MeshBasicMaterial>();
+  const byName = new Map<string, THREE.BufferGeometry[]>();
+  for (const d of named) {
+    let mat = mats.get(d.name!);
+    if (!mat) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 116;
+      const g = canvas.getContext('2d')!;
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, 512, 116);
+      g.fillStyle = '#1b6b45';
+      g.fillRect(8, 8, 496, 100);
+      g.fillStyle = '#ffffff';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      let px = 56;
+      g.font = `800 ${px}px Nunito, ui-rounded, system-ui, sans-serif`;
+      const w = g.measureText(d.name!).width;
+      if (w > 470) g.font = `800 ${(px = Math.floor((px * 470) / w))}px Nunito, ui-rounded, system-ui, sans-serif`;
+      g.fillText(d.name!, 256, 60);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false });
+      mat.userData.outlineParameters = { visible: false };
+      mats.set(d.name!, mat);
+    }
+    const placed = new THREE.PlaneGeometry(2.2, 0.5).rotateY(d.rot + Math.PI / 2).translate(d.x, 2.85, d.z);
+    const list = byName.get(d.name!) ?? [];
+    list.push(placed);
+    byName.set(d.name!, list);
+  }
+  // One mesh a name, not a plate a sign.
+  for (const [name, geos] of byName) group.add(new THREE.Mesh(mergeGeometries(geos)!, mats.get(name)!));
+}
+
 function flags(group: THREE.Group, list: Dress[]) {
   if (!list.length) return;
   group.add(poles(list.map((f) => ({ x: f.x, z: f.z, h: 6.6 }))));
@@ -312,6 +352,7 @@ export function buildDressing(): THREE.Group {
   const { items, birds: flock } = cityDressing();
   flags(group, items.filter((i) => i.kind === 'flag'));
   busSigns(group);
+  nameplates(group, items);
   birds(group, flock);
   kenney(group, items).catch((err: unknown) => console.error("the street dressing's models didn't load", err));
   return group;
