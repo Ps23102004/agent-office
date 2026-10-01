@@ -995,18 +995,18 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const vgeos = new Set<THREE.BufferGeometry>();
   for (const k of KINDS) for (const g of [vlooks[k].body, vlooks[k].paint, vlooks[k].wheel]) if (g) vgeos.add(g);
   let vverts = 0;
-  let indices = 0;
+  let vindices = 0;
   for (const g of vgeos) {
     vverts += g.attributes.position.count;
-    indices += g.index!.count;
+    vindices += g.index!.count;
   }
   const instances = KINDS.reduce((n, k) => n + SPECS[k].count * (Number(!!vlooks[k].body) + 1 + (vlooks[k].wheel ? vlooks[k].hubs.length : 0)), 0);
   // The page's OutlineEffect can't draw a batch's outline: a second batch, the same cars a touch bigger
   // and dark, inside out, draws it instead (two draw calls for all the traffic).
   const batchMat = (kitModel('sedan') ? kitMaterial() : mat).clone();
   batchMat.userData.outlineParameters = { visible: false };
-  const batch = new THREE.BatchedMesh(instances, vverts, indices, batchMat);
-  const vhull = new THREE.BatchedMesh(instances, vverts, indices, trafficOutline());
+  const batch = new THREE.BatchedMesh(instances, vverts, vindices, batchMat);
+  const vhull = new THREE.BatchedMesh(instances, vverts, vindices, trafficOutline());
   batch.name = 'traffic';
   vhull.name = 'traffic outline';
   for (const b of [batch, vhull]) {
