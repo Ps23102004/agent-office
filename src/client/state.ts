@@ -14,7 +14,7 @@ import { CIRCUIT } from '../shared/circuit';
 import { idleRace, type RaceState } from '../shared/race';
 import { OFFICE_MAP, planOf, type MapPlan } from '../shared/maps';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars' | 'race';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars' | 'race' | 'ride';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -240,6 +240,8 @@ class Store {
   carsAt: number[] = [];
   /** The race at the circuit (shared/race.ts), as the office last said, wherever you are. */
   race: RaceState = idleRace();
+  /** A ride a driver nearby offered you (car.invited), until you answer or `until` (office clock) passes; see client/together.ts. */
+  rideOffer: { from: string; name: string; car: number; until: number } | null = null;
   /** Outside the windows; null until the server says. */
   sky: SkyState | null = null;
   /** The building's holiday decorations: the same on every floor. */
@@ -387,6 +389,10 @@ class Store {
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
         this.enter(msg);
         this.emit('peers');
+        if (this.rideOffer) {
+          this.rideOffer = null;
+          this.emit('ride');
+        }
         break;
       case 'floors':
         this.floors = msg.floors;
@@ -545,6 +551,10 @@ class Store {
       case 'race':
         this.race = msg.state;
         this.emit('race');
+        break;
+      case 'car.invited':
+        this.rideOffer = { from: msg.from, name: msg.name, car: msg.car, until: msg.until };
+        this.emit('ride');
         break;
       case 'car.move': {
         const c = this.cars[msg.car];

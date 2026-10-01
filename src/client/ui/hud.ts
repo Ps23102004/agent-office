@@ -1,6 +1,7 @@
 import { BUZZ_SECONDS, type Caffeine } from '../caffeine';
 import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import { store } from '../state';
+import { goToMeet, meetLabel } from '../together';
 import type { Voice } from '../voice';
 import type { ChatLine } from '../../shared/protocol';
 import { $, h, openModal, STATUS_LABEL } from './dom';
@@ -124,6 +125,8 @@ export function renderChat() {
         c.account ? h('span.acct', {}, ' ✓') : null,
         ': ',
         c.text,
+        // A meeting spot (Meet here): click to be taken there.
+        c.meet ? h('button.chat-meet', { type: 'button', title: `Go to ${meetLabel(c.meet)}`, onclick: () => goToMeet(c.meet!) }, 'Go there') : null,
       );
     }),
   );

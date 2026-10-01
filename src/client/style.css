@@ -161,6 +161,7 @@ button { font-family: inherit; }
 .chat:is(:hover, :focus-within) #chat-log { pointer-events: auto; scrollbar-width: thin; }
 .chat:is(:hover, :focus-within) #chat-log li { animation: none; }
 #chat-log b { font-weight: 900; }
+#chat-log .chat-meet { margin-left: 6px; font: inherit; font-weight: 800; padding: 0 7px; border: 2px solid var(--ink); border-radius: 8px; background: #ffd166; cursor: pointer; }
 #chat-log .sys { color: var(--muted); font-style: italic; }
 #chat-input { pointer-events: auto; width: 180px; border: 2px solid var(--ink); border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 14px; background: rgba(255, 255, 255, .92); box-shadow: 0 2px 0 var(--ink); outline: none; transition: width .15s; }
 #chat-input:focus { width: 100%; border-color: var(--accent); background: #fff; }

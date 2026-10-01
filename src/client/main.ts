@@ -36,7 +36,9 @@ import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossS
 import { CARS, SPECS, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
 import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
-import { joinGrid, leaveRace, myRacer, startRace, wireRace } from './race';
+import { joinGrid, leaveRace, missedCheckpoint, myRacer, nextCheckpoint, startRace, wireRace } from './race';
+import { MEET_SPOTS, answerRide, meetLabel, offerRide, postMeet, rideCandidates, rideOffer, wireTogether, type MeetPin, type MeetSpotId } from './together';
+import { pinFloor } from '../shared/meet';
 import { RACE } from '../shared/race';
 import { Smoke } from './world/smoke';
 // W1 island: splashes in the sea, and where you come back out of it.
@@ -420,7 +422,10 @@ const settings = loadSettings();
 const player = new PlayerController(camera, canvas, office.colliders);
 // Behind the wheel of one of the garage's cars (see "The cars in the garage" below). Up here, since placing you anywhere gets you out first.
 const driver = new Driver(player, office.cars, {
-  moved: (car, p) => net.send({ t: 'car.drive', car, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0 }),
+  moved: (car, p) => {
+    net.send({ t: 'car.drive', car, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0 });
+    coachMoved(p);
+  },
   bump: (at, speed) => {
     sound.crash({ x: at.x, y: player.street + 0.5, z: at.z }, speed);
     if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 15));
@@ -931,6 +936,36 @@ function carAgain() {
   if (p) net.send({ t: 'car.drive', car: i, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0 });
 }
 
+/** Hands free, on your feet and not on your way anywhere, to get into a car: false, with a word why, if you can't. */
+function readyToRide(): boolean {
+  if (trip || climber.active || driver.active) return false;
+  const busy = carrying ? '🗂️ Your hands are full: put the card back first (Q)' : holdingBall() ? '🏀 Put the ball down first (Q)' : '';
+  if (busy) {
+    toast(busy, 'warn');
+    return false;
+  }
+  if (player.seat) standUp();
+  if (hanger.active) hanger.cancel();
+  if (walkingTo) stopWalking();
+  if (golf.active) golf.stop();
+  if (thrower.active) thrower.stop();
+  return true;
+}
+
+/** You said yes to a ride (client/together.ts) and the office seated you: in, as if you'd got in yourself. Busy since, straight back out. */
+function seatedByOffice(i: number, seat: CarSeat) {
+  const def = carDefs()[i];
+  if (!def || !readyToRide()) {
+    carPending++;
+    net.send({ t: 'car.leave' });
+    return;
+  }
+  driver.enter(i, seat);
+  me.sit(seatHips(def.kind));
+  sound.carDoor(carAt(i));
+  hintKey = 'stale';
+}
+
 /** Where someone on your floor is sitting in a car, if they're in one. */
 function rideOf(id: string): { x: number; y: number; z: number; rotY: number } | undefined {
   const at = store.carOf(id);
@@ -1029,6 +1064,91 @@ function followSun() {
   sun.target.position.set(x, 0, z);
   sun.target.updateMatrixWorld();
 }
+
+// ---- W8: the checkpoint coach, and meeting spots --------------------------------------------------
+/** Where your car was when the office last heard, and the checkpoint you were last told you missed. */
+let coachFrom: { x: number; z: number } | null = null;
+let missedSaid = -1;
+/** Each drive report at the circuit: through a line out of order, a word that it doesn't count (the arrow shows the one to go back for). */
+function coachMoved(p: { x: number; z: number }) {
+  const from = coachFrom;
+  coachFrom = atCircuit ? { x: p.x, z: p.z } : null;
+  if (!from || !coachFrom) return;
+  const missed = missedCheckpoint(from, coachFrom);
+  if (missed === undefined) {
+    if (nextCheckpoint() !== missedSaid) missedSaid = -1;
+    return;
+  }
+  if (missed === missedSaid) return;
+  missedSaid = missed;
+  toast(missed === 0 ? '⚠️ Missed the start line: that doesn’t count. Follow the arrow' : `⚠️ Missed checkpoint ${missed}: lines only count in order. Follow the arrow back`, 'warn');
+}
+
+/** On the way to a meeting spot (client/together.ts): a ride, the gate or a walk at a time; `walking` there on foot, and no more than a few `steps`. */
+let meeting: { pin: MeetPin; walking: boolean; steps: number } | null = null;
+
+function meetGo(pin: MeetPin) {
+  const floor = pinFloor(pin);
+  if (!floor || (floor !== CIRCUIT && floor !== ROOF && !store.floors.some((f) => f.id === floor))) return toast('That floor isn’t in the building any more', 'warn');
+  if (floor === ROOF && !builtFloors().length) return toast('There’s no rooftop bar to go up to yet', 'warn');
+  if (!getOut()) return;
+  if (walkingTo) stopWalking();
+  errand = null;
+  meeting = { pin, walking: false, steps: 0 };
+  toast(`🚶 On the way to ${meetLabel(pin)}`);
+  meetTick();
+}
+
+/** Each frame: the next step to the meeting spot, once the last one's done. */
+function meetTick() {
+  const m = meeting;
+  if (!m || trip || climber.active || !player.enabled) return;
+  // Got into a car on the way: that's somewhere else to be.
+  if (driver.active) return void (meeting = null);
+  if (m.walking) {
+    // Off your feet's path some other way than getting there (a key of yours): you've stopped going.
+    if (!errand) meeting = null;
+    return;
+  }
+  if (++m.steps > 6) {
+    meeting = null;
+    return toast('🚧 Couldn’t find a way there', 'warn');
+  }
+  const spot = MEET_SPOTS[m.pin.spot];
+  const floor = pinFloor(m.pin)!;
+  const there = () => {
+    meeting = null;
+    toast(`📍 Here: ${spot.name}`);
+  };
+  const walk = (then: () => void) => {
+    m.walking = true;
+    errand = { at: spot, what: spot.name, then };
+    const to = { x: spot.x, y: 0, z: spot.z };
+    player.walkPath(inOffice() && !upTop && !downstairs() ? wayTo(player.pos, to, officeWing()) : [{ x: spot.x, z: spot.z }]);
+  };
+  if (spot.where === 'circuit') {
+    if (atCircuit) return walk(there);
+    // Through the gate in the city, from the street under your floor (a map of its own has no city: straight there).
+    if (!inOffice()) return toCircuit();
+    if (upTop || !downstairs()) return ride(GARAGE);
+    return walk(() => {
+      m.walking = false;
+      toCircuit();
+    });
+  }
+  if (store.floor !== floor) return ride(floor);
+  if (!inOffice()) return there();
+  if (spot.where === 'street' && !downstairs()) return ride(GARAGE);
+  if (spot.where === 'floor' && downstairs()) return ride(floor);
+  walk(there);
+}
+
+wireTogether({ send: (msg) => net.send(msg), go: meetGo, readyToRide });
+// A ride offered: a word, and the palette has the answers (Sol's Hang out window will too).
+store.on('ride', () => {
+  const o = rideOffer();
+  if (o) toast(`🚗 ${o.name} offers you a ride: ${IS_MAC ? '⌘K' : 'Ctrl+K'} → Accept ride`);
+});
 
 // The race (shared/race.ts). Its panel and HUD are ui/race.ts's; until then, R in a car and a toast or two.
 wireRace({
@@ -1306,6 +1426,9 @@ net.onMessage((msg) => {
       break;
     case 'cars':
       carNews(!!msg.answer);
+      break;
+    case 'car.seated':
+      seatedByOffice(msg.car, msg.seat);
       break;
     case 'car.honk':
       if (msg.car >= 0 && msg.car < carDefs().length) sound.honk(carAt(msg.car), carDefs()[msg.car].kind === 'lambo');
@@ -2836,6 +2959,16 @@ function paletteEntries(): PaletteEntry[] {
   // W4 UI + features: the same actions as the menu, without a second navigation path.
   out.push({ icon: '👋', kind: 'Action', title: 'Hang out', detail: 'Find friends, voice and invite links', keywords: ['friends', 'voice', 'invite', 'emotes'], open: showHangout });
   out.push({ icon: '🏁', kind: 'Action', title: 'Race lobby', detail: 'Line up, watch the race or see results', keywords: ['circuit', 'grid', 'leaderboard'], open: () => raceUI.openLobby() });
+  // W8: meeting spots to post to the chat, rides to offer and the one you're offered (Sol's UI pass gives them proper places).
+  for (const id of Object.keys(MEET_SPOTS) as MeetSpotId[]) {
+    out.push({ icon: MEET_SPOTS[id].icon, kind: 'Action', title: `Meet at ${MEET_SPOTS[id].name}`, detail: 'Post it to the chat for everyone to click', keywords: ['meet here', 'meeting spot', 'hang out'], open: () => postMeet(id) });
+  }
+  for (const p of rideCandidates()) out.push({ icon: '🚗', kind: 'Action', title: `Offer ${p.name} a ride`, detail: 'The seat beside you, if they say yes', keywords: ['invite', 'passenger'], open: () => offerRide(p.id) });
+  const offer = rideOffer();
+  if (offer) {
+    out.push({ icon: '🚗', kind: 'Action', title: `Accept ride from ${offer.name}`, detail: 'Into the seat beside them', keywords: ['yes', 'passenger'], open: () => answerRide(true) });
+    out.push({ icon: '🚶', kind: 'Action', title: `No thanks to ${offer.name}’s ride`, keywords: ['decline', 'passenger'], open: () => answerRide(false) });
+  }
   if (store.invites) out.push({ icon: '👥', kind: 'Action', title: 'Invite teammates', keywords: ['team', 'add people'], open: () => openTeam(net) });
   else if (store.me.admin) out.push({ icon: '👥', kind: 'Action', title: 'Invite people', detail: 'Accounts', keywords: ['invite teammates', 'accounts', 'team'], open: () => openAccounts(net) });
   out.push({ icon: '🖼️', kind: 'Action', title: 'Hang a picture', detail: 'On a wall of this floor', keywords: ['decorate', 'frame', 'art'], open: startHanging });
@@ -4870,6 +5003,7 @@ function frame(ts?: number) {
   const drunk = drinking(now);
 
   walkTick(now);
+  meetTick();
   // The cars first, so whoever's riding in one sits in it where it's got to.
   fleet().update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
   // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
@@ -5085,7 +5219,10 @@ function frame(ts?: number) {
   if (!upTop && !atCircuit) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
   if (!upTop && !atCircuit && inOffice() && holidayTick(dt)) holiday.update(t, sky.lampsOn, camera);
   // W2: the circuit's lights and crowd; through a gate, to it or back; the sun's shadows follow you round it.
-  if (atCircuit && circuit) circuit.update(dt, t, store.race, store.officeNow(), circuit.fleet.cars.map((v) => v.pose));
+  if (atCircuit && circuit) {
+    circuit.update(dt, t, store.race, store.officeNow(), circuit.fleet.cars.map((v) => v.pose));
+    circuit.coach(driver.driving ? nextCheckpoint() : null);
+  }
   gates();
   sound.setWeather(sky.rain, 1 - sky.daylight);
   if (upTop && roof) {

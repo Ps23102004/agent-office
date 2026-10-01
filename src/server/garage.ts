@@ -4,6 +4,10 @@ import { CITY_GATE } from '../shared/circuit.js';
 
 /** How often one person can honk, at most (ms). */
 const HONK_EVERY = 250;
+/** A driver offers a ride this often at most (ms); an offer stands this long (ms); said no to, the same driver can't ask the same person again for this long (ms). */
+export const OFFER_EVERY = 3000;
+export const OFFER_FOR = 30_000;
+const SNUBBED_FOR = 60_000;
 
 /**
  * A floor's cars: who's in each one, and where its driver last said it is. Each driver's page drives
@@ -15,6 +19,11 @@ export class Garage {
   private honked = new Map<string, number>();
   /** When each car's pose was last accepted (ms), to tell a drive from a jump. */
   private movedAt: number[] = [];
+  /** Rides offered: by who they're offered to, the driver offering and their car, until when. One each. */
+  private offers = new Map<string, { from: string; car: number; until: number }>();
+  /** When each driver last offered a ride, and who said no to whom, until when (`from>to`). */
+  private offeredAt = new Map<string, number>();
+  private snubbed = new Map<string, number>();
 
   /** A floor's garage; or the race circuit's cars (`defs`), which go anywhere `where` says (see shared/circuit.ts). */
   constructor(
@@ -49,9 +58,51 @@ export class Garage {
     return true;
   }
 
+  /**
+   * The driver `from` offers `to` the empty seat beside them. Nobody is seated until they say yes
+   * (accept). Only a driver with a free passenger seat, to someone not in a car, now and then, and not
+   * again soon to someone who said no. The car it's for, if it stands.
+   */
+  offer(from: string, to: string): number | undefined {
+    const at = this.seatOf(from);
+    const now = this.now();
+    if (!at || at.seat !== 'driver' || from === to || this.seatOf(to)) return undefined;
+    if (SPECS[this.defs[at.car].kind].seats < 2 || this.cars[at.car].passenger) return undefined;
+    if (now - (this.offeredAt.get(from) ?? -Infinity) < OFFER_EVERY || now < (this.snubbed.get(`${from}>${to}`) ?? 0)) return undefined;
+    for (const [k, at] of this.offeredAt) if (now - at >= OFFER_EVERY) this.offeredAt.delete(k);
+    this.offeredAt.set(from, now);
+    this.offers.set(to, { from, car: at.car, until: now + OFFER_FOR });
+    return at.car;
+  }
+
+  /** The ride offered to `to`, if there is one. */
+  offerTo(to: string): { from: string; car: number; until: number } | undefined {
+    return this.offers.get(to);
+  }
+
+  /**
+   * `to` answers the ride `from` offered: yes is into the passenger seat, if the offer still stands
+   * (still driving the same car, the seat still free, `to` in no car, in time). No is no, and the
+   * driver can't ask again for a while. The car they got into.
+   */
+  answer(to: string, from: string, yes: boolean): number | undefined {
+    const o = this.offers.get(to);
+    if (!o || o.from !== from) return undefined;
+    this.offers.delete(to);
+    if (!yes) {
+      this.snubbed.set(`${from}>${to}`, this.now() + SNUBBED_FOR);
+      for (const [k, until] of this.snubbed) if (until <= this.now()) this.snubbed.delete(k);
+      return undefined;
+    }
+    const at = this.seatOf(from);
+    if (this.now() > o.until || at?.car !== o.car || at.seat !== 'driver' || this.seatOf(to)) return undefined;
+    return this.enter(to, o.car, 'passenger') ? o.car : undefined;
+  }
+
   /** `id` gets out (or left the floor, or the office). A car nobody's driving stops where it is. Says whether they were in one. */
   leave(id: string): boolean {
     this.honked.delete(id);
+    this.offers.delete(id);
     const at = this.seatOf(id);
     if (!at) return false;
     const c = this.cars[at.car];

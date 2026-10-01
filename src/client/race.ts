@@ -1,6 +1,6 @@
 import type { ClientMsg } from '../shared/protocol';
-import { CIRCUIT } from '../shared/circuit';
-import type { Racer } from '../shared/race';
+import { CHECKPOINTS, CIRCUIT, crossed } from '../shared/circuit';
+import type { Practicer, Racer, Timing } from '../shared/race';
 import { store } from './state';
 
 // What you can do about the race at the circuit (shared/race.ts), for the race's panel and HUD
@@ -45,4 +45,45 @@ export function startRace() {
 /** Pulls you out of the race (or off the grid). */
 export function leaveRace() {
   if (myRacer()) wiring?.send({ t: 'race.leave' });
+}
+
+/** You, if you're on practice laps (driving at the circuit, not in the race). */
+export function myPractice(): Practicer | undefined {
+  return store.race.practice.find((p) => p.id === store.you);
+}
+
+/** Your timing now: the race's while you're in it, else your practice laps'. Sectors, splits and bests are on it (shared/race.ts Timing). */
+export function myTiming(): Racer | Practicer | undefined {
+  return myRacer() ?? myPractice();
+}
+
+/** The checkpoint you're to go through next (racing or on practice laps), or null when there's none: not driving at the circuit, the race not on yet, or you're home. */
+export function nextCheckpoint(): number | null {
+  if (!atCircuit()) return null;
+  const r = myRacer();
+  if (r) return store.race.phase === 'racing' && r.finishedAt === undefined ? (r.checkpoint + 1) % CHECKPOINTS : null;
+  const p = myPractice();
+  return p ? (p.checkpoint + 1) % CHECKPOINTS : null;
+}
+
+/** The checkpoint after the last one this page has seen you go through, which may be ahead of what the office has said yet. */
+let ahead = -1;
+
+/**
+ * Your car went from `from` to `to`: the checkpoint you missed, if that took you through a line out of
+ * order (the office won't count it: shared/circuit.ts crossed, server/race.ts). Undefined otherwise,
+ * and before you're on a lap (practice laps start at the line).
+ */
+export function missedCheckpoint(from: { x: number; z: number }, to: { x: number; z: number }, t: Timing | undefined = myTiming()): number | undefined {
+  const next = nextCheckpoint();
+  if (next === null || !t || t.checkpoint < 0) return undefined;
+  const d = (k: number) => (k - next + CHECKPOINTS) % CHECKPOINTS;
+  // A few lines ahead of the office at most; anything else is from some other lap or race.
+  if (ahead < 0 || d(ahead) > 3) ahead = next;
+  for (let i = 0; i < CHECKPOINTS; i++) {
+    if (!crossed(i, from, to)) continue;
+    if (d(i) > d(ahead)) return ahead;
+    if (d(i + 1) > d(ahead)) ahead = (i + 1) % CHECKPOINTS;
+  }
+  return undefined;
 }
