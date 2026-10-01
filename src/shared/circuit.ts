@@ -13,45 +13,60 @@ import type { CarDef } from './garage.js';
 export const CIRCUIT = '@circuit';
 export const CIRCUIT_NAME = 'Race circuit';
 
-/** The circuit's middle, out in the world. */
+/** The start line, out in the world: the rest of the circuit is east and south of it. */
 export const CENTER = { x: 0, z: -3000 } as const;
 
 /** The asphalt's width, the red-and-white kerbs along its edges, and the grass either side out to the tyre walls (m). */
-export const TRACK = { width: 12, curb: 1.2, runoff: 20 } as const;
+export const TRACK = { width: 14, curb: 1.2, runoff: 20 } as const;
 
 /**
- * The line the track follows, a closed loop through these points (m, from CENTER): the main straight
- * east past the pits and the start line, a fast right at the end of it, a hairpin, a chicane, the long
- * sweeper round the back and a tight final corner onto the straight again. It runs clockwise from above.
+ * A stretch of the lap: straight on for `straight` metres, or round a bend of `turn` degrees (+ to
+ * the right) at radius `r`. A bend's `name` is the corner's; `brake`: a hard stop into it from a
+ * straight, with braking boards before it.
  */
-const POINTS: readonly (readonly [number, number])[] = [
-  [-20, 0],
-  [60, 0],
-  [150, 0],
-  [192, 12],
-  [212, 48],
-  [216, 110],
-  [208, 150],
-  [182, 164],
-  [156, 150],
-  [146, 118],
-  [128, 92],
-  [104, 82],
-  [90, 94],
-  [74, 84],
-  [50, 80],
-  [0, 96],
-  [-60, 138],
-  [-120, 166],
-  [-170, 150],
-  [-196, 104],
-  [-188, 58],
-  [-160, 20],
-  [-110, 0],
-];
+type Leg = { straight: number } | { turn: number; r: number; name: string; brake?: boolean };
 
-/** POINTS were drawn a little small: this many times as big. */
-const SCALE = 1.3;
+/**
+ * The lap, from the start line: east down the main straight, the hard stop into Turn 1, a fast
+ * chicane, the sweeper onto the back straight west, the hairpin at the end of it, the esses through
+ * the infield, the carousel (one long double-apex right), the bottom straight west, the tight slow
+ * complex, north up the kinked west straight, and the final corner onto the main straight again.
+ * Clockwise from above. Two of the straights' lengths are whatever closes the loop.
+ */
+const LEGS: readonly Leg[] = [
+  { straight: 480 },
+  { turn: 90, r: 30, name: 'Turn 1', brake: true },
+  { straight: 60 },
+  { turn: -20, r: 80, name: 'Chicane' },
+  { turn: 40, r: 80, name: 'Chicane' },
+  { turn: -20, r: 80, name: 'Chicane' },
+  { straight: 40 },
+  { turn: 90, r: 110, name: 'Sweeper' },
+  { straight: 380 },
+  { turn: -160, r: 16, name: 'Hairpin', brake: true },
+  { straight: 100 },
+  { turn: 40, r: 90, name: 'Esses' },
+  { turn: -40, r: 90, name: 'Esses' },
+  { turn: 40, r: 90, name: 'Esses' },
+  { turn: -60, r: 90, name: 'Esses' },
+  { straight: 80 },
+  { turn: 90, r: 40, name: 'Carousel' },
+  { straight: 30 },
+  { turn: 90, r: 40, name: 'Carousel' },
+  { straight: 566.8 },
+  { turn: 90, r: 18, name: 'Complex', brake: true },
+  { straight: 40 },
+  { turn: -90, r: 18, name: 'Complex' },
+  { straight: 30 },
+  { turn: 90, r: 22, name: 'Complex' },
+  { straight: 191.2 },
+  { turn: 20, r: 260, name: 'Kink' },
+  { straight: 60 },
+  { turn: -20, r: 260, name: 'Kink' },
+  { straight: 120 },
+  { turn: 90, r: 45, name: 'Final corner', brake: true },
+  { straight: 150 },
+];
 
 export interface TrackPoint {
   x: number;
@@ -67,6 +82,19 @@ export interface Track {
   points: TrackPoint[];
   /** Once round (m). */
   length: number;
+  /** Its corners, in order round the lap. */
+  corners: Corner[];
+}
+
+/** A corner (one bend of LEGS): where it starts and ends round the lap (m), which way and how tight. */
+export interface Corner {
+  name: string;
+  s0: number;
+  s1: number;
+  /** Degrees, + to the right. */
+  turn: number;
+  r: number;
+  brake: boolean;
 }
 
 /** About how far apart the track's points are (m). */
@@ -74,30 +102,35 @@ const STEP = 2;
 
 let built: Track | null = null;
 
-/**
- * The track's centre line, every couple of metres from the start line round: a centripetal
- * Catmull-Rom curve through POINTS, which never overshoots into a loop at a tight corner.
- */
+/** The track's centre line, every couple of metres from the start line round: LEGS walked from CENTER heading east. */
 export function track(): Track {
   if (built) return built;
-  const P = POINTS.map(([x, z]) => ({ x: x * SCALE + CENTER.x, z: z * SCALE + CENTER.z }));
-  const n = P.length;
   const raw: { x: number; z: number }[] = [];
-  for (let i = 0; i < n; i++) {
-    const p0 = P[(i - 1 + n) % n], p1 = P[i], p2 = P[(i + 1) % n], p3 = P[(i + 2) % n];
-    const knot = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.sqrt(Math.hypot(b.x - a.x, b.z - a.z));
-    const t1 = knot(p0, p1), t2 = t1 + knot(p1, p2), t3 = t2 + knot(p2, p3);
-    const steps = Math.max(2, Math.ceil(Math.hypot(p2.x - p1.x, p2.z - p1.z) / (STEP / 2)));
-    for (let k = 0; k < steps; k++) {
-      const t = t1 + ((t2 - t1) * k) / steps;
-      const lerp = (a: { x: number; z: number }, b: { x: number; z: number }, ta: number, tb: number) => ({
-        x: ((tb - t) * a.x + (t - ta) * b.x) / (tb - ta),
-        z: ((tb - t) * a.z + (t - ta) * b.z) / (tb - ta),
-      });
-      const a1 = lerp(p0, p1, 0, t1), a2 = lerp(p1, p2, t1, t2), a3 = lerp(p2, p3, t2, t3);
-      const b1 = lerp(a1, a2, 0, t2), b2 = lerp(a2, a3, t1, t3);
-      raw.push(lerp(b1, b2, t1, t2));
+  const corners: Corner[] = [];
+  // Heading `th`: 0 is east (+x), + turns right (toward +z, south).
+  let x = CENTER.x, z = CENTER.z, th = 0, s = 0;
+  for (const leg of LEGS) {
+    if ('straight' in leg) {
+      const n = Math.ceil(leg.straight / (STEP / 2));
+      for (let k = 0; k < n; k++) raw.push({ x: x + (Math.cos(th) * leg.straight * k) / n, z: z + (Math.sin(th) * leg.straight * k) / n });
+      x += Math.cos(th) * leg.straight;
+      z += Math.sin(th) * leg.straight;
+      s += leg.straight;
+      continue;
     }
+    const a = (leg.turn * Math.PI) / 180, side = Math.sign(a);
+    // The bend's middle, off to the side it turns.
+    const cx = x - Math.sin(th) * leg.r * side, cz = z + Math.cos(th) * leg.r * side;
+    const n = Math.ceil((Math.abs(a) * leg.r) / (STEP / 2));
+    for (let k = 0; k < n; k++) {
+      const t = th + (a * k) / n;
+      raw.push({ x: cx + Math.sin(t) * leg.r * side, z: cz - Math.cos(t) * leg.r * side });
+    }
+    th += a;
+    x = cx + Math.sin(th) * leg.r * side;
+    z = cz - Math.cos(th) * leg.r * side;
+    corners.push({ name: leg.name, s0: s, s1: s + Math.abs(a) * leg.r, turn: leg.turn, r: leg.r, brake: !!leg.brake });
+    s += Math.abs(a) * leg.r;
   }
   // Evenly spaced along it, so a point's index says how far round it is.
   const along = [0];
@@ -119,7 +152,7 @@ export function track(): Track {
     points[k].tx = (b.x - a.x) / d;
     points[k].tz = (b.z - a.z) / d;
   }
-  return (built = { points, length });
+  return (built = { points, length, corners });
 }
 
 /** The track `s` metres round from the start line (either way round, as far as you like). */
@@ -190,8 +223,8 @@ export function circuitGround(x: number, z: number): boolean {
 
 // ---- The checkpoints and the grid ----------------------------------------------------------------
 
-/** Lines across the track, evenly round it; the first is the start and finish line. A lap is all of them, in order. */
-export const CHECKPOINTS = 14;
+/** Lines across the track, evenly round it (about one every 100 m); the first is the start and finish line. A lap is all of them, in order. */
+export const CHECKPOINTS = 32;
 
 /** Checkpoint `i`'s line, right across the track and its grass from tyre wall to tyre wall. */
 export function checkpoint(i: number): { x: number; z: number; ax: number; az: number; bx: number; bz: number } {
@@ -212,6 +245,20 @@ export function crossed(i: number, a: { x: number; z: number }, b: { x: number; 
   const f = before / (before - after);
   const x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f;
   return Math.hypot(x - c.x, z - c.z) <= Math.hypot(c.ax - c.x, c.az - c.z);
+}
+
+/** How far past a checkpoint's line a car put back on the track is set down (m). */
+const RESET_PAST = 3;
+
+/**
+ * Where a car goes back to on the track (off it too long, stuck, or the wrong way round), the last
+ * checkpoint it went through being `last`: on the centre line just past that line, facing the way
+ * round. Before its first time over the start line (-1), just short of that. The office takes a car
+ * turning up here as a fair reset rather than a jump (server/race.ts).
+ */
+export function resetPose(last: number): { x: number; z: number; rotY: number } {
+  const p = pointAt(last < 0 ? -10 : (last * track().length) / CHECKPOINTS + RESET_PAST);
+  return { x: p.x, z: p.z, rotY: Math.atan2(p.tx, p.tz) };
 }
 
 /** Grid slot `slot`'s spot behind the start line: two by two, staggered, the odd ones on the right. */

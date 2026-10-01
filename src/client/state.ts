@@ -15,6 +15,31 @@ import { ARENA, idleArena, type ArenaState } from '../shared/arena';
 import { idleRace, type RaceState } from '../shared/race';
 import { OFFICE_MAP, planOf, type MapPlan } from '../shared/maps';
 
+/** The car next to yours in the race: who, how far (m) round the track, and about how long (s) at the pace of the one behind. */
+export interface LiveGap {
+  id: string;
+  name: string;
+  metres: number;
+  seconds: number;
+}
+
+/** Your driving at the circuit, live (store.raceLive), for the race HUD. */
+export interface RaceLive {
+  /** Going the wrong way round (for a second or more). */
+  wrongWay: boolean;
+  /** Your place in the race now (1 first), from how far round everyone's got; null when you're not racing. */
+  position: number | null;
+  /** How many are in the race. */
+  racers: number;
+  /** The car ahead of you in the race, and the one behind; null for none. */
+  gapAhead: LiveGap | null;
+  gapBehind: LiveGap | null;
+  /** Seconds till you're put back on the track (off it, stuck or facing the wrong way); null when you're not about to be. */
+  resetIn: number | null;
+  /** Your best lap's ghost is out on the track with you. */
+  ghost: boolean;
+}
+
 export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars' | 'race' | 'ride' | 'arena';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
@@ -241,6 +266,8 @@ class Store {
   carsAt: number[] = [];
   /** The race at the circuit (shared/race.ts), as the office last said, wherever you are. */
   race: RaceState = idleRace();
+  /** How your driving at the circuit is going this moment, as this page sees it (client/race.ts): every frame, no topic. */
+  raceLive: RaceLive = { wrongWay: false, position: null, racers: 0, gapAhead: null, gapBehind: null, resetIn: null, ghost: false };
   /** The arena's match (shared/arena.ts), while you're in it. */
   arena: ArenaState = idleArena();
   /** A ride a driver nearby offered you (car.invited), until you answer or `until` (office clock) passes; see client/together.ts. */

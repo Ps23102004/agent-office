@@ -1,4 +1,4 @@
-import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, track } from '../shared/circuit.js';
+import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, resetPose, track } from '../shared/circuit.js';
 import { BOOST, SPECS } from '../shared/garage.js';
 import { RACE, SECTORS, idleRace, type Practicer, type RaceState, type Racer, type Timing } from '../shared/race.js';
 
@@ -147,7 +147,7 @@ export class RaceControl {
       return changed;
     }
     if (racer.finishedAt !== undefined) return changed;
-    const from = this.step(id, x, z, now, racer.car);
+    const from = this.step(id, x, z, now, racer.car, racer.checkpoint);
     const next = (racer.checkpoint + 1) % CHECKPOINTS;
     if (!from || !crossed(next, from, { x, z })) {
       // Positions shift as people pass each other between the lines, too.
@@ -169,9 +169,10 @@ export class RaceControl {
    * The car has got to (x, z) at `now`: where it came from, if it got here by driving and can have
    * crossed a line on the way. Further than a car could have gone since is not driving: where it was
    * stands, unless it stays away a while (a bad connection), when it's taken to be here, but can't
-   * cross a line from here.
+   * cross a line from here. A jump back onto the track at the last checkpoint it went through
+   * (`last`: shared/circuit.ts resetPose) is a reset, which gains nothing: it's there straight away.
    */
-  private step(id: string, x: number, z: number, now: number, car: number): { x: number; z: number } | undefined {
+  private step(id: string, x: number, z: number, now: number, car: number, last: number): { x: number; z: number } | undefined {
     const max = fastest(car);
     const cap = max * LAG;
     const from = this.last.get(id);
@@ -183,6 +184,11 @@ export class RaceControl {
     const far = Math.hypot(x - from.x, z - from.z);
     const budget = Math.min(cap, (from.budget ?? cap) + (max * Math.max(0, now - from.at)) / 1000 - far);
     if (far > JUMP || budget < 0) {
+      const reset = resetPose(last);
+      if (Math.hypot(x - reset.x, z - reset.z) < 1) {
+        this.last.set(id, { x, z, at: now, budget: 0 });
+        return undefined;
+      }
       const held = from.held ?? now;
       // Taken to be here after all: owing the time it saved (up to a few seconds' worth), so a jump ahead gains nothing.
       this.last.set(id, now - held >= REANCHOR ? { x, z, at: now, jumped: true, budget: Math.max(-3 * cap, Math.min(0, budget)) } : { ...from, held });
@@ -210,7 +216,7 @@ export class RaceControl {
       p.name = who.name;
       changed = true;
     }
-    const from = this.step(id, x, z, now, p.car);
+    const from = this.step(id, x, z, now, p.car, p.checkpoint);
     const next = (p.checkpoint + 1) % CHECKPOINTS;
     if (!from || !crossed(next, from, { x, z })) return changed;
     p.checkpoint = next;

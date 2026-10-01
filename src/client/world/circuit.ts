@@ -1,19 +1,20 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { CENTER, CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
+import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
 import { RACE_PLAZA, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
 import { decorTicker } from '../quality';
-import { Fleet } from './cars';
+import { Fleet, supercar } from './cars';
 import { loadModel, type ModelName } from './models';
 import type { Collider, Interactable } from './office';
 import { mergeColored, mesh, textPlane, toon, toonVertex } from './toon';
+import type { CarDef } from '../../shared/garage';
 
 // The race circuit (shared/circuit.ts), drawn: the track with its kerbs, gravel and white lines, the
 // grid and the chequered start line under the gantry and its five red lights, tyre walls and barriers
 // round the grass, sponsor boards (textures made for it: public/textures/race-sponsors-*.jpg),
-// grandstands full of a cheering crowd, the pit garages along the paddock, trees, and the circuit's
-// own cars waiting in the paddock. The grandstands, garages, trees and the like are Kenney's Racing
+// grandstands full of a cheering crowd, braking boards and chevrons at the corners, the pit garages
+// along the paddock, trees, and the circuit's own cars waiting in the paddock (and your best lap's ghost). The grandstands, garages, trees and the like are Kenney's Racing
 // Kit (CC0, see CREDITS.md), painted in the office's toon colors and merged, so the whole place is a
 // couple of dozen draw calls, its cars aside. Also the gate on the plaza in the city that gets you here.
 
@@ -43,6 +44,8 @@ export interface Circuit {
   update(dt: number, t: number, race: RaceState, now: number, cars: readonly { x: number; z: number; speed: number }[]): void;
   /** The checkpoint coach: one arrow floating over checkpoint `next`'s line, pointing the way round (null: none). Each frame. */
   coach(next: number | null): void;
+  /** Your best lap's ghost, in car `def`, where it is now (null: none). Each frame. */
+  ghost(def: CarDef | null, at: { x: number; z: number; rotY: number } | null): void;
 }
 
 /** Vertex-colored flat pieces of ground, all in one mesh: triangles facing up. */
@@ -89,6 +92,11 @@ class Flat {
 function bend(s: number): number {
   const a = pointAt(s - 6), b = pointAt(s + 6);
   return (a.tx * b.tz - a.tz * b.tx) / -12;
+}
+
+/** Whether a barrier (or anything else) `RAIL` off the centre line at (x, z) is clear of every part of the track's grass, where two parts come close or round the inside of a tight corner. */
+function railClear(x: number, z: number): boolean {
+  return Math.abs(nearestProgress(x, z).d) > RAIL - 0.5;
 }
 
 /** A box `w` across, `h` high and `l` long, standing at (x, z) and turned `rotY`, into `into`. */
@@ -235,12 +243,11 @@ function layout(): { stands: Placed[]; props: Placed[] } {
       stands.push({ prop: covered(s) ? 'covered' : 'stand', x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), scale: TILE });
     }
   };
-  const L = track().length;
+  const { length: L, corners } = track();
   // The main straight's, across from the pit wall (on the right, heading for the line); covered by the line.
   row(L - 100, L + 150, -1, TILE, (s) => Math.abs(s - L) < 50);
-  row(250, 310, 0, 7.5);
-  row(470, 545, 0, 7);
-  row(1225, 1290, 0, 7);
+  // Round the outside of the corners you brake hard for, and the carousel's.
+  for (const c of corners) if (c.brake || c === corners.find((k) => k.name === 'Carousel')) row(c.s0 - 15, c.s1 + 15, c.turn > 0 ? 1 : -1, 7.5);
   // The pit garages along the back of the paddock, facing it, with an office every so often.
   const n = Math.floor((GARAGES.maxX - GARAGES.minX) / TILE);
   for (let i = 0; i < n; i++) {
@@ -250,7 +257,8 @@ function layout(): { stands: Placed[]; props: Placed[] } {
   for (let i = 0; i < 3; i++) props.push({ prop: 'tent', x: PADDOCK.maxX - 12, z: PADDOCK.minZ + 8 + i * 9, rotY: -Math.PI / 2, scale: 5 });
   for (let x = PADDOCK.minX + 20; x < PADDOCK.maxX; x += 45) props.push({ prop: 'lamp', x, z: PADDOCK.minZ + 1.5, rotY: 0, scale: 11 });
   // Banner towers on the outside of the corners.
-  for (const s of [215, 360, 600, 690, 900, 1100]) {
+  for (const c of corners) {
+    const s = Math.round((c.s0 + c.s1) / 2);
     const p = pointAt(s);
     const out = bend(s) > 0 ? -1 : 1;
     const off = BAND + 3;
@@ -260,14 +268,23 @@ function layout(): { stands: Placed[]; props: Placed[] } {
   // Trees round about, outside everything, the same for everyone.
   const r = rng(20261001);
   const spot = (x: number, z: number) => clear(x, z, 3) && !stands.some((s) => Math.hypot(s.x - x, s.z - z) < TILE + 3);
-  for (let k = 0; k < 900 && props.length < 320; k++) {
-    const x = CENTER.x - 330 + r() * 680;
-    const z = CENTER.z - 130 + r() * 420;
+  const far = grounds();
+  for (let k = 0; k < 2400 && props.length < 560; k++) {
+    const x = far.minX + 10 + r() * (far.maxX - far.minX - 20);
+    const z = far.minZ + 10 + r() * (far.maxZ - far.minZ - 20);
     if (z < GARAGES.minZ + 2 && z > GARAGES.minZ - 30 && x > GARAGES.minX - 20 && x < GARAGES.maxX + 20) continue;
     if (!spot(x, z)) continue;
     props.push({ prop: r() < 0.6 ? 'tree' : 'bush', x, z, rotY: r() * Math.PI * 2, scale: 5 + r() * 2.5 });
   }
   return { stands, props };
+}
+
+/** The circuit's grounds: round the track with room to spare, and a fence round them. */
+function grounds(): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const { points } = track();
+  const xs = points.map((p) => p.x), zs = points.map((p) => p.z);
+  const m = 140;
+  return { minX: Math.min(...xs) - m, maxX: Math.max(...xs) + m, minZ: Math.min(...zs) - m, maxZ: Math.max(...zs) + m };
 }
 
 /** A copy of one of Kenney's models, the middle of its footprint at the origin and its base on the ground. */
@@ -338,9 +355,9 @@ export function buildCircuit(): Circuit {
   const group = new THREE.Group();
   const colliders: Collider[] = [];
   const interactables: Interactable[] = [];
-  const { points, length: L } = track();
+  const { points, length: L, corners } = track();
   // The ground under it all, to stand on; and a fence far out, so nobody wanders off into the haze.
-  const far = { minX: CENTER.x - 420, maxX: CENTER.x + 440, minZ: CENTER.z - 200, maxZ: CENTER.z + 360 };
+  const far = grounds();
   colliders.push({ ...far, bottom: -1, top: 0 });
   colliders.push(
     { minX: far.minX, maxX: far.minX + 1, minZ: far.minZ, maxZ: far.maxZ, top: 6, fence: true },
@@ -375,10 +392,13 @@ export function buildCircuit(): Circuit {
       flat.band(s0, s1, EDGE, EDGE + TRACK.curb, 0.005, color);
       flat.band(s0, s1, -EDGE - TRACK.curb, -EDGE, 0.005, color);
     }
-    if (Math.abs(k) > 1 / 70) {
-      const out = k > 0 ? -1 : 1;
-      const a = EDGE + TRACK.curb, b = a + 10;
-      flat.band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, -0.02, '#ecd9a0');
+    // Gravel round the outside of the slow corners; a wide run-off of pale asphalt round the fast ones.
+    const c = corners.find((c) => s0 > c.s0 - 10 && s0 < c.s1 + 10 && c.r < 200);
+    if (c) {
+      const out = c.turn > 0 ? 1 : -1;
+      const slow = c.r < 70;
+      const a = EDGE + TRACK.curb, b = a + (slow ? 10 : 13);
+      flat.band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, -0.02, slow ? '#ecd9a0' : '#8f949e');
     }
   }
   // The chequered start line, and the grid's slots behind it.
@@ -397,6 +417,11 @@ export function buildCircuit(): Circuit {
   const solid = new THREE.Group();
   const tyres: { x: number; z: number; color: string }[] = [];
   const inPaddock = (x: number, z: number) => x > P.minX - 2 && x < P.maxX + 2 && z > P.minZ - 2 && z < P.maxZ + 3;
+  /** Which side's barrier (+ the left) a car that doesn't stop for a corner `s` m round runs into, in the 80 m before it: the corner's outside. */
+  const braking = (s: number) => {
+    const c = corners.find((c) => c.brake && s > c.s0 - 80 && s <= c.s0);
+    return c ? (c.turn > 0 ? 1 : -1) : 0;
+  };
   for (let i = 0; i < points.length; i += 2) {
     const s = i * step;
     const k = bend(s + step);
@@ -404,12 +429,13 @@ export function buildCircuit(): Circuit {
       const a = pointAt(s), b = pointAt(s + step * 2);
       const ax = a.x + a.tz * RAIL * side, az = a.z - a.tx * RAIL * side;
       const bx = b.x + b.tz * RAIL * side, bz = b.z - b.tx * RAIL * side;
-      if (inPaddock(ax, az) || inPaddock(bx, bz)) continue;
+      // None round the inside of a tight corner, or where it would stand on another part of the track's grass.
+      if (inPaddock(ax, az) || inPaddock(bx, bz) || !railClear((ax + bx) / 2, (az + bz) / 2)) continue;
       const len = Math.hypot(bx - ax, bz - az);
       box(solid, 0.35, 0.9, len + 0.05, (i / 2) % 2 ? '#f8f9fa' : '#1d3557', (ax + bx) / 2, 0, (az + bz) / 2, Math.atan2(bx - ax, bz - az));
-      // Tyre walls in front of it on the outside of the corners.
+      // Tyre walls in front of it on the outside of the corners, and at the end of the braking zones.
       const outside = k > 0 ? -1 : 1;
-      if (Math.abs(k) > 1 / 110 && side === outside) {
+      if ((Math.abs(k) > 1 / 110 && side === outside) || braking(s) === side) {
         for (let f = 0; f < 1; f += 0.34) {
           const x = ax + (bx - ax) * f - a.tz * side * (RAIL - TYRES), z = az + (bz - az) * f + a.tx * side * (RAIL - TYRES);
           tyres.push({ x, z, color: ['#e63946', '#f8f9fa', '#ffd166', '#118ab2'][Math.floor(s / 12) % 4] });
@@ -419,8 +445,8 @@ export function buildCircuit(): Circuit {
   }
   // The pit wall: concrete, a red top and the sponsors along it (below).
   const W = PIT_WALL;
-  box(solid, W.maxX - W.minX, 1.1, W.maxZ - W.minZ, '#d6d8de', (W.minX + W.maxX) / 2, 0, (W.minZ + W.maxZ) / 2, Math.PI / 2);
-  box(solid, W.maxX - W.minX, 0.12, W.maxZ - W.minZ + 0.1, '#e63946', (W.minX + W.maxX) / 2, 1.1, (W.minZ + W.maxZ) / 2, Math.PI / 2);
+  box(solid, W.maxX - W.minX, 1.1, W.maxZ - W.minZ, '#d6d8de', (W.minX + W.maxX) / 2, 0, (W.minZ + W.maxZ) / 2);
+  box(solid, W.maxX - W.minX, 0.12, W.maxZ - W.minZ + 0.1, '#e63946', (W.minX + W.maxX) / 2, 1.1, (W.minZ + W.maxZ) / 2);
   colliders.push({ ...W, top: 1.2 });
   // The garages' block, and the grandstands' (from the layout below), before their models come in.
   colliders.push({ ...GARAGES, top: 5.6 });
@@ -476,13 +502,15 @@ export function buildCircuit(): Circuit {
     const p = pointAt(s);
     boards.push({ x: p.x - p.tz * BOARDS, z: p.z + p.tx * BOARDS, rotY: Math.atan2(p.tz, -p.tx), banner: k, free: true });
   }
-  for (const s0 of [260, 480, 700, 1000, 1240]) {
+  for (const c of corners) {
+    if (c.r > 120) continue;
     for (let j = 0; j < 4; j++) {
-      const s = s0 + j * 9;
+      const s = c.s0 + j * 9;
       const p = pointAt(s);
-      const out = bend(s) > 0 ? -1 : 1;
+      const out = c.turn > 0 ? 1 : -1;
       const d = BOARDS * out;
-      boards.push({ x: p.x + p.tz * d, z: p.z - p.tx * d, rotY: Math.atan2(-p.tz * out, p.tx * out), banner: j + s0, free: true });
+      const x = p.x + p.tz * d, z = p.z - p.tx * d;
+      if (railClear(x, z)) boards.push({ x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), banner: j + Math.round(c.s0), free: true });
     }
   }
   const loader = new THREE.TextureLoader();
@@ -510,6 +538,35 @@ export function buildCircuit(): Circuit {
       const back = { x: b.x - Math.sin(b.rotY) * 0.08, z: b.z - Math.cos(b.rotY) * 0.08 };
       box(solid, 8, 2, 0.12, '#495057', back.x, 1.1, back.z, b.rotY);
     }
+  }
+
+  // ---- Braking boards (150, 100 and 50 m to go) before the corners you stop for, and chevrons round
+  // the outside of the tight ones: on posts behind the barrier, facing the cars coming. One mesh a sign.
+  const signs = new Map<string, { x: number; z: number; rotY: number }[]>();
+  const sign = (label: string, s: number, out: 1 | -1, face: number) => {
+    const p = pointAt(s);
+    const d = (RAIL + 0.8) * out;
+    const x = p.x + p.tz * d, z = p.z - p.tx * d;
+    if (!railClear(x, z)) return;
+    // Facing whoever's `face` m back round the track.
+    const from = pointAt(s - face);
+    const rotY = Math.atan2(from.x - x, from.z - z);
+    box(solid, 0.15, 2.2, 0.15, '#495057', x - Math.sin(rotY) * 0.1, 0, z - Math.cos(rotY) * 0.1);
+    (signs.get(label) ?? signs.set(label, []).get(label)!).push({ x, z, rotY });
+  };
+  for (const c of corners) {
+    const out = c.turn > 0 ? 1 : -1;
+    if (c.brake) for (const m of [150, 100, 50]) sign(String(m), c.s0 - m, out, 30);
+    if (c.r <= 60 && Math.abs(c.turn) >= 60) for (const f of [0.2, 0.5, 0.8]) sign(c.turn > 0 ? '›››' : '‹‹‹', c.s0 + (c.s1 - c.s0) * f, out, 25);
+  }
+  for (const [label, spots] of signs) {
+    const chevron = !/\d/.test(label);
+    const proto = textPlane(label, chevron ? { size: 96, bg: '#e63946', color: '#ffffff', border: '#f8f9fa' } : { size: 96, bg: '#f8f9fa', color: '#212529' });
+    // A couple of metres across, its own shape.
+    const { width, height } = proto.geometry.parameters;
+    const w = 2.2, h = (2.2 * height) / width;
+    group.add(new THREE.Mesh(mergeAll(spots.map((p) => new THREE.PlaneGeometry(w, h).rotateY(p.rotY).translate(p.x, 2.2 + h / 2, p.z))), proto.material));
+    proto.geometry.dispose();
   }
 
   // ---- Tyre walls: one mesh for them all.
@@ -642,7 +699,33 @@ export function buildCircuit(): Circuit {
     arrow.position.y = 4.5 + Math.sin(clock * 3) * 0.4;
   };
 
-  return { group, colliders, interactables, pickables: [fleet.group], fleet, update, coach };
+  // ---- Your best lap's ghost: a see-through copy of your car, made the first time it's wanted (and again for another car).
+  let ghostCar: { key: string; root: THREE.Group } | null = null;
+  const see = new THREE.MeshBasicMaterial({ color: '#9bf6ff', transparent: true, opacity: 0.28, depthWrite: false });
+  const ghost: Circuit['ghost'] = (def, at) => {
+    if (!def || !at) {
+      if (ghostCar) ghostCar.root.visible = false;
+      return;
+    }
+    const key = `${def.kind}|${def.color}`;
+    if (ghostCar?.key !== key) {
+      if (ghostCar) group.remove(ghostCar.root);
+      const root = supercar(def.kind, def.color).root;
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.castShadow = m.receiveShadow = false;
+        m.material = see;
+      });
+      group.add(root);
+      ghostCar = { key, root };
+    }
+    ghostCar.root.visible = true;
+    ghostCar.root.position.set(at.x, 0, at.z);
+    ghostCar.root.rotation.y = at.rotY;
+  };
+
+  return { group, colliders, interactables, pickables: [fleet.group], fleet, update, coach, ghost };
 }
 
 /** Geometries of the same kind into one. */
