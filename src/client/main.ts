@@ -3292,6 +3292,8 @@ function blowHorn() {
   net.send({ t: 'horn' });
 }
 
+/** W6: when you walked out of The Night Owl (seconds), or 0 while you're in it (or up on the roof). */
+let barLeftAt = 0;
 /** How it's going to your head, the last time it changed, and when the next hiccup comes. */
 let feeling: Feeling = 0;
 let nextHiccup = 0;
@@ -3305,6 +3307,10 @@ function drinking(now: number) {
   const secs = now / 1000;
   const amount = booze.amount(secs);
   player.drunk = reduceMotion.matches ? 0 : Math.min(1.3, amount);
+  // W6: a Night Owl drink stays at the bar: put down once you've been out of it (and off its terrace) a moment.
+  if (upTop || (inOffice() && office.venues.at() === 'bar')) barLeftAt = 0;
+  else if (!barLeftAt) barLeftAt = secs;
+  else if (secs - barLeftAt > 1.5) booze.putDown();
   const glass = booze.holding(secs);
   me.holdDrink(glass);
   hands.holdDrink(glass);

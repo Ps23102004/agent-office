@@ -4,7 +4,8 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, parkHedges, rng, type Light, type Lot } from '../../shared/city';
+import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, type Light, type Lot } from '../../shared/city';
+import { VENUES } from '../../shared/venues';
 import { buildIsland } from './ocean';
 import { buildSway, type Canopy, type Fringe } from './dressing';
 
@@ -400,7 +401,22 @@ export function buildCity(night: NightParts): City {
     const tops = batch.tops;
     const extras = new THREE.Group();
     const beacons = batch.beacons;
+    // W6: where the café and the bar stand, a plain box each at their height (and the neighbour that
+    // shared the lot), not the lot's own building.
+    type Box = { minX: number; maxX: number; minZ: number; maxZ: number };
+    const meets = (a: Box, b: Box) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
+    const venueLot = (l: Lot) => VENUES.some((v) => meets(l.plot, v.box) || meets(l.plot, v.terrace));
+    const plain = (b: Box, h: number, paint: number) => {
+      let bucket = batch.walls.get(paint);
+      if (!bucket) batch.walls.set(paint, (bucket = new Walls()));
+      const k = rise(0, drop);
+      bucket.box((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2, b.maxX - b.minX, b.maxZ - b.minZ, 0, h * k, 0, 0);
+      tops.top((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2, b.maxX - b.minX, b.maxZ - b.minZ, h * k);
+    };
+    for (const v of VENUES) plain(v.box, v.height, v.id === 'cafe' ? 6 : BRICKS[0]);
+    for (const n of NEIGHBOURS) if (lots.some((l) => venueLot(l) && meets(l.plot, neighbourArea(n)))) plain(neighbourArea(n), n[3], 3);
     for (const lot of lots) {
+      if (venueLot(lot)) continue;
       const k = rise(lot.ring, drop);
       const topY = stack(batch, lot, k);
       const top = lot.top;

@@ -25,6 +25,8 @@ import { buildKitchen } from './kitchen';
 import { buildDeskSigns, type DeskSigns } from './desksigns';
 import { HOOP } from '../../shared/hoop';
 import { buildVenues, type Venues } from './venues';
+import { CARS } from '../../shared/garage';
+import { vehicleSolids } from '../../shared/city';
 
 export interface Collider {
   minX: number;
@@ -1548,7 +1550,8 @@ export function buildOffice(): Office {
   fixture(EXIT_DOOR.wall, EXIT_DOOR.u, (EXIT_DOOR.y1 + 0.7) / 2, EXIT_DOOR.width + 0.3, EXIT_DOOR.y1 + 0.7);
   buildGarage(ground, groundColliders);
   // The cars move, so their boxes follow them (and the street) themselves rather than setLevel.
-  const cars = new Fleet(colliders, interactables);
+  // (W6: what the cars bump into includes the café's and the bar's doorways: see vehicleSolids.)
+  const cars = new Fleet(colliders, interactables, CARS, vehicleSolids);
   ground.add(cars.group);
   // The clouds stay up in the sky, however far down the street is.
   buildStreet(ground, groundColliders, night, group);

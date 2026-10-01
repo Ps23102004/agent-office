@@ -84,6 +84,48 @@ export function venueAt(x: number, z: number): Venue | null {
   return VENUES.find((v) => x > v.box.minX && x < v.box.maxX && z > v.box.minZ && z < v.box.maxZ) ?? null;
 }
 
+const inBox = (b: Box, x: number, z: number) => x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ;
+
+/** Whether (x, z) is in venue `id` or out on its terrace. */
+export function atVenue(id: VenueId, x: number, z: number): boolean {
+  const v = VENUE_BY_ID.get(id)!;
+  return inBox(v.box, x, z) || inBox(v.terrace, x, z);
+}
+
+/** Down on the street (a peer's y is under the bottom floor's, whichever floor they came down from). */
+const STREET_BELOW = -1;
+
+/**
+ * Whether the office lets someone hold a drink, where they are: up on the roof (its Sky Bar), or on
+ * the office's own map down at The Night Owl or on its terrace. Not on the circuit, nor on another map.
+ */
+export function mayHoldDrink(at: { roof: boolean; officeMap: boolean; circuit: boolean; x: number; y: number; z: number }): boolean {
+  return at.roof || (at.officeMap && !at.circuit && at.y < STREET_BELOW && atVenue('bar', at.x, at.z));
+}
+
+/** How far from a seat out in the city you can be and still sit down on it (the last move you sent may lag a step). */
+export const STREET_SEAT_REACH = 4;
+
+/** Whether someone at `p` can sit on the city seat whose place is at (x, z): down on the street close by, not on the circuit. */
+export function streetSeatNear(place: { x: number; z: number }, p: { x: number; y: number; z: number }, circuit: boolean): boolean {
+  return !circuit && p.y < STREET_BELOW && Math.hypot(p.x - place.x, p.z - place.z) <= STREET_SEAT_REACH;
+}
+
+/**
+ * Where a vehicle can't be: anywhere inside the café's or the bar's walls (a bike fits the door,
+ * but it doesn't go in). For the office's checks on a car's moves (server/garage.ts).
+ */
+export const vehicleBarred = (x: number, z: number) => venueAt(x, z) !== null;
+
+/**
+ * Boxes across the doorways, for vehicles only (people walk through): what driving bumps into there,
+ * besides citySolids. Shared and never changed.
+ */
+export const VENUE_DOORS: readonly Box[] = VENUES.map((v) => {
+  const f = v.fz > 0 ? v.box.maxZ : v.box.minZ;
+  return { minX: v.door.x - v.door.w / 2, maxX: v.door.x + v.door.w / 2, minZ: f - VENUE_WALL, maxZ: f + VENUE_WALL };
+});
+
 /** The parts of a front wall round its openings (door, windows), as rectangles in x and y. */
 export function wallPieces(x0: number, x1: number, y0: number, y1: number, holes: readonly { x0: number; x1: number; y0: number; y1: number }[]) {
   const cuts = [x0, x1, ...holes.flatMap((h) => [h.x0, h.x1])].sort((a, b) => a - b);

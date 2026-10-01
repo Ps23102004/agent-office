@@ -4,6 +4,7 @@ import type { SkyState, Theme, Weather } from '../../shared/protocol';
 import { guessPlace, sunPosition } from '../../shared/sun';
 import type { NightParts } from './outside';
 import { decorTicker, quality } from '../quality';
+import { VENUES } from '../../shared/venues';
 
 /*
  * Day, night and the weather outside the windows. The server says where the office is and what the
@@ -93,6 +94,14 @@ float skyInGarage( vec3 p ) {
   return 1.0 - smoothstep( 0.0, 3.0, length( max( p.xz - vec2( ${B.maxX.toFixed(3)}, ${B.maxZ.toFixed(3)} ), 0.0 ) ) );
 }
 
+// W6: inside the café or the bar out in the city (shared/venues.ts), under its ceiling: no rain or
+// snow in there, and the sun's mostly kept off by the floors over it.
+float skyInVenue( vec3 p ) {
+  float y = p.y + skyDrop;
+  ${VENUES.map((v) => `if ( p.x > ${v.box.minX.toFixed(3)} && p.x < ${v.box.maxX.toFixed(3)} && p.z > ${v.box.minZ.toFixed(3)} && p.z < ${v.box.maxZ.toFixed(3)} && y > ${(STREET_Y - 0.5).toFixed(3)} && y < ${(STREET_Y + v.ceiling + 0.05).toFixed(3)} ) return 1.0;`).join('\n  ')}
+  return 0.0;
+}
+
 // Under the office's pendant lamps (see buildOffice), the floor and desks are lit warmer at night than in the corners.
 const vec2 skyPendants[ 5 ] = vec2[ 5 ]( vec2( -10.5, -4.0 ), vec2( -1.5, -4.0 ), vec2( -10.5, 4.0 ), vec2( -1.5, 4.0 ), vec2( 13.0, 0.0 ) );
 
@@ -115,7 +124,8 @@ const SURFACE = /* glsl */ `
 vec3 skyN = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
 float skyIndoor = skyOn * skyInside * skyInOffice( vSkyWorld );
 float skyGar = skyOn * skyInside * skyInGarage( vSkyWorld );
-float skyUp = skyOn * ( 1.0 - max( skyIndoor, skyGar ) ) * smoothstep( 0.45, 0.85, skyN.y );
+float skyVen = skyOn * skyInside * skyInVenue( vSkyWorld );
+float skyUp = skyOn * ( 1.0 - max( max( skyIndoor, skyGar ), skyVen ) ) * smoothstep( 0.45, 0.85, skyN.y );
 material.diffuseColor *= 1.0 - 0.38 * skyWet * skyUp;
 material.diffuseColor = mix( material.diffuseColor, vec3( 0.93, 0.96, 1.0 ), skySnow * skyUp );
 `;
@@ -127,6 +137,9 @@ if ( skyOn > 0.0 ) {
   for ( int i = 0; i < 5; i ++ ) skyPool = max( skyPool, smoothstep( 5.5, 0.6, length( vSkyWorld.xz - skyPendants[ i ] ) ) );
   vec3 skyLight = skyIndoor * skyOffice * ( 0.65 + 0.35 * skyN.y ) * ( 0.62 + 0.6 * skyPool ) + ( 1.0 - skyIndoor ) * ( skyGar * skyGarage + skyLampsAt( vSkyWorld, skyN ) );
   reflectedLight.indirectDiffuse += skyLight * BRDF_Lambert( material.diffuseColor );
+  // In the café or the bar, the sun only gets in a little (through the windows, say).
+  reflectedLight.directDiffuse *= 1.0 - 0.7 * skyVen;
+  reflectedLight.directSpecular *= 1.0 - 0.7 * skyVen;
 }
 `;
 
@@ -378,6 +391,7 @@ let wingBox: { minX: number; maxX: number; minZ: number; maxZ: number } | null =
 
 /** Is (x, z) under the building, where no rain or snow falls? */
 const sheltered = (x: number, z: number) =>
+  VENUES.some((v) => x > v.box.minX && x < v.box.maxX && z > v.box.minZ && z < v.box.maxZ) ||
   (x > B.minX - 0.05 && x < B.maxX + 0.05 && z > B.minZ - 0.05 && z < B.maxZ + 0.05) || (!!wingBox && x > wingBox.minX - 0.05 && x < wingBox.maxX + 0.05 && z > wingBox.minZ - 0.05 && z < wingBox.maxZ);
 
 export class Sky {

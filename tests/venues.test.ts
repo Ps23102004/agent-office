@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NEIGHBOURS, RACE_PLAZA, cityLayout, citySolids, neighbourArea, surfaceAt } from '../src/shared/city.js';
+import { NEIGHBOURS, RACE_PLAZA, cityLayout, citySolids, neighbourArea, surfaceAt, vehicleSolids } from '../src/shared/city.js';
 import { SEATING_BY_ID, seatHere, seatPlace } from '../src/shared/layout.js';
-import { VENUES, VENUE_SEATS, frontZ, venueAt, venueWalls, wallPieces } from '../src/shared/venues.js';
+import { VENUES, VENUE_BY_ID, VENUE_SEATS, frontZ, mayHoldDrink, streetSeatNear, vehicleBarred, venueAt, venueWalls, wallPieces } from '../src/shared/venues.js';
 
 type Box = { minX: number; maxX: number; minZ: number; maxZ: number };
 const overlaps = (a: Box, b: Box) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
@@ -75,5 +75,39 @@ test('a front wall goes round its door and windows', () => {
   for (const p of pieces) {
     assert.ok(!(p.x0 < 3 && p.x1 > 2 && p.y0 < 2.4), 'not over the door');
     assert.ok(!(p.x0 < 9 && p.x1 > 5 && p.y0 < 3 && p.y1 > 1), 'not over the window');
+  }
+});
+
+test("the office lets you hold a drink only on the roof, or down at The Night Owl on the office's own map", () => {
+  const bar = VENUE_BY_ID.get('bar')!;
+  const inBar = { x: 68, y: -3.6, z: 44 };
+  const onTerrace = { x: 66, y: -3.6, z: 35 };
+  const base = { roof: false, officeMap: true, circuit: false };
+  assert.ok(mayHoldDrink({ ...base, roof: true, x: 0, y: 0, z: 0 }), 'up on the roof');
+  assert.ok(mayHoldDrink({ ...base, ...inBar }) && mayHoldDrink({ ...base, ...onTerrace }), 'in the bar or on its terrace');
+  assert.ok(mayHoldDrink({ ...base, ...inBar, y: -13.5 }), 'from whichever floor you came down from');
+  assert.ok(!mayHoldDrink({ ...base, x: 68, y: -3.6, z: bar.terrace.minZ - 3 }), 'not out in the street');
+  assert.ok(!mayHoldDrink({ ...base, x: 68, y: -3.6, z: 11 }), 'not at the café');
+  assert.ok(!mayHoldDrink({ ...base, x: inBar.x, y: 0, z: inBar.z }), 'not on a floor upstairs');
+  assert.ok(!mayHoldDrink({ ...base, circuit: true, ...inBar }), 'not on the circuit');
+  assert.ok(!mayHoldDrink({ ...base, officeMap: false, ...inBar }), 'not on another map');
+});
+
+test('a seat out in the city is only taken from the street beside it', () => {
+  const s = VENUE_SEATS.find((q) => q.id === 'bar-stool-1')!;
+  assert.ok(streetSeatNear(s, { x: s.x - 1, y: -3.6, z: s.z }, false));
+  assert.ok(!streetSeatNear(s, { x: s.x - 10, y: -3.6, z: s.z }, false), 'too far');
+  assert.ok(!streetSeatNear(s, { x: s.x, y: 0, z: s.z }, false), 'from a floor upstairs');
+  assert.ok(!streetSeatNear(s, { x: s.x, y: -3.6, z: s.z }, true), 'from the circuit');
+});
+
+test("nothing on wheels goes in: the doorways are solid to vehicles, and inside's off limits", () => {
+  for (const v of VENUES) {
+    const f = frontZ(v);
+    const door = (a: { minX: number; maxX: number; minZ: number; maxZ: number }) => v.door.x > a.minX && v.door.x < a.maxX && f >= a.minZ && f <= a.maxZ;
+    assert.ok(!citySolids(v.door.x, f, 1).some(door), `people walk through ${v.id}'s door`);
+    assert.ok(vehicleSolids(v.door.x, f, 1).some(door), `a bike doesn't fit ${v.id}'s`);
+    assert.ok(vehicleBarred((v.box.minX + v.box.maxX) / 2, (v.box.minZ + v.box.maxZ) / 2));
+    assert.ok(!vehicleBarred(v.door.x, f + v.fz * 2), 'its terrace is outside');
   }
 });

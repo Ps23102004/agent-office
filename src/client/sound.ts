@@ -155,11 +155,13 @@ export class OfficeSound {
    * W6: the café or the bar you're in (see setVenue): its room tone, how loud (0–1), and when the next
    * cup, hiss of steam or bar of the bar's jazz comes.
    */
-  private venue: { kind: 'cafe' | 'bar' | null; level: number; room: GainNode | null; band: GainNode | null; nextClink: number; nextHiss: number; nextBar: number; bar: number } = {
+  private venue: { kind: 'cafe' | 'bar' | null; level: number; room: GainNode | null; band: GainNode | null; sources: AudioScheduledSourceNode[]; quiet: number; nextClink: number; nextHiss: number; nextBar: number; bar: number } = {
     kind: null,
     level: 0,
     room: null,
     band: null,
+    sources: [],
+    quiet: 0,
     nextClink: 0,
     nextHiss: 0,
     nextBar: 0,
@@ -1601,6 +1603,8 @@ export class OfficeSound {
     if (!ctx) return;
     const v = this.venue;
     level = kind ? level : 0;
+    // Nothing playing, and nowhere to hear: nothing to build.
+    if (!v.room && level < 0.01) return;
     if (!v.room) {
       // People talking: two bands of brown noise, each wobbling like voices coming and going.
       v.room = ctx.createGain();
@@ -1621,6 +1625,7 @@ export class OfficeSound {
         src.connect(biquad(ctx, 'bandpass', f, q)).connect(g).connect(v.room);
         src.start();
         wob.start();
+        v.sources.push(src, wob);
       }
       v.band = ctx.createGain();
       v.band.gain.value = 0;
@@ -1632,7 +1637,17 @@ export class OfficeSound {
     const now = ctx.currentTime;
     v.room.gain.setTargetAtTime(level * (v.kind === 'bar' ? 1.2 : 1), now, 0.25);
     v.band!.gain.setTargetAtTime(v.kind === 'bar' ? level * 0.5 : 0, now, 0.25);
-    if (!level) v.kind = null;
+    window.clearTimeout(v.quiet);
+    if (level) return;
+    v.kind = null;
+    // Faded out: stop the room tone altogether a moment later (it's built again on the way back in).
+    v.quiet = window.setTimeout(() => {
+      for (const s of v.sources) s.stop();
+      v.room?.disconnect();
+      v.band?.disconnect();
+      v.sources = [];
+      v.room = v.band = null;
+    }, 2000);
   }
 
   /** Cups on saucers, glasses, the steam wand, and the next bar of the bar's music, while you're there. */
