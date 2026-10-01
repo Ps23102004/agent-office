@@ -5,6 +5,7 @@ import { CARS, type CarSeat } from '../../shared/garage';
 import { CIRCUIT, CIRCUIT_CARS } from '../../shared/circuit';
 import { seatOn, type MapPlan } from '../../shared/maps';
 import { store } from '../state';
+import { venueAt } from '../../shared/venues';
 
 /**
  * What a teammate is up to, for the line under their name tag and in the sidebar: whatever they have
@@ -25,6 +26,8 @@ export function whereabouts(p: PeerInfo, car?: { car: number; seat: CarSeat }, p
   const office = plan.style === 'office' || p.floor === ROOF;
   const place = p.seat ? (office ? seatAt(p.seat) : seatOn(plan, p.seat)) : undefined;
   const seat = place && (office ? SEATING_BY_ID : plan.seatingById).get(place.seatId);
+  // W6: at the café or the bar out in the city, sitting or not.
+  if (seat?.street) return seat.cafe ? '☕ at Café Corner' : '🦉 at The Night Owl';
   if (seat) {
     // "🛋️ Couch" -> "🛋️ on the couch".
     const [icon, ...name] = seat.label.split(' ');
@@ -36,6 +39,8 @@ export function whereabouts(p: PeerInfo, car?: { car: number; seat: CarSeat }, p
   if (!office) return undefined;
   // Through the north wall in the back office: nobody gets there unless the floor's built out.
   if (p.y > -1 && inWing(p.x, p.z, WING.rows)) return '🏗️ in the back office';
+  const venue = p.y < -1 && p.floor !== ROOF ? venueAt(p.x, p.z) : null;
+  if (venue) return venue.id === 'cafe' ? '☕ at Café Corner' : '🦉 at The Night Owl';
   // Down on the street, or out the back door on the stairs down to it.
   if (p.y < -1 || p.x < FLOOR.minX || p.x > FLOOR.maxX || p.z < FLOOR.minZ) return '🚶 outside';
   if (p.z > FLOOR.maxZ) return p.x >= BALCONY.minX && p.x <= BALCONY.maxX ? '🌇 on the balcony' : '🚶 outside';

@@ -8,6 +8,7 @@
 
 import { GOLF_HOLE } from './layout.js';
 import { placeDressing, type Dressing } from './dressing.js';
+import { VENUES, venueWalls } from './venues.js';
 
 /** A block and the street beside it (m). */
 export const PERIOD = 56;
@@ -176,6 +177,8 @@ export function cityLayout(): CityLayout {
     }),
     // The golf hole across the street: its fairway and green, and the trees behind it.
     { minX: GOLF_HOLE.x - 16, maxX: GOLF_HOLE.x + 20, minZ: 33, maxZ: GOLF_HOLE.z + 16 },
+    // W6: the café and the bar (shared/venues.ts), and their terraces: client/world/venues.ts builds them.
+    ...VENUES.map((v) => ({ minX: Math.min(v.box.minX, v.terrace.minX), maxX: Math.max(v.box.maxX, v.terrace.maxX), minZ: Math.min(v.box.minZ, v.terrace.minZ), maxZ: Math.max(v.box.maxZ, v.terrace.maxZ) })),
   ];
   const n = Math.ceil(RADIUS / PERIOD) + 1;
   const inner = INNER;
@@ -748,6 +751,8 @@ function solids(): Map<number, Area[]> {
     if (l.yard) post(l.yard.x, l.yard.z, 0.3 * l.yard.s);
   }
   for (const n of NEIGHBOURS) add(neighbourArea(n));
+  // The café's and the bar's walls: hollow, the doorway open (shared/venues.ts).
+  for (const v of VENUES) for (const w of venueWalls(v)) add(w);
   if (gas) {
     for (const p of gas.pumps) add(p);
     // The canopy's two posts, at its far corners.
@@ -796,7 +801,7 @@ export function cityDressing(): Dressing {
 
 /**
  * What stands in the way within `reach` of (x, z) out in the city: buildings, lamp posts, signal
- * poles, park kerbs and trees, benches, the gas station's pumps. Boxes (shared, don't change them);
+ * poles, park kerbs and trees, benches, the gas station's pumps, the café's and the bar's walls. Boxes (shared, don't change them);
  * only what's near, through a spatial hash, so it's cheap to ask every step of a drive.
  */
 export function citySolids(x: number, z: number, reach: number): Area[] {

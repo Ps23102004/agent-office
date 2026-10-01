@@ -2212,7 +2212,7 @@ function stopWalking() {
 
 /** Where they are, sitting or standing. */
 function whereIs(p: PeerInfo): { x: number; y: number; z: number } {
-  return rideOf(p.id) ?? ((p.seat && seatOn(plan(), p.seat)) || p);
+  return rideOf(p.id) ?? ((p.seat && onStreet(seatOn(plan(), p.seat))) || p);
 }
 
 /** There: stop, and turn to them. */
@@ -3190,7 +3190,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   else if (target.kind === 'decor' && target.decorId) hanger.view(target.decorId);
   else if (target.kind === 'seat' && target.seatId) useSeat(target.seatId);
   else if (target.kind === 'dog') net.send({ t: 'dog.pet' });
-  else if (target.kind === 'coffee') drinkCoffee();
+  else if (target.kind === 'coffee') drinkCoffee(office.venues.counter(target) ? office.venues.serve('cafe') : undefined);
   else if (target.kind === 'smoke') {
     if (smokeBreakUntil) {
       setSmoking(false);
@@ -3256,22 +3256,26 @@ const CHEERS: Record<string, string> = {
   water: 'Good call. Stay hydrated',
 };
 
-/** E at the bar: the menu. */
+/** E at the bar: the menu. (W6: the roof's, or The Night Owl's down in the city.) */
 function showBar() {
-  openBar({ cutOff: booze.cutOff(performance.now() / 1000), order: orderDrink });
+  openBar({ cutOff: booze.cutOff(performance.now() / 1000), order: orderDrink, title: upTop ? undefined : '🦉 The Night Owl' });
 }
 
 /** The bartender comes over and pours it (a water, if you've had enough), and slides it across to you. */
 function orderDrink(d: Drink) {
-  const r = roof;
-  if (!r || !upTop) return;
+  const r = upTop ? roof : null;
+  // W6: or at The Night Owl, out in the city.
+  const inBar = !upTop && inOffice() && office.venues.at() === 'bar';
+  if (!r && !inBar) return;
   const cut = d.strength > 0 && booze.cutOff(performance.now() / 1000);
   const drink = cut ? DRINK_BY_ID.get('water')! : d;
-  r.serve(player.pos.z);
-  sound.pour(r.pourAt);
+  if (r) {
+    r.serve(player.pos.z);
+    sound.pour(r.pourAt);
+  } else sound.pour(office.venues.serve('bar'));
   if (cut) toast("🙅 The bartender slides you a water instead: you've had enough", 'warn');
   setTimeout(() => {
-    if (!upTop) return;
+    if (r ? !upTop : office.venues.at() !== 'bar') return;
     booze.drink(drink, performance.now() / 1000);
     reach();
     if (player.view === 'first') hands.sip();
@@ -3328,10 +3332,10 @@ function drinking(now: number) {
   return amount;
 }
 
-/** A cup from the kitchen machine: a minute of quicker feet and higher jumps, and a mug in your hand. */
-function drinkCoffee() {
+/** A cup from the kitchen machine (or W6: the café's, made `at` its espresso machine): a minute of quicker feet and higher jumps, and a mug in your hand. */
+function drinkCoffee(at?: { x: number; y: number; z: number }) {
   const jittery = caffeine.drink(performance.now() / 1000);
-  sound.coffee();
+  sound.coffee(at);
   if (player.view === 'first') hands.sip();
   if (jittery) toast('☕ One cup too many… you’ve got the jitters!', 'warn');
   else if (caffeine.cups > 1) toast('☕ Another cup: back to a full minute of buzz');
@@ -3685,7 +3689,7 @@ function freePlace(seat: SeatDef): SeatPlace | null {
   let best: SeatPlace | null = null;
   let bestD = Infinity;
   for (let i = 0; i < seat.places.length; i++) {
-    const place = seatPlace(seat, i);
+    const place = onStreet(seatPlace(seat, i))!;
     const d = Math.hypot(place.x - player.pos.x, place.z - player.pos.z);
     if (!taken.has(place.key) && d < bestD) {
       best = place;
@@ -3693,6 +3697,12 @@ function freePlace(seat: SeatDef): SeatPlace | null {
     }
   }
   return best;
+}
+
+/** W6: a seat out in the city (the café's, the bar's) is up from the street, which is as far down as your floor has it. */
+function onStreet(place: SeatPlace | undefined): SeatPlace | undefined {
+  if (place && plan().seatingById.get(place.seatId)?.street) place.y += player.street;
+  return place;
 }
 
 /** Someone else's screen is up on the TV. */
@@ -3708,6 +3718,7 @@ function useSeat(seatId: string) {
     if (seat.tv && tvShowing()) watchShare();
     else if (seat.game) arcade.play();
     else if (seat.bar) showBar();
+    else if (seat.cafe) drinkCoffee(office.venues.serve('cafe'));
     else standUp();
     return;
   }
@@ -4002,7 +4013,7 @@ function hintFor(it: Interactable): Hint {
       if (!seat) return { k: '', parts: [] };
       if (player.seat?.seatId === seat.id) {
         const tv = !!seat.tv && tvShowing();
-        const use = tv ? 'Watch the TV' : seat.game ? 'Play Minesweeper' : seat.bar ? 'Order a drink' : '';
+        const use = tv ? 'Watch the TV' : seat.game ? 'Play Minesweeper' : seat.bar ? 'Order a drink' : seat.cafe ? 'Order a coffee' : '';
         return { k: `${seat.id}|sitting|${tv}`, parts: [title(seat.label), aside('sitting'), ...(use ? [key('E', use), key('W A S D', 'Get up')] : [key('E', 'Get up')])] };
       }
       const full = !freePlace(seat);
@@ -4024,7 +4035,7 @@ function hintFor(it: Interactable): Hint {
     }
     case 'bar': {
       const cut = booze.cutOff(performance.now() / 1000);
-      return { k: String(cut), parts: [title('🍸 Sky Bar'), aside(cut ? "you've had enough" : 'drinks on the house'), key('E', cut ? 'Ask for water' : 'Order a drink')] };
+      return { k: String(cut), parts: [title(it.label ?? '🍸 Sky Bar'), aside(cut ? "you've had enough" : 'drinks on the house'), key('E', cut ? 'Ask for water' : 'Order a drink')] };
     }
     case 'dj': {
       const f = djFrame(djAt());
@@ -5108,6 +5119,9 @@ function frame(ts?: number) {
   // Your ears are in your head, facing wherever the camera looks.
   camera.getWorldDirection(lookDir);
   sound.update({ x: player.pos.x, y: player.pos.y + EYE_HEIGHT, z: player.pos.z, fx: lookDir.x, fz: lookDir.z });
+  // W6: the café's murmur and cups, the bar's glasses and its jazz, while you're in one (or by its door).
+  const venue = inOffice() && !upTop && !atCircuit ? office.venues.hearing() : null;
+  sound.setVenue(venue?.id ?? null, venue?.level ?? 0);
   const s = Math.floor(player.walkPhase / Math.PI);
   if (s !== stride) {
     stride = s;
@@ -5135,7 +5149,7 @@ function frame(ts?: number) {
     if (!p) continue;
     // Sitting, they're wherever their seat puts them; in a car, right in it as it goes.
     const ride = rideOf(id);
-    const sat = ride ?? (p.seat ? seatOn(plan(), p.seat) : undefined);
+    const sat = ride ?? (p.seat ? onStreet(seatOn(plan(), p.seat)) : undefined);
     const at = sat ?? p;
     r.target.set(at.x, at.y, at.z);
     const pos = r.person.root.position;

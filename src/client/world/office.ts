@@ -24,6 +24,7 @@ import { buildHoop, type HoopView } from './hoop';
 import { buildKitchen } from './kitchen';
 import { buildDeskSigns, type DeskSigns } from './desksigns';
 import { HOOP } from '../../shared/hoop';
+import { buildVenues, type Venues } from './venues';
 
 export interface Collider {
   minX: number;
@@ -106,6 +107,8 @@ export interface Office {
   cars: Fleet;
   /** The traffic and the people out on the street. */
   life: StreetLife;
+  /** W6: the café and the bar out in the city (world/venues.ts). */
+  venues: Venues;
   /** The merge gong by the PR board. */
   gong: Gong;
   jukebox: JukeboxView;
@@ -1558,6 +1561,12 @@ export function buildOffice(): Office {
   raceGate.group.position.y = STREET_Y;
   ground.add(raceGate.group);
   groundColliders.push(...raceGate.colliders);
+  // W6: the café and the bar a block east, on the street (world/venues.ts).
+  const venues = buildVenues(night);
+  venues.group.position.y = STREET_Y;
+  ground.add(venues.group);
+  groundColliders.push(...venues.colliders);
+  interactables.push(...venues.interactables);
   const green = buildGreen(ground, groundColliders, night);
   group.add(ground);
   colliders.push(...groundColliders);
@@ -1969,6 +1978,7 @@ export function buildOffice(): Office {
     exit.door.locked = index > 0;
     garageLift.setFloor(streetBelow(index));
     cars.setStreet(streetBelow(index));
+    venues.setStreet(streetBelow(index));
     plug.group.visible = index > 0;
     const i = colliders.indexOf(plug.collider);
     if (index > 0 && i < 0) colliders.push(plug.collider);
@@ -1979,8 +1989,10 @@ export function buildOffice(): Office {
 
   const update = (t: number, dt: number, people: Iterable<{ x: number; y: number; z: number }>) => {
     raceGate.update(t);
+    const crowd = [...people];
+    venues.update(t, dt, crowd);
     const near = new Set<Door>();
-    for (const p of people) for (const d of doors) if (Math.abs(p.y - d.y) < 1.6 && Math.hypot(p.x - d.x, p.z - d.z) < 2.4) near.add(d);
+    for (const p of crowd) for (const d of doors) if (Math.abs(p.y - d.y) < 1.6 && Math.hypot(p.x - d.x, p.z - d.z) < 2.4) near.add(d);
     for (const d of doors) {
       const want = near.has(d) && !d.locked ? 1 : 0;
       if (d.open === want) continue;
@@ -2004,7 +2016,7 @@ export function buildOffice(): Office {
     hoop.update(dt);
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, garageLift, cars, life, gong, jukebox, cabinet, whiteboard, tee, green, hoop, stack, wing, setWing, signs, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, garageLift, cars, life, venues, gong, jukebox, cabinet, whiteboard, tee, green, hoop, stack, wing, setWing, signs, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */
