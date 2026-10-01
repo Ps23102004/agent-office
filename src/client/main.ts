@@ -37,6 +37,9 @@ import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossS
 import { CARS, SPECS, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
 import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
+import { ARENA, ARENA_GATE, ARENA_NAME, CITY_ARENA_GATE } from '../shared/arena';
+import { buildArena, type ArenaWorld } from './world/arena';
+import { ArenaPlay } from './arena';
 import { joinGrid, leaveRace, missedCheckpoint, myRacer, nextCheckpoint, startRace, wireRace } from './race';
 import { MEET_SPOTS, answerRide, meetLabel, offerRide, postMeet, rideCandidates, rideOffer, wireTogether, type MeetPin, type MeetSpotId } from './together';
 import { pinFloor } from '../shared/meet';
@@ -387,11 +390,29 @@ function theCircuit(): Circuit {
   }
   return circuit;
 }
+// ---- The arena ---------------------------------------------------------------------------------------
+/** In the arena (shared/arena.ts): a place of its own like the circuit, through its gate on the race plaza. */
+let atArena = false;
+let arenaWorld: ArenaWorld | null = null;
+/** The arena: built the first time anyone goes there. */
+function theArena(): ArenaWorld {
+  if (!arenaWorld) {
+    arenaWorld = buildArena();
+    arenaWorld.group.visible = false;
+    scene.add(arenaWorld.group);
+    noOutline(arenaWorld.group);
+  }
+  return arenaWorld;
+}
+/** At a place of its own out of the city: the circuit or the arena. */
+function away(): boolean {
+  return atCircuit || atArena;
+}
 /** The cars where the office has you: the garage's under your floor, or the circuit's (they match store.cars). */
 const fleet = () => (store.floor === CIRCUIT ? theCircuit().fleet : office.cars);
 const carDefs = (): readonly CarDef[] => (store.floor === CIRCUIT ? CIRCUIT_CARS : CARS);
 /** How high the ground the cars are on is: the street under your floor, or the circuit's. */
-const streetY = () => (atCircuit ? 0 : player.street);
+const streetY = () => (away() ? 0 : player.street);
 /** Off the track, the grass slows a car right down. */
 function onGrass(p: CarPose, dt: number): CarPose {
   if (trackSurface(p.x, p.z) !== 'grass') return p;
@@ -402,7 +423,7 @@ function onGrass(p: CarPose, dt: number): CarPose {
 /** Where you came to the circuit from (a floor, and the garage's car you drove through the gate in), to go back to. */
 let raceFrom: { floor: string; car: number | null } | null = null;
 /** Through a gate: to the circuit or back to the city, until you're there. */
-let gateTrip: { to: 'circuit' | 'city'; kind: CarDef['kind'] | null } | null = null;
+let gateTrip: { to: 'circuit' | 'arena' | 'city'; kind: CarDef['kind'] | null; out?: Gate } | null = null;
 /** Out of the gate's opening since you last came through one: going through again takes stepping out first. */
 let gateArmed = false;
 /** How far into the DJ's set it is, on the office's clock, so everyone up there hears the same bar. */
@@ -431,7 +452,7 @@ const driver = new Driver(player, office.cars, {
     sound.crash({ x: at.x, y: player.street + 0.5, z: at.z }, speed);
     if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 15));
   },
-  traffic: (x, z, reach) => (upTop || atCircuit ? [] : office.life.obstacles(x, z, reach).map((o) => ({ ...o.box, vx: o.vx, vz: o.vz, mass: 1600 }))),
+  traffic: (x, z, reach) => (upTop || away() ? [] : office.life.obstacles(x, z, reach).map((o) => ({ ...o.box, vx: o.vx, vz: o.vz, mass: 1600 }))),
   // W1 island: driven into the sea.
   splash: (at, speed) => {
     const size = 1.5 + Math.min(2, speed / 8);
@@ -606,7 +627,7 @@ function teeOff() {
 /** Someone else on the floor hit one: their swing, then their ball, off the same tee. */
 function theirShot(id: string, shot: Shot) {
   const p = store.peers.get(id);
-  if (!p || !store.onMyFloor(p) || upTop || atCircuit) return;
+  if (!p || !store.onMyFloor(p) || upTop || away()) return;
   remotes.get(id)?.person.golfSwing(shot.power);
   const floor = store.floor;
   setTimeout(() => {
@@ -650,6 +671,19 @@ const thrower = new Thrower(player, me, camera, canvas, {
     hintKey = 'stale';
   },
 });
+// The arena's rifle, HUD and match (client/arena.ts).
+const arenaPlay = new ArenaPlay({
+  send: (msg) => net.send(msg),
+  player,
+  camera,
+  hands,
+  sound,
+  world: theArena,
+  placeAt: (at) => placeAt(at),
+  locked: () => player.locked,
+});
+arenaPlay.setPeople((id) => remotes.get(id)?.person.root);
+$('hud').append(arenaPlay.hud.el);
 
 /** Who's at a game's line up here already, if anyone. */
 function lineTaken(game: BarGame): string | null {
@@ -991,12 +1025,13 @@ function inGateNow(g: Gate): boolean {
 
 /** Each frame: walked or driven into a gate, you go through it (the city's to the circuit, the circuit's back). */
 function gates() {
-  if (trip || !store.floor || upTop || !player.enabled || (!atCircuit && !inOffice())) return;
-  const inside = inGateNow(atCircuit ? CIRCUIT_GATE : CITY_GATE);
+  if (trip || !store.floor || upTop || !player.enabled || (!away() && !inOffice())) return;
+  const inside = atArena ? (inGateNow(ARENA_GATE) ? ARENA_GATE : null) : atCircuit ? (inGateNow(CIRCUIT_GATE) ? CIRCUIT_GATE : null) : inGateNow(CITY_GATE) ? CITY_GATE : inGateNow(CITY_ARENA_GATE) ? CITY_ARENA_GATE : null;
   if (!inside) gateArmed = true;
   else if (gateArmed) {
     gateArmed = false;
-    if (atCircuit) leaveCircuit();
+    if (away()) leaveCircuit();
+    else if (inside === CITY_ARENA_GATE) toArena();
     else toCircuit();
   }
 }
@@ -1009,7 +1044,14 @@ function toCircuit() {
   goThrough(CIRCUIT);
 }
 
-/** Off the circuit: through its gate, back to the one in the city (on the floor you came from); or, `to` a floor, by the elevator. */
+/** Through the arena's gate in the city: on foot (a car you're in stays behind). */
+function toArena() {
+  raceFrom = { floor: store.floor!, car: null };
+  gateTrip = { to: 'arena', kind: null };
+  goThrough(ARENA);
+}
+
+/** Off the circuit (or out of the arena): through its gate, back to the one in the city (on the floor you came from); or, `to` a floor, by the elevator. */
 function leaveCircuit(to?: string) {
   const floors = builtFloors();
   const floor = to ?? (floors.some((f) => f.id === raceFrom?.floor) ? raceFrom!.floor : floors[0]?.id);
@@ -1024,9 +1066,10 @@ function leaveCircuit(to?: string) {
     placeOnArrival = true;
     return goThrough(floor);
   }
-  gateTrip = { to: 'city', kind: null };
+  const home = atArena ? CITY_ARENA_GATE : CITY_GATE;
+  gateTrip = { to: 'city', kind: null, out: home };
   const index = Math.max(0, floors.findIndex((f) => f.id === floor));
-  goThrough(floor, { ...CITY_GATE.out, y: streetBelow(index) });
+  goThrough(floor, { ...home.out, y: streetBelow(index) });
 }
 
 /** A blink, and you're there: whatever you were doing stops, and a car you were in stays behind. */
@@ -1052,7 +1095,7 @@ function throughGate() {
   const g = gateTrip!;
   gateTrip = null;
   gateArmed = false;
-  const out = (atCircuit ? CIRCUIT_GATE : CITY_GATE).out;
+  const out = (atArena ? ARENA_GATE : atCircuit ? CIRCUIT_GATE : (g.out ?? CITY_GATE)).out;
   placeAt({ ...out, y: streetY() });
   let car = -1;
   if (g.to === 'circuit' && atCircuit && g.kind) car = CIRCUIT_CARS.findIndex((d, k) => d.kind === g.kind && !store.cars[k]?.driver && !store.cars[k]?.passenger);
@@ -1067,8 +1110,8 @@ function throughGate() {
 
 /** At the circuit the sun's shadows are drawn round you, wherever you are on it; elsewhere, round the office. */
 function followSun() {
-  const x = atCircuit ? Math.round(player.pos.x / 8) * 8 : 0;
-  const z = atCircuit ? Math.round(player.pos.z / 8) * 8 : 0;
+  const x = away() ? Math.round(player.pos.x / 8) * 8 : 0;
+  const z = away() ? Math.round(player.pos.z / 8) * 8 : 0;
   if (sun.target.position.x === x && sun.target.position.z === z) return;
   sun.target.position.set(x, 0, z);
   sun.target.updateMatrixWorld();
@@ -1099,7 +1142,7 @@ let meeting: { pin: MeetPin; walking: boolean; steps: number } | null = null;
 function meetGo(pin: MeetPin) {
   const floor = pinFloor(pin);
   if (!floor || (floor !== CIRCUIT && floor !== ROOF && !store.floors.some((f) => f.id === floor))) return toast('That floor isn’t in the building any more', 'warn');
-  if (floor === ROOF && (!builtFloors().length || (!inOffice() && !atCircuit))) return toast('There’s no rooftop bar to go up to from here', 'warn');
+  if (floor === ROOF && (!builtFloors().length || (!inOffice() && !away()))) return toast('There’s no rooftop bar to go up to from here', 'warn');
   if (!getOut()) return;
   if (walkingTo) stopWalking();
   errand = null;
@@ -1353,6 +1396,12 @@ net.onMessage((msg) => {
   routeElevatorMessage(msg);
   routeWhiteboardMessage(msg, net);
   switch (msg.t) {
+    case 'arena.shot':
+      arenaPlay.shot(msg);
+      break;
+    case 'arena.spawn':
+      arenaPlay.spawned(msg);
+      break;
     case 'welcome': {
       // A few pings, to line this page's clock up with the office's for the jukebox.
       for (let i = 0; i < 5; i++) setTimeout(() => net.send({ t: 'ping', at: performance.now() }), 200 + i * 500);
@@ -1558,6 +1607,12 @@ store.on('upgrade', renderUpgrade);
 function renderProject() {
   const p = store.project;
   renderTitle();
+  if (store.floor === ARENA) {
+    $('project-meta').classList.remove('lobby');
+    $('project-name').textContent = `🎯 ${ARENA_NAME}`;
+    $('project-meta').textContent = '🏙️ through the gate on the race plaza · the gate on the south wall goes back';
+    return;
+  }
   if (store.floor === CIRCUIT) {
     $('project-meta').classList.remove('lobby');
     $('project-name').textContent = `🏁 ${CIRCUIT_NAME}`;
@@ -1631,7 +1686,7 @@ function takenAway() {
 
 /** Where you're standing, to come back to (see lastSpot): nowhere while you're between floors, or climbing between them. */
 function spotHere(): Spot | null {
-  if (!store.floor || trip || climber.active || atCircuit) return null;
+  if (!store.floor || trip || climber.active || away()) return null;
   // Sitting, it's where you'd get up to; in a car, where you'd get out.
   const at = (driver.active ? driver.wayOut() : player.standingSpot()) ?? player.pos;
   const name = store.floor === ROOF ? ROOF_NAME : (store.currentFloor()?.name ?? '');
@@ -1694,7 +1749,7 @@ function lift() {
  */
 function ride(to: string, keepWalking = false): void {
   // W2: from the circuit, back to the city's gate (the garage), or straight to a floor or the roof.
-  if (atCircuit) return to === GARAGE ? leaveCircuit() : leaveCircuit(to);
+  if (away()) return to === GARAGE ? leaveCircuit() : leaveCircuit(to);
   // A map of its own has no elevator: straight there, and no roof or garage to go to.
   if (!inOffice()) {
     if (to === ROOF || to === GARAGE) {
@@ -1774,7 +1829,7 @@ function standingAt(to: string): Arrival {
 let backToThrone = false;
 
 function switchFloor(floorId: string, keepWalking = false): void {
-  if (atCircuit) return leaveCircuit(floorId);
+  if (away()) return leaveCircuit(floorId);
   // The roof isn't laid out like a floor: to and from it, it's the elevator (and on a map with no
   // roof, straight down off it).
   if (upTop && !inOffice()) return leaveRoofFor(floorId);
@@ -1860,24 +1915,29 @@ function setPlace() {
   telescope.exit();
   const up = store.floor === ROOF;
   const racing = store.floor === CIRCUIT;
-  if (up === upTop && racing === atCircuit) return;
+  const fighting = store.floor === ARENA;
+  if (up === upTop && racing === atCircuit && fighting === atArena) return;
   upTop = up;
   atCircuit = racing;
+  atArena = fighting;
   const r = up ? theRoof() : roof;
   const c = racing ? theCircuit() : circuit;
-  world.group.visible = !up && !racing;
+  const a = fighting ? theArena() : arenaWorld;
+  world.group.visible = !up && !away();
   // The holiday decorations are dressed round the office and the street below it, not up here.
-  holiday.group.visible = !up && !racing && inOffice();
+  holiday.group.visible = !up && !away() && inOffice();
   if (r) r.group.visible = up;
   if (c) c.group.visible = racing;
-  player.colliders = up ? r!.colliders : racing ? c!.colliders : world.colliders;
+  if (a) a.group.visible = fighting;
+  player.colliders = up ? r!.colliders : racing ? c!.colliders : fighting ? a!.colliders : world.colliders;
+  arenaPlay.setActive(fighting);
   // The cars you can get into here (you're on your feet: a trip gets you out first).
   driver.fleet = fleet();
   sky.setRoof(up, roofDrop(roofFloors()));
-  sound.setOutdoors(up || racing);
+  sound.setOutdoors(up || racing || fighting);
   sound.setDj(up ? djAt : null);
   // You can see the whole city from up there (and its clouds); from the top floors, as far as the haze.
-  camera.far = up || racing ? 700 : FAR;
+  camera.far = up || racing || fighting ? 700 : FAR;
   camera.updateProjectionMatrix();
   // Drinks stay at the bar (what you've had comes down with you).
   if (!up) booze.putDown();
@@ -1897,6 +1957,7 @@ function setPlace() {
 function usable(): Interactable[][] {
   if (upTop && roof) return [roof.interactables];
   if (atCircuit && circuit) return [circuit.interactables];
+  if (atArena && arenaWorld) return [arenaWorld.interactables];
   return inOffice() ? [office.interactables, gallery.interactables, dog.interactables, ball.interactables] : [world.interactables, court?.interactables ?? []];
 }
 
@@ -2018,14 +2079,14 @@ function applyMap() {
   world = next.world;
   court = next.court;
   idleAgents = next.idle;
-  world.group.visible = !upTop && !atCircuit;
-  if (!upTop && !atCircuit) player.colliders = world.colliders;
+  world.group.visible = !upTop && !away();
+  if (!upTop && !away()) player.colliders = world.colliders;
   player.room = { ...plan().bounds, ...world.room };
   sky.setIndoors(world.room.enclosed);
   // What you hear: the office's phones and fridge, or the hall's own windows and gong.
   sound.setHall(world.acoustics ? { bounds: plan().bounds, ...world.acoustics } : null);
   // The office's own: the holiday decorations round it and the street, the dog, the jukebox.
-  holiday.group.visible = inOffice() && !upTop && !atCircuit;
+  holiday.group.visible = inOffice() && !upTop && !away();
   dog.root.visible = inOffice() && !!store.dog;
   playJukebox();
   dressBoards(world);
@@ -2043,7 +2104,7 @@ function applyMap() {
   renderPullsBoard();
   renderServicesBoard();
   renderQueueBoard();
-  if (store.floor && !upTop && !atCircuit && !trip) {
+  if (store.floor && !upTop && !away() && !trip) {
     placeInCar();
     // Back in the office, in its elevator: the doors open onto it.
     lift()?.setOpen(true);
@@ -2070,7 +2131,7 @@ function placeAtSpawn() {
 /** Up onto the map's throne, if it has one and nobody's on it. */
 function sitOnThrone() {
   const seat = plan().throne && freePlace(plan().throne!);
-  if (!seat || upTop || atCircuit) return;
+  if (!seat || upTop || away()) return;
   if (player.seat) player.stand();
   player.sit(seat);
   me.sit(seat.hips);
@@ -2271,7 +2332,7 @@ let errand: { at: { x: number; z: number }; what: string; face?: { x: number; z:
  * ladder, driving a car) it just does it. A key of yours takes over, and then it doesn't happen.
  */
 function walkThen(at: { x: number; y?: number; z: number }, what: string, then: () => void, face?: { x: number; z: number }) {
-  if (upTop || atCircuit || trip || climber.active || driver.active) return then();
+  if (upTop || away() || trip || climber.active || driver.active) return then();
   closeAllModals();
   if (player.seat) standUp();
   if (hanger.active) hanger.cancel();
@@ -4366,6 +4427,8 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
+  // In the arena: R reloads, Tab holds up the scoreboard.
+  if (arenaPlay.key(e, true)) return;
   // On the ladder, E gets you off it (and nothing else is in reach); W, S and Space climb.
   if (climber.active && (e.code === 'KeyE' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
     if (e.code === 'KeyE') climber.letGo();
@@ -4400,6 +4463,7 @@ window.addEventListener('keydown', (e) => {
   if (officeKey(e)) player.clearKeys();
 });
 window.addEventListener('keyup', (e) => {
+  arenaPlay.key(e, false);
   if (e.code === 'KeyG') emoteWheel.release();
   if (e.code === 'KeyE') letFly();
 });
@@ -4581,7 +4645,7 @@ function aimedAt(ndc: THREE.Vector2, slack = 0): { it: Interactable; near: boole
   raycaster.setFromCamera(ndc, camera);
   eye.set(player.pos.x, player.pos.y + EYE_HEIGHT, player.pos.z);
   // (Workers standing in line in the castle carry their spot's interactable: see Court.)
-  for (const hit of raycaster.intersectObjects(upTop && roof ? roof.pickables : atCircuit && circuit ? circuit.pickables : inOffice() ? [office.group, dog.root] : world.pickables, true)) {
+  for (const hit of raycaster.intersectObjects(upTop && roof ? roof.pickables : atCircuit && circuit ? circuit.pickables : atArena && arenaWorld ? arenaWorld.pickables : inOffice() ? [office.group, dog.root] : world.pickables, true)) {
     let it: Interactable | undefined;
     let shown = true;
     for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
@@ -4863,7 +4927,7 @@ const hud = mountHud(
 );
 /** F: hang a picture on a wall of this floor. There are no walls for them up on the roof. */
 function startHanging() {
-  if (upTop || atCircuit) return toast('No walls to hang pictures on out here — take the elevator to a floor', 'warn');
+  if (upTop || away()) return toast('No walls to hang pictures on out here — take the elevator to a floor', 'warn');
   if (!inOffice()) return toast(`${plan().icon} ${plan().name}'s walls are hung already — pictures go up in the office`, 'warn');
   hanger.start();
 }
@@ -5043,8 +5107,8 @@ function frame(ts?: number) {
   // The cars first, so whoever's riding in one sits in it where it's got to.
   fleet().update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
   // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
-  player.city = inOffice() && !upTop && !atCircuit; // W3: the city's solids are for the office's street world only
-  if (inOffice() && !upTop && !atCircuit) {
+  player.city = inOffice() && !upTop && !away(); // W3: the city's solids are for the office's street world only
+  if (inOffice() && !upTop && !away()) {
     const pose = driver.driving ? driver.pose : null;
     const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
@@ -5063,23 +5127,23 @@ function frame(ts?: number) {
     }
   }
   // W1 island: walked off the beach into the sea — a splash, and back up the beach, facing inland.
-  if (inOffice() && !upTop && !atCircuit && !driver.active && !trip && !wadedAt && Math.abs(player.pos.y - player.street) < 0.5 && surfaceAt(player.pos.x, player.pos.z) === 'water') {
+  if (inOffice() && !upTop && !away() && !driver.active && !trip && !wadedAt && Math.abs(player.pos.y - player.street) < 0.5 && surfaceAt(player.pos.x, player.pos.z) === 'water') {
     wadedAt = now;
     const { x, z } = player.pos;
     splashes.burst(x, player.street - 0.3, z, 1);
     sound.splash({ x, y: player.street, z }, 1);
     fade(true);
     // Only if you're still where you went in: a trip or a gate since then is somewhere else, with its own fade.
-    const here = `${store.floor}|${upTop}|${atCircuit}|${player.street}`;
+    const here = `${store.floor}|${upTop}|${away()}|${player.street}`;
     setTimeout(() => {
       wadedAt = 0;
       if (trip || gateTrip) return;
-      if (`${store.floor}|${upTop}|${atCircuit}|${player.street}` === here && !driver.active && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
+      if (`${store.floor}|${upTop}|${away()}|${player.street}` === here && !driver.active && inOffice()) placeAt({ ...shoreRespawn(x, z, true), y: player.street });
       fade(false);
     }, 700);
   }
   // W1 island: down on the street the camera sees out past the haze to the sea's horizon (world/ocean.ts fades the sea out before it).
-  if (!upTop && !atCircuit) {
+  if (!upTop && !away()) {
     const far = inOffice() && Math.abs(player.pos.y - player.street) < 3 ? SHORE_FAR : FAR;
     if (camera.far !== far) {
       camera.far = far;
@@ -5092,7 +5156,7 @@ function frame(ts?: number) {
   arcade.update(camera, dt);
   cabinet.update(camera, dt);
   // Pulled away from the tee (sat down, off up the ladder, into the elevator): the club goes back.
-  if (golf.active && (trip || hanger.active || climber.active || player.seat || upTop || atCircuit)) golf.stop();
+  if (golf.active && (trip || hanger.active || climber.active || player.seat || upTop || away())) golf.stop();
   golf.update(dt);
   // Pulled away from the line (sat down, into the elevator): the dart or axe goes back.
   if (thrower.active && (trip || hanger.active || climber.active || player.seat || !upTop)) thrower.stop();
@@ -5118,7 +5182,7 @@ function frame(ts?: number) {
   // Down a pole: the view widens and the edges streak past.
   const rush = reduceMotion.matches ? 0 : climber.rush;
   // At the oche or the line, the view narrows onto the target.
-  const fov = thrower.fov + rush * 16;
+  const fov = arenaPlay.fov(thrower.fov) + rush * 16;
   if (Math.abs(camera.fov - fov) > 0.05) {
     camera.fov += (fov - camera.fov) * Math.min(1, dt * 8);
     camera.updateProjectionMatrix();
@@ -5130,7 +5194,7 @@ function frame(ts?: number) {
   camera.getWorldDirection(lookDir);
   sound.update({ x: player.pos.x, y: player.pos.y + EYE_HEIGHT, z: player.pos.z, fx: lookDir.x, fz: lookDir.z });
   // W6: the café's murmur and cups, the bar's glasses and its jazz, while you're in one (or by its door).
-  const venue = inOffice() && !upTop && !atCircuit ? office.venues.hearing() : null;
+  const venue = inOffice() && !upTop && !away() ? office.venues.hearing() : null;
   sound.setVenue(venue?.id ?? null, venue?.level ?? 0);
   const s = Math.floor(player.walkPhase / Math.PI);
   if (s !== stride) {
@@ -5176,7 +5240,7 @@ function frame(ts?: number) {
     const ground = groundAt(player.colliders, p.x, p.z, p.y);
     const airborne = !sat && p.y > ground + 0.05;
     // Or holding on to the ladder or a pole; off a pole onto the mat, the firehouse bell rings.
-    const holding = sat || upTop || atCircuit || !inOffice() ? null : gripOf(p, office.stack.poles(), ground);
+    const holding = sat || upTop || away() || !inOffice() ? null : gripOf(p, office.stack.poles(), ground);
     if (r.grip === 'pole' && !holding && Math.abs(p.y) < 0.2) sound.poleLanding(6, { x: pos.x, y: 0.5, z: pos.z });
     r.grip = holding;
     r.person.setGrip(holding);
@@ -5239,8 +5303,8 @@ function frame(ts?: number) {
     const dogDt = dogTick(dt);
     if (dogDt) dog.update(dogDt);
   }
-  if (!upTop && !atCircuit && inOffice()) updateBall(now, dt);
-  if (!upTop && !atCircuit) {
+  if (!upTop && !away() && inOffice()) updateBall(now, dt);
+  if (!upTop && !away()) {
     world.update(t, dt, [player.pos, ...[...remotes.values()].map((r) => r.person.root.position), ...departures.positions(), ...arrivals.positions(), ...(court?.positions() ?? [])]);
     if (inOffice()) {
       office.stack.update(dt, [{ x: player.pos.x, y: player.pos.y, z: player.pos.z, grip }, ...[...remotes.values()].map((r) => ({ x: r.person.root.position.x, y: r.person.root.position.y, z: r.person.root.position.z, grip: r.grip }))], camera.position);
@@ -5256,9 +5320,13 @@ function frame(ts?: number) {
   followSun();
   sky.update(dt, t, camera);
   // A map of its own lights itself its own way (the castle's torchlit hall), after the sky's had its say.
-  if (!upTop && !atCircuit) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
-  if (!upTop && !atCircuit && inOffice() && holidayTick(dt)) holiday.update(t, sky.lampsOn, camera);
+  if (!upTop && !away()) world.mood?.({ sun, hemi, ambient, scene }, sky.daylight, t);
+  if (!upTop && !away() && inOffice() && holidayTick(dt)) holiday.update(t, sky.lampsOn, camera);
   // W2: the circuit's lights and crowd; through a gate, to it or back; the sun's shadows follow you round it.
+  if (atArena && arenaWorld) {
+    arenaWorld.update(dt, t);
+    arenaPlay.update(dt, t);
+  }
   if (atCircuit && circuit) {
     circuit.update(dt, t, store.race, store.officeNow(), circuit.fleet.cars.map((v) => v.pose));
     circuit.coach(driver.driving ? nextCheckpoint() : null);

@@ -942,6 +942,56 @@ export class OfficeSound {
     }
   }
 
+  // ---- The arena ----------------------------------------------------------------------------------
+
+  /**
+   * The arena's rifle and what comes of it (client/arena.ts): a shot (yours, or someone's `at` where
+   * they are), the reload's clicks, an empty click, the tick of a hit (the head's higher, a kill's a
+   * double), and the thud of being hit.
+   */
+  gun(kind: 'shot' | 'reload' | 'empty' | 'hit' | 'head' | 'kill' | 'hurt', at?: Pos) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.count(`gun-${kind}`);
+    const t0 = ctx.currentTime + 0.003;
+    let out: AudioNode = this.ambience;
+    if (at) {
+      const p = this.panner(at, 4, 0.9);
+      p.connect(this.ambience);
+      out = p;
+    }
+    if (kind === 'shot') {
+      const crack = this.noise(this.buf.white);
+      const tone = biquad(ctx, 'lowpass', 5200, 0.8);
+      tone.frequency.setValueAtTime(5200, t0);
+      tone.frequency.exponentialRampToValueAtTime(700, t0 + 0.16);
+      const g = ctx.createGain();
+      envelope(g.gain, t0, [
+        [0.002, at ? 0.55 : 0.7],
+        [0.05, at ? 0.18 : 0.25],
+        [0.2, 0],
+      ]);
+      crack.connect(tone).connect(g).connect(out);
+      crack.start(t0);
+      crack.stop(t0 + 0.25);
+      this.blip(out, t0, 140, 0.4, 0.14, at ? 0.35 : 0.5);
+    } else if (kind === 'reload') {
+      this.blip(out, t0, 1800, 0.7, 0.04, 0.12, 'square');
+      this.blip(out, t0 + 0.55, 900, 0.6, 0.05, 0.14, 'square');
+      this.blip(out, t0 + 1.4, 2200, 0.8, 0.03, 0.12, 'square');
+      this.blip(out, t0 + 1.5, 1300, 0.7, 0.04, 0.14, 'square');
+    } else if (kind === 'empty') {
+      this.blip(out, t0, 2600, 0.8, 0.025, 0.1, 'square');
+    } else if (kind === 'hurt') {
+      this.blip(out, t0, 95, 0.5, 0.18, 0.5);
+      this.play(pick(this.buf.steps), { gain: 0.5, rate: 0.5, dest: out });
+    } else {
+      const f = kind === 'head' ? 2400 : 1500;
+      this.blip(out, t0, f, 0.9, 0.05, 0.22, 'triangle');
+      if (kind === 'kill') this.blip(out, t0 + 0.07, 1900, 0.9, 0.08, 0.25, 'triangle');
+    }
+  }
+
   /** Something going into the sea (world/ocean.ts): a whoosh of spray, and the plunge under it; `size` about 1 for a person, 3 for a car. */
   splash(at: Pos, size: number) {
     const ctx = this.ctx;

@@ -106,14 +106,14 @@ function box(into: THREE.Object3D, w: number, h: number, l: number, color: strin
  * shimmer across the opening. Its parts go in `solid` (to be merged); the sign and the shimmer (which
  * moves) are returned to add as they are. Colliders stand from `y0`.
  */
-function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Collider[], y0: number): { sign: THREE.Object3D; shimmer: THREE.Mesh } {
+export function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Collider[], y0: number, paint: readonly [string, string] = ['#e63946', '#f8f9fa']): { sign: THREE.Object3D; shimmer: THREE.Mesh } {
   const s = Math.sin(g.rotY), c = Math.cos(g.rotY);
   // Across the opening is (c, -s); through it is (s, c).
   const at = (across: number, through = 0) => ({ x: g.x + across * c + through * s, z: g.z - across * s + through * c });
   const H = 7;
   for (const side of [-1, 1]) {
     const p = at(side * (g.width / 2 + 0.6));
-    for (let k = 0; k < 5; k++) box(solid, 1.2, H / 5, 1.2, k % 2 ? '#f8f9fa' : '#e63946', p.x, (k * H) / 5, p.z, g.rotY);
+    for (let k = 0; k < 5; k++) box(solid, 1.2, H / 5, 1.2, paint[k % 2], p.x, (k * H) / 5, p.z, g.rotY);
     colliders.push({ minX: p.x - 0.7, maxX: p.x + 0.7, minZ: p.z - 0.7, maxZ: p.z + 0.7, bottom: y0, top: y0 + H + 1.4 });
     // A chequered flag on a pole up top.
     box(solid, 0.08, 2.6, 0.08, '#adb5bd', p.x, H + 1.4, p.z);
@@ -146,7 +146,7 @@ function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Collider[], 
 }
 
 /** The shimmer across a gate's opening, gently pulsing. */
-function pulse(shimmer: THREE.Mesh, t: number) {
+export function pulse(shimmer: THREE.Mesh, t: number) {
   (shimmer.material as THREE.MeshBasicMaterial).opacity = 0.14 + 0.08 * Math.sin(t * 2.4);
 }
 

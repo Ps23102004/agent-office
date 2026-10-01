@@ -53,6 +53,8 @@ import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_GATE, circuitGround } from '../shared/ci
 import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
+import { ArenaControl } from './arena.js';
+import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF } from '../shared/arena.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
 
 const MIME: Record<string, string> = {
@@ -261,6 +263,11 @@ export async function startServer(cfg: Config) {
   // ---- W2: the race circuit, a place of its own (shared/circuit.ts): its cars, and the race (server/race.ts).
   const circuitCars = new Garage(undefined, CIRCUIT_CARS, circuitGround);
   const race = new RaceControl();
+  // The arena, a place of its own too (shared/arena.ts): its free-for-all (server/arena.ts), judged from where the office has everyone in it.
+  const arena = new ArenaControl((id) => {
+    const p = clients.get(id)?.peer;
+    return p && p.floor === ARENA ? { x: p.x, y: p.y, z: p.z } : undefined;
+  });
   /** When each person (account, or name) last posted a meeting spot. */
   const meetAt = new Map<string, number>();
   /** How near the car (m) someone has to be for its driver to offer them a ride, or to take one. */
@@ -656,6 +663,8 @@ export async function startServer(cfg: Config) {
   const roofView = (): FloorView => ({ ...floorView(undefined), floor: ROOF });
   /** The race circuit: its own cars, and nothing of a floor's. */
   const circuitView = (): FloorView => ({ ...floorView(undefined), floor: CIRCUIT, cars: circuitCars.state() });
+  /** The arena: nothing of a floor's, and no cars. */
+  const arenaView = (): FloorView => ({ ...floorView(undefined), floor: ARENA, cars: [] });
   const screensOf = (c: Client, floor: Floor | undefined) => {
     for (const { workerId, frame } of floor?.workers.fullScreens() ?? []) sendTo(c, { t: 'screen', workerId, ...frame, full: true });
   };
@@ -1053,15 +1062,16 @@ export async function startServer(cfg: Config) {
     // Back on the floor they were on before a reload, a restart or closing the tab, else the first floor.
     const wanted = url.searchParams.get('floor');
     // Their floor's gone since (taken off the building, or its checkout deleted): up to the roof instead.
-    const gone = !!wanted && wanted !== ROOF && wanted !== CIRCUIT && !floors.has(wanted);
+    const gone = !!wanted && wanted !== ROOF && wanted !== CIRCUIT && wanted !== ARENA && !floors.has(wanted);
     // Back at the circuit (after a reconnect), by its gate home.
     const atCircuit = wanted === CIRCUIT;
+    const inArena = wanted === ARENA;
     // Up on the roof, as long as there's a building under it.
     const onRoof = (wanted === ROOF || gone) && floors.size > 0;
-    const floor = onRoof || atCircuit ? undefined : arrivalFloor(wanted);
+    const floor = onRoof || atCircuit || inArena ? undefined : arrivalFloor(wanted);
     // Back where they were standing on it too; anywhere else, they arrive by elevator.
     const back = !gone && wanted !== null && (onRoof || floor?.id === wanted);
-    const spot = atCircuit ? { ...CIRCUIT_GATE.out, y: 0 } : (back && spotFrom(url.searchParams)) || { ...elevatorSpot(), y: 0, rotY: 0 };
+    const spot = atCircuit ? { ...CIRCUIT_GATE.out, y: 0 } : inArena ? { ...ARENA_GATE.out, y: 0 } : (back && spotFrom(url.searchParams)) || { ...elevatorSpot(), y: 0, rotY: 0 };
     const account = session.account;
     // An account's name is its own; on the shared password people pick one.
     const name = account?.name ?? (str(url.searchParams.get('name'), 24).trim() || `Guest ${id.slice(0, 3)}`);
@@ -1105,7 +1115,7 @@ export async function startServer(cfg: Config) {
         sharing: false,
         ...(account ? { account: true } : {}),
         ...(url.searchParams.get('lite') === '1' ? { lite: true } : {}),
-        ...(onRoof ? { floor: ROOF } : atCircuit ? { floor: CIRCUIT } : floor ? { floor: floor.id } : {}),
+        ...(onRoof ? { floor: ROOF } : atCircuit ? { floor: CIRCUIT } : inArena ? { floor: ARENA } : floor ? { floor: floor.id } : {}),
       },
     };
     // Maps of your own may have been added or edited since: everyone already in hears first.
@@ -1136,9 +1146,14 @@ export async function startServer(cfg: Config) {
       map: maps.state(),
       prompts: prompts.state(),
       leaveOnMerge: leaveOnMerge.state(),
-      ...(onRoof ? roofView() : atCircuit ? circuitView() : floorView(floor)),
+      ...(onRoof ? roofView() : atCircuit ? circuitView() : inArena ? arenaView() : floorView(floor)),
     });
     sendTo(client, { t: 'race', state: race.state() });
+    if (inArena) {
+      arena.join(id, name, Date.now());
+      spawnIn(client);
+      arenaChanged();
+    }
     screensOf(client, floor);
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
@@ -1176,6 +1191,7 @@ export async function startServer(cfg: Config) {
       }
       if (circuitCars.leave(id)) circuitCarsChanged();
       if (race.leave(id)) raceChanged();
+      if (arena.leave(id)) arenaChanged();
       broadcast({ t: 'peer.leave', id });
       if (account) accountsChanged();
       floorsChanged();
@@ -1203,6 +1219,27 @@ export async function startServer(cfg: Config) {
     if (!raceDirty) return;
     raceDirty = false;
     broadcast({ t: 'race', state: race.state() });
+  }, 250);
+  /** To everyone in the arena. */
+  const toArena = (msg: ServerMsg) => {
+    const json = JSON.stringify(msg);
+    for (const o of clients.values()) if (o.peer.floor === ARENA && o.ws.readyState === WebSocket.OPEN) o.ws.send(json);
+  };
+  /** The arena's match changed: everyone in it hears, at most four times a second (kills straight away). */
+  let arenaDirty = false;
+  const arenaChanged = () => void (arenaDirty = true);
+  const arenaTimer = setInterval(() => {
+    const { changed, spawned } = arena.tick(Date.now());
+    for (const s of spawned) {
+      const c = clients.get(s.id);
+      if (!c) continue;
+      Object.assign(c.peer, { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
+      sendTo(c, { t: 'arena.spawn', x: s.x, z: s.z, rotY: s.rotY });
+      toNeighbors(c, { t: 'peer.move', id: c.id, x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
+    }
+    if (!changed && !arenaDirty) return;
+    arenaDirty = false;
+    toArena({ t: 'arena', state: arena.state() });
   }, 250);
   const jukeboxChanged = (floor: Floor) => toFloor(floor, { t: 'jukebox', state: floor.jukebox.state() });
   const teamState = async () => ({ ...(await team.state()), deploy: cfg.deployScript });
@@ -1255,6 +1292,27 @@ export async function startServer(cfg: Config) {
     floorsChanged();
   };
 
+  /** Into the arena at the spawn furthest from anyone, not on top of whoever came in by the gate before. */
+  const spawnIn = (c: Client) => {
+    const s = arena.spawnFor(c.id);
+    Object.assign(c.peer, { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
+    sendTo(c, { t: 'arena.spawn', ...s });
+  };
+
+  /** Through the arena's gate in the city: in by its gate home, and into the match. */
+  const goToArena = (c: Client) => {
+    if (c.peer.floor === ARENA) return;
+    const left = leave(c, { ...ARENA_GATE.out, y: 0 });
+    c.peer.floor = ARENA;
+    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...arenaView() });
+    arena.join(c.id, c.peer.name, Date.now());
+    spawnIn(c);
+    sendTo(c, { t: 'arena', state: arena.state() });
+    arenaChanged();
+    arrived(c, left);
+    floorsChanged();
+  };
+
   /** Out to the lobby, where the elevator has nowhere to go: the building's last floor was taken off. */
   const toLobby = (c: Client) => {
     const left = leave(c);
@@ -1303,6 +1361,7 @@ export async function startServer(cfg: Config) {
     // Off the circuit: its car stays where they left it, and the race goes on without them.
     const circuitCarLeft = c.peer.floor === CIRCUIT && circuitCars.leave(c.id);
     const raced = race.leave(c.id);
+    if (arena.leave(c.id)) arenaChanged();
     c.attached.clear();
     c.typingAt.clear();
     c.stale.clear();
@@ -1411,6 +1470,14 @@ export async function startServer(cfg: Config) {
         p.z = num(msg.z);
         p.rotY = num(msg.rotY);
         p.moving = !!msg.moving;
+        // In the arena, inside its walls and no higher than the tops of the stacked containers: nobody shoots from (or hides in) the sky or under the ground.
+        // ponytail: no speed check yet, so a modified page can still teleport about inside the yard.
+        if (p.floor === ARENA) {
+          const lim = ARENA_HALF - 0.3;
+          p.x = Math.min(ARENA_CENTER.x + lim, Math.max(ARENA_CENTER.x - lim, p.x));
+          p.z = Math.min(ARENA_CENTER.z + lim, Math.max(ARENA_CENTER.z - lim, p.z));
+          p.y = Math.min(6.5, Math.max(0, p.y));
+        }
         toNeighbors(c, { t: 'peer.move', id: c.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving }, true);
         break;
       }
@@ -1539,6 +1606,10 @@ export async function startServer(cfg: Config) {
           goToCircuit(c);
           break;
         }
+        if (msg.floor === ARENA) {
+          goToArena(c);
+          break;
+        }
         if (msg.floor === ROOF) {
           if (floors.size) goToRoof(c);
           else warn(c, 'There is no building to go up on yet');
@@ -1546,7 +1617,7 @@ export async function startServer(cfg: Config) {
         }
         const floor = floors.get(str(msg.floor, 64));
         // Off the race circuit with no building left to go back to: out to the lobby.
-        if (!floor && !floors.size && c.peer.floor === CIRCUIT) {
+        if (!floor && !floors.size && (c.peer.floor === CIRCUIT || c.peer.floor === ARENA)) {
           toLobby(c);
           break;
         }
@@ -1641,6 +1712,27 @@ export async function startServer(cfg: Config) {
       }
       case 'race.start':
         if (race.start(c.id, Date.now())) raceChanged();
+        break;
+      case 'arena.fire': {
+        if (c.peer.floor !== ARENA) break;
+        const v = (a: unknown) => {
+          const o = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
+          return { x: num(o.x), y: num(o.y), z: num(o.z) };
+        };
+        const o = v(msg.o);
+        const shot = arena.fire(c.id, o, v(msg.d), Date.now());
+        if (!shot) break;
+        toArena({ t: 'arena.shot', by: c.id, o, ...shot });
+        if (shot.hit) arenaChanged();
+        // A kill's news straight away, not at the next tick.
+        if (shot.kill) {
+          arenaDirty = false;
+          toArena({ t: 'arena', state: arena.state() });
+        }
+        break;
+      }
+      case 'arena.reload':
+        if (c.peer.floor === ARENA) arena.reload(c.id, Date.now());
         break;
       case 'race.leave':
         if (race.leave(c.id)) raceChanged();
@@ -2499,6 +2591,7 @@ export async function startServer(cfg: Config) {
     clearInterval(heartbeat);
     clearInterval(resync);
     clearInterval(raceTimer);
+    clearInterval(arenaTimer);
     clearTimeout(floorsTimer);
     arcade.flush();
     upgrader.stop();

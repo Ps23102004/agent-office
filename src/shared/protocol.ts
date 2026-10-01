@@ -14,6 +14,7 @@ import type { CustomMap } from './maps/index.js';
 import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { RaceState } from './race.js';
+import type { ArenaState, V3 } from './arena.js';
 import type { MeetPin, MeetSpotId } from './meet.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
@@ -1276,6 +1277,10 @@ export type ClientMsg =
   | { t: 'race.start' }
   /** Pull out of the race (or off the grid). */
   | { t: 'race.leave' }
+  /** In the arena: fire your rifle from `o` (your eyes) along `d` (shared/arena.ts). The office works out what it hits. */
+  | { t: 'arena.fire'; o: V3; d: V3 }
+  /** In the arena: reload. */
+  | { t: 'arena.reload' }
   /** Post a meeting spot to the office chat (shared/meet.ts): on or under your floor where it's one of those. */
   | { t: 'meet.post'; spot: MeetSpotId }
   /** Driving, offer the empty seat beside you to `to` (a peer id) nearby on your floor: they're seated only once they say yes. */
@@ -1384,6 +1389,12 @@ export type ServerMsg =
   | { t: 'car.honk'; car: number }
   /** The race at the circuit, whenever it changes (and as you come in): to everyone, wherever they are. */
   | { t: 'race'; state: RaceState }
+  /** The arena's match (shared/arena.ts), whenever it changes and as you come in: to everyone in the arena. */
+  | { t: 'arena'; state: ArenaState }
+  /** Someone in the arena fired (`by`): from `o` to where it stopped, `end`; who it `hit`, in the head or not, and whether that killed them. */
+  | { t: 'arena.shot'; by: string; o: V3; end: V3; hit?: string; head?: boolean; kill?: boolean }
+  /** You're back in the arena after being killed: here, facing this way. */
+  | { t: 'arena.spawn'; x: number; z: number; rotY: number }
   /** A driver nearby offers you the seat beside them in their car (`car`, on your floor), until `until` (office clock, ms). Answer with car.invite.answer. */
   | { t: 'car.invited'; from: string; name: string; car: number; until: number }
   /** You said yes to a ride and the office seated you: into `seat` of `car` (sent before the cars that show you there). */
