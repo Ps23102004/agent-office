@@ -2,16 +2,14 @@
   position: fixed; z-index: 35; color: #eef2ef; font-family: system-ui, sans-serif;
   font-variant-numeric: tabular-nums; pointer-events: none !important;
 }
-.city-minimap [hidden], .map-district[hidden], .city-minimap[hidden], .drive-hud[hidden], .drive-rush[hidden] { display: none !important; }
+.drive-hud [hidden], .city-minimap [hidden], .map-district[hidden], .city-minimap[hidden], .drive-hud[hidden], .drive-rush[hidden] { display: none !important; }
 .city-minimap { right: max(18px, env(safe-area-inset-right)); top: 100px; width: 180px; text-align: center; }
 .city-minimap canvas { display: block; width: 180px; height: 180px; border-radius: 50%; border: 2px solid #dde8df80; box-shadow: 0 3px 18px #0007; background: #142a38; }
 .map-chips { display: flex; justify-content: center; gap: 7px; margin: 7px 0; }
 .map-chips button { pointer-events: auto; background: #142029e8; color: #fff; border: 1px solid #dde8df80; padding: 4px 8px; border-radius: 5px; font: 700 11px system-ui; cursor: pointer; }
 .map-distance { display: block; font-size: 11px; line-height: 1.4; background: #142029dd; padding: 4px 6px; border-radius: 4px; overflow-wrap: anywhere; }
 .map-district { top: 100px; left: 50%; transform: translateX(-50%); padding: 10px 22px; border-top: 2px solid #f4cc54; background: #142029e8; font-size: 17px; font-weight: 700; }
-.worldmap-backdrop { z-index: 35; padding: 0; animation: none; background: #142a38; }
-#hud:has(:is(.city-minimap, .drive-hud):not([hidden])) :is(#toasts, #conn, .chat),
-body:has(.worldmap-backdrop) #hud :is(#toasts, #conn, .chat) { z-index: 36; }
+.worldmap-backdrop { z-index: 50; padding: 0; animation: none; background: #142a38; }
 .worldmap { width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; border-radius: 0; background: #142029; color: #eef2ef; box-shadow: none; display: flex; flex-direction: column; animation: none; }
 .worldmap header { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; padding: 16px 22px; border-color: #dde8df30; background: #142029; }
 .worldmap header h2 { font-size: 23px; margin: 0; }
@@ -25,7 +23,7 @@ body:has(.worldmap-backdrop) #hud :is(#toasts, #conn, .chat) { z-index: 36; }
 .map-viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 .map-viewport canvas:active { cursor: grabbing; }
 .map-north { position: absolute; top: 18px; left: 20px; font: 700 17px system-ui; background: #142029dd; padding: 6px 10px; pointer-events: none; }
-.map-tools { display: flex; gap: 6px; position: absolute; bottom: 18px; left: 18px; }
+.map-tools { display: flex; gap: 6px; position: absolute; top: 18px; right: 18px; }
 .map-body aside { padding: 16px; border-left: 1px solid #dde8df30; overflow-y: auto; font-size: 12px; }
 .map-body h3 { margin: 0 0 10px; font-size: 16px; }
 .map-destination { line-height: 1.5; color: #f4cc54; }
@@ -36,7 +34,7 @@ body:has(.worldmap-backdrop) #hud :is(#toasts, #conn, .chat) { z-index: 36; }
 .map-buildings { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; text-transform: capitalize; }
 .map-buildings span { display: flex; align-items: center; gap: 5px; }
 .map-buildings i { width: 10px; height: 10px; display: inline-block; }
-.worldmap footer { flex: 0 0 auto; padding: 10px 18px; color: #b8cbc6; background: #142029; font-size: 11px; border-color: #dde8df30; justify-content: flex-start; }
+.worldmap footer { flex: 0 0 auto; padding: 10px 18px max(10px, env(safe-area-inset-bottom)); color: #b8cbc6; background: #142029; font-size: 11px; border-color: #dde8df30; justify-content: flex-start; }
 .map-controls { width: min(720px, calc(100vw - 32px)); }
 .map-controls .body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
 .map-controls h3 { margin: 0 0 9px; }

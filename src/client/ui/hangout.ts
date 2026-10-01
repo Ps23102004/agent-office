@@ -88,7 +88,7 @@ export function openHangout(opts: HangoutOptions) {
     text(status, `${peers.length} here · ${talking} in voice${opts.voice.inVoice ? opts.voice.muted ? ' · You’re muted' : ' · Your mic is on' : ''}`);
     text(voice, opts.voice.inVoice ? 'Leave voice' : 'Join voice');
     voice.disabled = changingVoice || !window.isSecureContext;
-    voice.title = !window.isSecureContext ? 'Voice needs HTTPS or localhost' : 'V joins voice; in voice, hold V to talk. M mutes or unmutes.';
+    voice.title = !window.isSecureContext ? 'Voice needs HTTPS or localhost' : 'V joins voice; in voice, hold V to talk. U mutes or unmutes.';
     text(invite, openInvite() ? 'Copy invite link' : store.me.admin ? 'Make invite link…' : 'Copy office link');
     access.classList.toggle('hidden', !store.invites);
     text(inviteHelp, openInvite() ? 'This account invite works once. For a named invite, open Accounts from the menu.' : store.me.admin ? 'Make an account invite, then copy its link from Accounts.' : 'An office link still needs an account or the office password. Ask an admin for an account invite.');

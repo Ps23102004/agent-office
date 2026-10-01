@@ -105,6 +105,8 @@ import { whereabouts } from './ui/whereabouts';
 // W4 UI + features: race screens and the shared hangout window.
 import { RaceUI } from './ui/race';
 import { WorldMap } from './ui/worldmap';
+import { onCityStreet } from './ui/map-view';
+import { globalShortcut } from './ui/controls';
 import { raceAdapter, wireRaceUI } from './ui/race-adapter';
 import { openHangout } from './ui/hangout';
 import { wayTo } from './walkto';
@@ -4509,9 +4511,14 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (modalOpen() || isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
-  if ((e.code === 'KeyM' && !e.shiftKey) || e.key === '?') {
+  const shortcut = globalShortcut(e, away());
+  if (shortcut) {
     e.preventDefault();
-    if (!e.repeat) e.key === '?' ? worldMap.controls() : worldMap.toggle();
+    if (!e.repeat) {
+      if (shortcut === 'controls') worldMap.controls();
+      else if (shortcut === 'map') worldMap.toggle();
+      else voice.toggleMute();
+    }
     return;
   }
   if (relookOnKey && e.key !== 'Escape' && player.canLock) player.lock();
@@ -4605,9 +4612,6 @@ function officeKey(e: KeyboardEvent): boolean {
       if (e.repeat) return true;
       if (voice.inVoice) voice.startTalking();
       else void joinVoice();
-      return true;
-    case 'KeyM':
-      voice.toggleMute();
       return true;
     case 'KeyH':
       openHelp();
@@ -4985,12 +4989,12 @@ const hud = mountHud(
       icon: () => (voice.muted ? '🔇' : '🎙️'),
       label: () => (voice.muted ? 'Unmute' : 'Mute'),
       section: 'Together',
-      key: 'M',
+      key: 'U',
       shown: () => voice.inVoice,
       status: () => voice.inVoice,
       on: () => voice.inVoice,
       tone: () => (voice.muted && !settings.pushToTalk ? 'danger' : undefined),
-      title: () => (voice.muted ? 'Muted: hold V to talk, or M to unmute' : 'Mute (M) · hold V to talk'),
+      title: () => (voice.muted ? 'Muted: hold V to talk, or U to unmute' : 'Mute (U) · hold V to talk'),
       run: () => voice.toggleMute(),
     },
     { id: 'share', icon: '🖥️', label: () => (voice.sharing ? 'Stop sharing' : 'Share screen'), section: 'Together', on: () => voice.sharing, status: () => voice.sharing, chip: () => 'Sharing', blocked: noMedia, run: () => void toggleShare() },
@@ -5193,12 +5197,11 @@ function frame(ts?: number) {
   if (slowFrames.frame(now, delta * 1000)) offer2d('slow');
   // W4 UI + features: screen-space UI, throttled inside to 10 Hz; signed speed comes from the real car.
   const gaugeCar = driver.car === null ? null : carDefs()[driver.car];
-  const boostDriver = driver;
   raceUI.update(now, gaugeCar ? { name: gaugeCar.name, speed: driver.pose?.speed ?? 0,
     top: SPECS[gaugeCar.kind].top, bicycle: gaugeCar.kind === 'bicycle', passenger: !driver.driving,
-    boost: boostDriver.boost, boosting: boostDriver.boosting } : null);
-  worldMap.setVisible(inOffice() && !upTop && !away() && !trip && Math.abs(player.pos.y - player.street) < 3);
+    boost: driver.boost, boosting: driver.boosting } : null);
   const mapPose = driver.pose ?? player.pos;
+  worldMap.setVisible(onCityStreet(mapPose, player.wing) && inOffice() && !upTop && !away() && !trip && Math.abs(player.pos.y - player.street) < 3);
   worldMap.update(now, { x: mapPose.x, z: mapPose.z, heading: driver.pose?.rotY ?? player.facing,
     cameraHeading: player.camYaw + Math.PI, speed: driver.pose?.speed ?? 0, onIsland: inOffice() && !upTop && !away() });
 

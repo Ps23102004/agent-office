@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CONTROLS, type ControlMode } from './controls';
 import type { Theme } from '../../shared/protocol';
 import { calendarTheme } from '../../shared/theme';
 import { h, modalOpen, onModalChange } from './dom';
@@ -92,51 +93,6 @@ export function flyover(u: number, at: THREE.Vector3, look: THREE.Vector3, groun
  * with you when they come up (a straight line from the street to your desk goes through walls).
  */
 const BLEND_S = 0.5;
-
-type Mode = 'Walking' | 'Driving' | 'Racing' | 'Arena';
-const CONTROLS: Record<Mode, [keys: string[], what: string][]> = {
-  Walking: [
-    [['W', 'A', 'S', 'D'], 'Walk'],
-    [['Shift'], 'Run'],
-    [['Space'], 'Jump'],
-    [['Mouse'], 'Look around (click the office first)'],
-    [['E'], 'Use whatever you’re next to'],
-    [['T'], 'Chat'],
-    [['V'], 'Talk (hold)'],
-    [['G'], 'Emotes (hold)'],
-    [['M'], 'Map'],
-  ],
-  Driving: [
-    [['W', 'S'], 'Gas and brake'],
-    [['A', 'D'], 'Steer'],
-    [['Space'], 'Handbrake'],
-    [['Shift'], 'Boost (with the gas)'],
-    [['Z'], 'Change camera'],
-    [['X'], 'Look back'],
-    [['H'], 'Honk'],
-    [['M'], 'Map'],
-    [['R'], 'Race'],
-    [['E'], 'Get out'],
-  ],
-  Racing: [
-    [['R'], 'Join the race, or say you’re ready'],
-    [['W', 'S'], 'Gas and brake'],
-    [['A', 'D'], 'Steer'],
-    [['Space'], 'Handbrake round the hairpins'],
-    [['Shift'], 'Boost (with the gas)'],
-    [['Z'], 'Change camera'],
-    [['X'], 'Look back'],
-  ],
-  Arena: [
-    [['W', 'A', 'S', 'D'], 'Move'],
-    [['Mouse'], 'Aim'],
-    [['Click'], 'Fire'],
-    [['Right click'], 'Aim down the sights'],
-    [['R'], 'Reload'],
-    [['Tab'], 'Scoreboard (hold)'],
-    [['Space'], 'Jump'],
-  ],
-};
 
 const TAGLINE: Record<TitleLook, string> = {
   halloween: 'The office after dark',
@@ -262,10 +218,10 @@ export class TitleScreen {
   }
 
   private buildControls(): HTMLElement {
-    const modes = Object.keys(CONTROLS) as Mode[];
+    const modes = Object.keys(CONTROLS) as ControlMode[];
     const list = h('dl.title-keys', { id: 'title-keys', role: 'tabpanel' });
     const tabs = modes.map((mode) => h('button.title-tab', { type: 'button', role: 'tab', id: `title-tab-${mode}`, 'aria-controls': 'title-keys', 'aria-selected': 'false', tabindex: -1, onclick: () => show(mode) }, mode));
-    const show = (mode: Mode) => {
+    const show = (mode: ControlMode) => {
       // Roving: only the chosen tab is in the Tab order; the arrows move between them.
       tabs.forEach((t, i) => {
         t.setAttribute('aria-selected', String(modes[i] === mode));

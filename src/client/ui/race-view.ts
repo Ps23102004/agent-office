@@ -66,6 +66,11 @@ export function speedReading(speed: number, top: number, bicycle = false) {
   };
 }
 
+/** Passengers and bicycles have a speed reading, but no boost to use. */
+export function boostAvailable(driving: { bicycle?: boolean; passenger?: boolean; boost?: number } | null): boolean {
+  return !!driving && !driving.bicycle && !driving.passenger && Number.isFinite(driving.boost);
+}
+
 export interface MapPoint { x: number; z: number }
 
 /** Keep the real outline's proportions inside a 160 px square, with room for dots at its edges. */

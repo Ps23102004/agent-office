@@ -1,5 +1,5 @@
 import { h, modalOpen } from './dom';
-import { speedReading } from './race-view';
+import { boostAvailable, speedReading } from './race-view';
 import './map.css';
 
 export interface DrivingGauge {
@@ -9,7 +9,7 @@ export interface DrivingGauge {
   top: number;
   bicycle?: boolean;
   passenger?: boolean;
-  /** Older drivers have no boost yet; the meter stays empty until they do. */
+  /** Only the driver of a car can use the boost. */
   boost?: number;
   boosting?: boolean;
 }
@@ -45,7 +45,9 @@ export class DriveHUD {
   update(driving: DrivingGauge | null) {
     const visible = !!driving && !modalOpen();
     this.el.hidden = !visible;
-    this.effect.hidden = !visible || !driving?.boosting || !!driving.passenger;
+    const canBoost = boostAvailable(driving);
+    const boosting = canBoost && !!driving?.boosting;
+    this.effect.hidden = !visible || !boosting;
     if (!driving || !visible) return;
     const reading = speedReading(driving.speed, driving.top, driving.bicycle);
     text(this.speed, String(reading.kmh));
@@ -54,7 +56,8 @@ export class DriveHUD {
     const boost = Number.isFinite(driving.boost) ? Math.max(0, Math.min(1, driving.boost!)) : 0;
     this.fill.style.transform = `scaleX(${boost})`;
     this.meter.setAttribute('aria-valuenow', String(Math.round(boost * 100)));
-    text(this.boostLabel, driving.boost === undefined ? 'Unavailable' : driving.boosting ? 'Active' : `${Math.round(boost * 100)}% · Shift`);
-    this.el.classList.toggle('boosting', !!driving.boosting && !driving.passenger);
+    this.meter.hidden = !canBoost;
+    text(this.boostLabel, !canBoost ? 'Unavailable' : boosting ? 'Active' : `${Math.round(boost * 100)}% · Shift`);
+    this.el.classList.toggle('boosting', boosting);
   }
 }
