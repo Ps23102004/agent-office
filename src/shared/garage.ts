@@ -5,7 +5,7 @@ import { surfaceAt, type Surface } from './city.js';
 // take them (the garage, the lots round it and the street), and the arcade physics a driver's own
 // page runs. Everyone else on the floor sees the car where its driver says it is.
 
-export type CarKind = 'lambo' | 'ferrari' | 'motorbike' | 'bicycle';
+export type CarKind = 'lambo' | 'ferrari' | 'motorbike' | 'bicycle' | 'sedan-sports' | 'suv' | 'police' | 'taxi' | 'race' | 'race-future';
 
 /** Metres for the body, kg with riders for the mass, m/s at the top, m/s² on the gas, and tire grip. */
 export const SPECS = {
@@ -13,6 +13,13 @@ export const SPECS = {
   ferrari: { length: 4.6, width: 2, body: 0.82, roof: 1.16, mass: 1550, top: 22, accel: 7.6, grip: 1.2, seats: 2, wheelbase: 2.72, reverse: 7 },
   motorbike: { length: 2.2, width: 0.78, body: 0.8, roof: 1.15, mass: 260, top: 24, accel: 6, grip: 1.05, seats: 2, wheelbase: 1.5, reverse: 3 },
   bicycle: { length: 1.85, width: 0.62, body: 0.82, roof: 1.12, mass: 95, top: 7, accel: 1.8, grip: 0.9, seats: 1, wheelbase: 1.12, reverse: 2 },
+  // Kenney's cars (client/world/carkit.ts): their sizes are the models'. `seatZ`/`hips`: where you sit, if not the usual.
+  'sedan-sports': { length: 4.34, width: 1.76, body: 1.08, roof: 1.49, mass: 1350, top: 21, accel: 7.4, grip: 1.12, seats: 2, wheelbase: 2.24, reverse: 7 },
+  suv: { length: 4.59, width: 2.03, body: 1.08, roof: 1.76, mass: 2100, top: 17, accel: 5.6, grip: 1.0, seats: 2, wheelbase: 2.24, reverse: 6 },
+  police: { length: 5.27, width: 2.03, body: 1.08, roof: 1.76, mass: 1750, top: 21, accel: 7, grip: 1.1, seats: 2, wheelbase: 2.75, reverse: 7 },
+  taxi: { length: 4.68, width: 2.03, body: 1.08, roof: 2.03, mass: 1500, top: 16, accel: 5.5, grip: 1.0, seats: 2, wheelbase: 2.58, reverse: 6 },
+  race: { length: 4.35, width: 1.62, body: 0.66, roof: 0.99, mass: 760, top: 26, accel: 10, grip: 1.4, seats: 1, wheelbase: 2.58, reverse: 5, seatZ: -0.35, hips: 0.25 },
+  'race-future': { length: 4.52, width: 1.62, body: 0.8, roof: 1.12, mass: 780, top: 27, accel: 10.4, grip: 1.45, seats: 1, wheelbase: 2.58, reverse: 5, seatZ: -0.45, hips: 0.3 },
 } as const;
 // Older callers mean a Lambo when they don't give a kind.
 export const CAR = SPECS.lambo;
@@ -79,6 +86,12 @@ export const CARS: readonly CarDef[] = [
   { kind: 'motorbike', color: '#4361ee', name: 'Blue Motorbike', x: B.maxX + 3, z: -6, rotY: Math.PI / 2 },
   { kind: 'bicycle', color: '#2a9d8f', name: 'Green Bicycle', x: B.maxX + 3, z: -2, rotY: Math.PI / 2 },
   { kind: 'bicycle', color: '#e9c46a', name: 'Yellow Bicycle', x: B.maxX + 3, z: 2, rotY: Math.PI / 2 },
+  // Kenney's, out on the front lot either side of the door, noses to the street.
+  { kind: 'sedan-sports', color: '#ef233c', name: 'Red Sports Car', x: -21, z: 17.6, rotY: 0 },
+  { kind: 'suv', color: '#2a9d8f', name: 'Green SUV', x: -17.6, z: 17.6, rotY: 0 },
+  { kind: 'police', color: '#ffffff', name: 'Police Car', x: -14.2, z: 17.6, rotY: 0 },
+  { kind: 'taxi', color: '#ffc044', name: 'Taxi', x: 14.5, z: 17.6, rotY: 0 },
+  { kind: 'race', color: '#e63946', name: 'Red Race Car', x: 17.9, z: 17.6, rotY: 0 },
 ];
 
 export type CarSeat = 'driver' | 'passenger';
@@ -91,13 +104,17 @@ export type CarSeat = 'driver' | 'passenger';
 export const SEATS: Record<CarSeat, { x: number; z: number }> = { driver: { x: 0.42, z: -0.5 }, passenger: { x: -0.42, z: -0.5 } };
 export const SEAT_HIPS = 0.45;
 
-/** A saddle runs down the middle; on a motorbike there's room behind you for a passenger. */
+/** A saddle runs down the middle; on a motorbike there's room behind you for a passenger. A single-seater's seat is in the middle too. */
 export function seatOffset(kind: CarKind, seat: CarSeat): { x: number; z: number } {
-  return SPECS[kind].width < 1 ? { x: 0, z: seat === 'driver' ? -0.12 : -0.6 } : SEATS[seat];
+  const spec = SPECS[kind];
+  if (spec.width < 1) return { x: 0, z: seat === 'driver' ? -0.12 : -0.6 };
+  const z = 'seatZ' in spec ? spec.seatZ : SEATS[seat].z;
+  return spec.seats < 2 ? { x: 0, z } : { x: SEATS[seat].x, z };
 }
 
 export function seatHips(kind: CarKind): number {
-  return SPECS[kind].width < 1 ? 0.82 : SEAT_HIPS;
+  const spec = SPECS[kind];
+  return spec.width < 1 ? 0.82 : 'hips' in spec ? spec.hips : SEAT_HIPS;
 }
 
 /** A car where it is and how it's going: `speed` in m/s along its nose (negative in reverse), `steer` the front wheels' angle (+ is left). */

@@ -1,10 +1,22 @@
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
-import { CARS, SPECS, DRIVE_STEP, drive, impact, leanAngle, carFits, type CarPose, type CarKind, type Pedals } from '../src/shared/garage.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { kitModel, setCarKit } from '../src/client/world/carkit.js';
+import { buildStreetLife } from '../src/client/world/streetlife.js';
+import { STREET_Z, citySolids, surfaceAt } from '../src/shared/city.js';
+import { CIRCUIT_CARS } from '../src/shared/circuit.js';
+import { CARS, SPECS, DRIVE_STEP, drive, impact, leanAngle, carFits, overlaps, type CarPose, type CarKind, type Pedals } from '../src/shared/garage.js';
 import { Garage } from '../src/server/garage.js';
 import { Fleet, supercar } from '../src/client/world/cars.js';
 import { STREET_Y } from '../src/shared/layout.js';
+
+// Kenney's cars (cars.glb), in as they are once the page has loaded its models.
+before(async () => {
+  const b = readFileSync(new URL('../src/client/models/cars.glb', import.meta.url));
+  setCarKit((await new GLTFLoader().parseAsync(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), '')).scene);
+});
 
 const still: CarPose = { x: 0, z: 0, rotY: 0, speed: 0, steer: 0 };
 const gas: Pedals = { gas: 1, turn: 0, brake: false };
@@ -76,7 +88,7 @@ test('a bike clears a gap a supercar cannot, and all four new spots are in the s
   const at = { ...still, x: 20 };
   assert.ok(carFits(at, gap, 'bicycle'));
   assert.ok(!carFits(at, gap, 'lambo'));
-  assert.deepEqual(CARS.slice(9).map((c) => c.kind), ['motorbike', 'motorbike', 'bicycle', 'bicycle']);
+  assert.deepEqual(CARS.slice(9, 13).map((c) => c.kind), ['motorbike', 'motorbike', 'bicycle', 'bicycle']);
 });
 
 test('the office accepts old poses, clamps each kind, rejects nonsense slip, and checks bike seats', () => {
@@ -177,9 +189,10 @@ test('at full lean a bike\'s wheels stay on its axles and its rider stays on the
 
 // A car's springs move its body, not its wheels: however it rolls, dives or bobs, the tires stay on the road.
 test('every car tire stays on the ground at speed with steer, and under hard braking', () => {
-  for (const kind of ['lambo', 'ferrari'] as const) {
-    const i = CARS.findIndex((c) => c.kind === kind);
-    const fleet = new Fleet([], []);
+  for (const kind of (Object.keys(SPECS) as CarKind[]).filter((k) => SPECS[k].width >= 1)) {
+    const defs = CARS.some((c) => c.kind === kind) ? CARS : CIRCUIT_CARS;
+    const i = defs.findIndex((c) => c.kind === kind);
+    const fleet = new Fleet([], [], defs);
     const v = fleet.cars[i];
     const low = () => {
       v.root.updateMatrixWorld(true);
@@ -208,4 +221,76 @@ test('every car tire stays on the ground at speed with steer, and under hard bra
     assert.ok(Math.abs(v.body.rotation.x) > 0.01, 'the nose dives');
     step(0, 0, 10);
   }
+});
+
+test("Kenney's cars are drawn from their models, the size their specs say, with the cabin off when someone's in", () => {
+  for (const kind of ['sedan-sports', 'suv', 'police', 'taxi', 'race', 'race-future'] as const) {
+    const m = kitModel(kind);
+    assert.ok(m, `${kind} is in cars.glb`);
+    const spec = SPECS[kind];
+    assert.ok(Math.abs(m.length - spec.length) < 0.05 && Math.abs(m.width - spec.width) < 0.05, `${kind} is ${m.length} x ${m.width}`);
+    assert.ok(Math.abs(m.height - spec.roof) < 0.05, `${kind} roof ${m.height}`);
+    const zs = m.hubs.map((h) => h.z);
+    assert.ok(Math.abs(Math.max(...zs) - Math.min(...zs) - spec.wheelbase) < 0.05, `${kind} wheelbase`);
+    const model = supercar(kind, '#123456');
+    const box = new THREE.Box3().setFromObject(model.root);
+    assert.ok(Math.abs(box.max.z - box.min.z - spec.length) < 0.1, `${kind} model length`);
+    assert.ok(box.min.y > -0.01 && box.min.y < 0.01, `${kind} sits on the road`);
+    if (spec.seats > 1) {
+      // The cabin comes off whole: nothing of it is left above the beltline.
+      model.top.visible = false;
+      // (The two halves share their vertices: only the triangles drawn count.)
+      const shell = (model.body.children[0] as THREE.Mesh).geometry;
+      let high = 0;
+      for (let n = 0; n < shell.index!.count; n++) high = Math.max(high, shell.attributes.position.getY(shell.index!.getX(n)));
+      assert.ok(high < m.belt + 0.45, `${kind} body without its cabin is ${high} high`);
+    }
+  }
+  // Parked off the road (traffic would drive into them), clear of the city's lamps, trees and buildings.
+  const parked = CARS.filter((c) => c.kind !== 'lambo' && c.kind !== 'ferrari' && SPECS[c.kind].width >= 1);
+  assert.ok(parked.length >= 5, 'Kenney cars parked by the garage');
+  for (const c of parked) {
+    assert.notEqual(surfaceAt(c.x, c.z), 'road', `${c.name} is off the road`);
+    assert.ok(!citySolids(c.x, c.z, 6).some((b) => overlaps(c, b, c.kind)), `${c.name} is clear of the city`);
+  }
+});
+
+test("the street's traffic is one batch of Kenney's models, wheels on the road through a minute of driving", () => {
+  const life = buildStreetLife();
+  let meshes = 0;
+  let batch: THREE.BatchedMesh | undefined;
+  life.group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) meshes++;
+    if ((o as THREE.BatchedMesh).isBatchedMesh) batch = o as THREE.BatchedMesh;
+  });
+  assert.ok(batch && meshes <= 16, `${meshes} draw calls`);
+  const near = { x: 0, z: STREET_Z };
+  let t = 1000;
+  const pos = batch.geometry.attributes.position;
+  const m = new THREE.Matrix4();
+  const v = new THREE.Vector3();
+  let wheels = 0;
+  for (let i = 0; i < 30 * 60; i++) {
+    t += 1 / 30;
+    life.update(t, 1 / 30, 1, near, [{ x: near.x, z: near.z, vx: 0, vz: 0 }], 17.5);
+    if (i % 90) continue;
+    for (let id = 0; id < batch.maxInstanceCount; id++) {
+      if (!batch.getVisibleAt(id)) continue;
+      const range = batch.getGeometryRangeAt(batch.getGeometryIdAt(id));
+      batch.getMatrixAt(id, m);
+      let low = Infinity;
+      let local = Infinity;
+      for (let n = range.vertexStart; n < range.vertexStart + range.vertexCount; n++) {
+        v.fromBufferAttribute(pos, n);
+        local = Math.min(local, v.y);
+        low = Math.min(low, v.applyMatrix4(m).y);
+      }
+      // A wheel's mesh is about its hub (it goes below its origin); a body's sits on it.
+      if (local < -0.1) {
+        wheels++;
+        assert.ok(Math.abs(low) < 0.01, `a wheel ${low} m off the road`);
+      } else assert.ok(low > -0.03, `a body ${low} m into the road`);
+    }
+  }
+  assert.ok(wheels > 40, `${wheels} wheels seen`);
 });

@@ -4,6 +4,8 @@ import { citySolids } from '../../shared/city';
 import { FLOOR, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
 import type { Collider, Interactable } from './office';
 import { mergeByMaterial, mergeColored, mesh, toon } from './toon';
+import { kitMaterial, kitModel, type KitModel, type KitName } from './carkit';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const WIDTH = 1.9;
 const WHEEL_R = 0.37;
@@ -100,6 +102,9 @@ export interface CarModel {
  */
 export function supercar(kind: CarKind, color: string): CarModel {
   if (kind === 'motorbike' || kind === 'bicycle') return bike(kind, color);
+  const kit = kind === 'lambo' || kind === 'ferrari' ? null : kitModel(kind satisfies KitName);
+  if (kit) return kitCar(kind, kit, color);
+  // A Kenney car before its model's in (or if it never loads): drawn as a Ferrari of its size.
   const g = new THREE.Group();
   const lights = new THREE.Group();
   const paint = toon(color);
@@ -109,7 +114,7 @@ export function supercar(kind: CarKind, color: string): CarModel {
   const lamp = toon('#fff6c9', { emissive: '#b8a960' });
   const tail = toon('#ff2d3f', { emissive: '#a3001a' });
   const dark = toon('#2b2d42');
-  const { body, cabin, axle, screen } = profiles(kind);
+  const { body, cabin, axle, screen } = profiles(kind === 'lambo' ? 'lambo' : 'ferrari');
   g.add(mesh(extrude(body, WIDTH, 0.05), paint));
   const wheel = (x: number, z: number) => {
     const w = new THREE.Group();
@@ -201,6 +206,113 @@ export function supercar(kind: CarKind, color: string): CarModel {
   bodyGroup.add(packed(g, true), mergeByMaterial(lights), top, inside);
   root.add(bodyGroup, ...wheels);
   return { root, body: bodyGroup, top, open: inside, wheels };
+}
+
+const unlit = new THREE.MeshBasicMaterial({ vertexColors: true });
+
+/** Boxes in the colors given, as one geometry with its colors in its vertices (for `unlit`). */
+function lamps(boxes: { at: readonly number[]; size: [number, number, number]; color: string }[]): THREE.BufferGeometry | null {
+  if (!boxes.length) return null;
+  return mergeGeometries(boxes.map(({ at, size, color }) => {
+    const g = new THREE.BoxGeometry(...size).translate(at[0], at[1], at[2]);
+    g.deleteAttribute('uv');
+    const c = new THREE.Color(color);
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).map((_, i) => [c.r, c.g, c.b][i % 3]), 3));
+    return g;
+  }))!;
+}
+
+/** Triangles wholly above `belt` (the cabin: pillars, glass and roof) and the rest, sharing the vertices. */
+function cut(geo: THREE.BufferGeometry, belt: number): [THREE.BufferGeometry, THREE.BufferGeometry] {
+  const y = geo.attributes.position;
+  const idx = geo.index!;
+  const low: number[] = [], high: number[] = [];
+  for (let i = 0; i < idx.count; i += 3) {
+    const t = [idx.getX(i), idx.getX(i + 1), idx.getX(i + 2)];
+    const ys = t.map((v) => y.getY(v));
+    (Math.min(...ys) > belt - 0.02 && (ys[0] + ys[1] + ys[2]) / 3 > belt + 0.05 ? high : low).push(...t);
+  }
+  const part = (list: number[]) => {
+    const g = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(geo.attributes)) g.setAttribute(k, a);
+    g.setIndex(list);
+    return g;
+  };
+  return [part(low), part(high)];
+}
+
+/**
+ * One of Kenney's cars (client/world/carkit.ts), its paint in `color`. Off comes the cabin when somebody
+ * gets in (a single-seater's open already): a dark floor where it was, and seats and a wheel.
+ */
+function kitCar(kind: CarKind, m: KitModel, color: string): CarModel {
+  const spec = SPECS[kind];
+  const mat = kitMaterial();
+  let paint: THREE.BufferGeometry | null = null;
+  if (m.paint) {
+    paint = m.paint.clone();
+    const c = new THREE.Color(color);
+    const col = paint.attributes.color;
+    for (let i = 0; i < col.count; i++) col.setXYZ(i, col.getX(i) * c.r, col.getY(i) * c.g, col.getZ(i) * c.b);
+  }
+  const whole = paint ? mergeGeometries([m.body, paint])! : m.body.clone();
+  const single = spec.seats < 2;
+  const [low, high] = single ? [whole, new THREE.BufferGeometry()] : cut(whole, m.belt);
+  const top = new THREE.Group();
+  if (!single) top.add(mesh(high, mat));
+
+  const open = new THREE.Group();
+  const dark = toon('#2b2d42');
+  const seatColor = toon('#d8cbb3');
+  const inside = new THREE.Group();
+  const [z0, z1] = m.cabin;
+  if (!single) inside.add(mesh(new THREE.BoxGeometry(m.width - 0.4, 0.06, Math.max(0.5, z1 - z0 - 0.2)), dark, 0, m.belt - 0.06, (z0 + z1) / 2, false));
+  const hips = seatHips(kind);
+  for (const seat of single ? (['driver'] as const) : (['driver', 'passenger'] as const)) {
+    const s = seatOffset(kind, seat);
+    if (!single) {
+      const back = mesh(new THREE.BoxGeometry(0.5, 0.6, 0.1), seatColor, s.x, hips + 0.45, s.z - 0.34, false);
+      back.rotation.x = -0.18;
+      inside.add(back, mesh(new THREE.BoxGeometry(0.5, 0.1, 0.52), seatColor, s.x, hips + 0.05, s.z, false));
+    }
+    if (seat === 'driver') {
+      const hoop = mesh(new THREE.TorusGeometry(0.16, 0.028, 6, 18), dark, s.x, hips + 0.53, s.z + 0.5, false);
+      hoop.rotation.x = -0.45;
+      inside.add(hoop);
+    }
+  }
+  open.add(packed(inside));
+  open.visible = false;
+
+  const lights = new THREE.Group();
+  const glow = lamps([
+    ...m.head.map((at) => ({ at, size: [0.34, 0.14, 0.05] as [number, number, number], color: '#fff6c9' })),
+    ...m.tail.map((at) => ({ at, size: [0.3, 0.12, 0.05] as [number, number, number], color: '#ff2d3f' })),
+  ]);
+  if (glow) lights.add(mesh(glow, unlit, 0, 0, 0, false));
+  // The roof lights go with the roof.
+  const bar = lamps(m.beacons.map((b) => ({ at: b.at, size: [0.22, 0.14, 0.2], color: b.color === 'red' ? '#ff2d3f' : '#3d7bff' })));
+  if (bar) (single ? lights : top).add(mesh(bar, unlit, 0, 0, 0, false));
+
+  const wheels = m.hubs.map((h) => {
+    const tyre = mesh(m.wheel, mat, 0, 0, 0, false);
+    // The model's wheel is a right-hand one: turned round for the left.
+    if (h.x > 0) tyre.rotation.y = Math.PI;
+    const spin = new THREE.Group();
+    spin.add(tyre);
+    const pivot = new THREE.Group();
+    pivot.position.set(h.x, h.y, h.z);
+    pivot.userData.front = h.front;
+    pivot.userData.radius = m.radius;
+    pivot.add(spin);
+    return pivot;
+  });
+
+  const body = new THREE.Group();
+  body.add(mesh(low, mat), lights, top, open);
+  const root = new THREE.Group();
+  root.add(body, ...wheels);
+  return { root, body, top, open, wheels };
 }
 
 /** Plain colors share one mesh, even on the moving wheels; lights keep their emissive materials. */
