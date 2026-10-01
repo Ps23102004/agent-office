@@ -3,6 +3,7 @@ import type { PeerInfo } from '../../shared/protocol';
 import { ROOF } from '../../shared/rooftop';
 import { CARS, type CarSeat } from '../../shared/garage';
 import { CIRCUIT, CIRCUIT_CARS } from '../../shared/circuit';
+import { ARENA } from '../../shared/arena';
 import { seatOn, type MapPlan } from '../../shared/maps';
 import { store } from '../state';
 import { venueAt } from '../../shared/venues';
@@ -17,6 +18,7 @@ export function whereabouts(p: PeerInfo, car?: { car: number; seat: CarSeat }, p
   if (p.doing) return p.doing;
   // Not standing anywhere: in on the 2D view, from a phone, say.
   if (p.lite) return '📱 on the 2D view';
+  if (p.floor === ARENA) return '🎯 fighting in the arena';
   // In one of the garage's cars (see Store.carOf), or the race circuit's.
   const def = car && (p.floor === CIRCUIT ? CIRCUIT_CARS : CARS)[car.car];
   if (def) return `🏎️ ${car.seat === 'driver' ? 'driving' : 'riding in'} the ${def.name}`;

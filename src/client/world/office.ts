@@ -6,6 +6,7 @@ import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { buildStreetLife, type StreetLife } from './streetlife';
 import { buildCityGate } from './circuit';
+import { buildArenaCityGate } from './arena';
 import { Fleet } from './cars';
 import { mergeByMaterial, mergeColored, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 import { ART_COUNT, blinds, blobShadows, onWallAt, setShadowFloors, userFrames, wallArt, type ArtItem, type Blob, type BlindItem } from './detail';
@@ -1564,6 +1565,11 @@ export function buildOffice(): Office {
   raceGate.group.position.y = STREET_Y;
   ground.add(raceGate.group);
   groundColliders.push(...raceGate.colliders);
+  // The arena's gate beside it (world/arena.ts).
+  const arenaGate = buildArenaCityGate(STREET_Y);
+  arenaGate.group.position.y = STREET_Y;
+  ground.add(arenaGate.group);
+  groundColliders.push(...arenaGate.colliders);
   // W6: the café and the bar a block east, on the street (world/venues.ts).
   const venues = buildVenues(night);
   venues.group.position.y = STREET_Y;
@@ -1992,6 +1998,7 @@ export function buildOffice(): Office {
 
   const update = (t: number, dt: number, people: Iterable<{ x: number; y: number; z: number }>) => {
     raceGate.update(t);
+    arenaGate.update(t);
     const crowd = [...people];
     venues.update(t, dt, crowd);
     const near = new Set<Door>();

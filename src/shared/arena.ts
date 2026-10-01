@@ -135,10 +135,10 @@ export const RULES = {
 
 /** Where someone stands, and how tall they are to be hit (m): a body up to HEAD_Y, then the head. */
 export const BODY_R = 0.42;
-export const BODY_H = 1.8;
-export const HEAD_Y = 1.45;
+export const BODY_H = 1.75;
+export const HEAD_Y = 1.3;
 /** Where the eyes are, above the feet: where a shot leaves from. */
-export const EYE_Y = 1.6;
+export const EYE_Y = 1.4;
 
 export type ArenaPhase = 'warmup' | 'live' | 'over';
 

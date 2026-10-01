@@ -46,6 +46,8 @@ interface Arm {
 export class Hands {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(55, 1, 0.01, 5);
+  /** Holding the arena's rifle (client/arena.ts): where each hand goes on it, set each frame. */
+  gunPose: { right: THREE.Vector3; left: THREE.Vector3 } | null = null;
   private sleeve: THREE.MeshToonMaterial;
   private skin: THREE.MeshToonMaterial;
   private right: Arm;
@@ -478,6 +480,13 @@ export class Hands {
     }
     if (this.emoting) this.emoteStep(dt, l);
     if (this.costume === 'halloween') this.burn(t);
+    // On the rifle: the right hand round its grip, the left under its handguard, reaching forward.
+    if (this.gunPose) {
+      r.position.copy(this.gunPose.right);
+      r.rotation.set(0.15, 0.05, -0.5);
+      l.position.copy(this.gunPose.left);
+      l.rotation.set(0.3, -0.25, 1.1);
+    }
   }
 
   /** Moves the hands (already placed for this frame) through the emote. */

@@ -11,10 +11,11 @@ import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { BallState } from '../shared/hoop';
 import { parked, type CarSeat, type CarState } from '../shared/garage';
 import { CIRCUIT } from '../shared/circuit';
+import { ARENA, idleArena, type ArenaState } from '../shared/arena';
 import { idleRace, type RaceState } from '../shared/race';
 import { OFFICE_MAP, planOf, type MapPlan } from '../shared/maps';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars' | 'race' | 'ride';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'floorPlan' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'signins' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'map' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'prompts' | 'ball' | 'cars' | 'race' | 'ride' | 'arena';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -240,6 +241,8 @@ class Store {
   carsAt: number[] = [];
   /** The race at the circuit (shared/race.ts), as the office last said, wherever you are. */
   race: RaceState = idleRace();
+  /** The arena's match (shared/arena.ts), while you're in it. */
+  arena: ArenaState = idleArena();
   /** A ride a driver nearby offered you (car.invited), until you answer or `until` (office clock) passes; see client/together.ts. */
   rideOffer: { from: string; name: string; car: number; until: number } | null = null;
   /** Outside the windows; null until the server says. */
@@ -311,7 +314,7 @@ class Store {
   private enter(v: FloorView) {
     this.floor = v.floor;
     // The race circuit isn't somewhere to come back to after a reload: you're back by its gate in the city.
-    if (v.floor !== CIRCUIT) rememberFloor(v.floor);
+    if (v.floor !== CIRCUIT && v.floor !== ARENA) rememberFloor(v.floor);
     this.project = v.project;
     this.workers = new Map(v.workers.map((w) => [w.id, w]));
     this.screens.clear(); // fresh full frames follow
@@ -551,6 +554,10 @@ class Store {
       case 'race':
         this.race = msg.state;
         this.emit('race');
+        break;
+      case 'arena':
+        this.arena = msg.state;
+        this.emit('arena');
         break;
       case 'car.invited':
         this.rideOffer = { from: msg.from, name: msg.name, car: msg.car, until: msg.until };
