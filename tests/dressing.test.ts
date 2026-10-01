@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { citySolids, cityDressing, surfaceAt } from '../src/shared/city.js';
+import { citySolids, cityDressing, solidHeight, surfaceAt } from '../src/shared/city.js';
 import { DRESS_RADIUS } from '../src/shared/dressing.js';
 
 const d = cityDressing();
@@ -41,5 +41,18 @@ test('birds stand on a sidewalk or the sand, never in a building', () => {
   for (const b of d.birds) {
     if (b.orbit) continue;
     assert.ok(['walk', 'sand'].includes(surfaceAt(b.x, b.z)), `${b.kind} at ${b.x.toFixed(1)}, ${b.z.toFixed(1)} on ${surfaceAt(b.x, b.z)}`);
+  }
+});
+
+test('a parasol stands by its shop, off the walking line, and roadworks are solid but hoppable', async () => {
+  const { cityLayout } = await import('../src/shared/city.js');
+  const shops = cityLayout().lots.filter((l) => l.kind === 'shop' && !l.hand);
+  for (const p of d.items.filter((i) => i.kind === 'parasol')) {
+    assert.ok(shops.some((l) => Math.hypot(l.x - p.x, l.z - p.z) < Math.max(l.w, l.d) / 2 + 12), `parasol at ${p.x.toFixed(1)}, ${p.z.toFixed(1)} is far from any shop`);
+  }
+  for (const i of d.items.filter((i) => i.kind === 'cone' || i.kind === 'barrier')) {
+    const hit = citySolids(i.x, i.z, 0.1).find((a) => i.x > a.minX && i.x < a.maxX && i.z > a.minZ && i.z < a.maxZ);
+    assert.ok(hit, `${i.kind} is solid`);
+    assert.ok(solidHeight(hit) <= 0.5, `${i.kind} can be hopped`);
   }
 });

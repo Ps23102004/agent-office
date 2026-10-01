@@ -16,6 +16,7 @@ import { Climber, gripOf, type Arrival, type Grip, type Way } from './climb';
 import { Driver } from './driving';
 import { Caffeine } from './caffeine';
 import { buildOffice, type DeskView, type InteractKind, type Interactable } from './world/office';
+import { focus as dressingFocus } from './world/dressing';
 import { officeWorld, type World } from './world/world';
 import { BUILDERS } from './world/styles';
 import { Court } from './world/court';
@@ -5012,6 +5013,7 @@ function frame(ts?: number) {
     const pose = driver.driving ? driver.pose : null;
     const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
+    dressingFocus.x = pose ? pose.x : player.pos.x; dressingFocus.z = pose ? pose.z : player.pos.z; dressingFocus.on = true; // the birds fly off from you
     office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid, sky.clockHour()); // W3: people and traffic keep the office's hours
     if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[carDefs()[driver.car!].kind].length) / 2), Math.abs(pose.speed));
   }
