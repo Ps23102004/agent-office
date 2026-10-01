@@ -852,7 +852,7 @@ export function buildVenues(night: NightParts): Venues {
       ])
         lampAt(x, z, 2.55);
       // A warm pool of light at night (sky.ts), short enough to stay inside the walls.
-      night.lamps.push({ x: 68, y: STREET_Y + 2.4, z: 11, reach: 5.2, color: '#ffcf8a', power: 2.4, ground: true });
+      night.lamps.push({ x: 68, y: STREET_Y + 2.4, z: 11, reach: 5.2, color: '#ffcf8a', power: 3.8, ground: true });
       // The people: the barista behind the counter, a couple at the far table (one with a book), someone at the window.
       staff = person('Barista', '#6f4e37', 'barista-mo');
       staff.root.position.set(69, 0, 6.7);
@@ -950,7 +950,7 @@ export function buildVenues(night: NightParts): Venues {
       for (const z of [40.6, 44, 47.4]) lampAt(72.6, z, 2.4);
       lampAt(66, 41.8, 2.6);
       lampAt(66, 46.6, 2.6);
-      night.lamps.push({ x: 68, y: STREET_Y + 2.6, z: 44, reach: 6.5, color: '#ffb86b', power: 2.4, ground: true });
+      night.lamps.push({ x: 68, y: STREET_Y + 2.6, z: 44, reach: 6.5, color: '#ffb86b', power: 3.4, ground: true });
       // The people: the bartender, someone at the end of the bar, a couple in the far booth, one standing at a table.
       staff = person('Bartender', '#2b2d42', 'bartender-jo');
       staff.root.position.set(75.2, 0, 44);
