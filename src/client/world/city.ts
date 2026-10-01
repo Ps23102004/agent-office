@@ -6,7 +6,7 @@ import { mergeByMaterial, mesh, textPlane, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
 import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, cityLayout, cityStreetscape, lightPhase, parkHedges, rng, type Light, type Lot } from '../../shared/city';
 import { buildIsland } from './ocean';
-import { buildDressing, type Canopy, type Fringe } from './dressing';
+import type { Canopy, Fringe } from './dressing';
 
 // The city around the rooftop bar: the building's own floors going down to the street (as the tower
 // looks from outside, world/tower.ts), a grid of streets with cars running along them, parks, and
@@ -1106,8 +1106,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   // Everything vertex-colored (trees' trunks, roofs, furniture, gas station...) in the one mesh.
   group.add(soup.mesh());
-  // The finishing touches: signs, parasols, flags, swaying trees and awnings, birds (world/dressing.ts).
-  group.add(buildDressing(canopies, fringes));
+  // Signs, parasols, flags and birds (world/dressing.ts), loaded once the city's up: their models come in as files, so the module stays out of the first download (and out of the tests).
+  void import('./dressing').then(({ buildDressing }) => group.add(buildDressing(canopies, fringes)));
 
   // The red lights blinking on the masts, and the street lamps' glow, brighter with the dark.
   const beaconMat = new THREE.PointsMaterial({ size: 5, map: glow, color: '#ff3b30', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
