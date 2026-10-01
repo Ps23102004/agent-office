@@ -395,6 +395,8 @@ function syncRoof() {
 store.on('floors', syncRoof);
 /** Where you are now: up on the roof (true), or on a floor of the office. */
 let upTop = false;
+/** The island's shown for the title's flight, whatever floor you're on. */
+let titleIsland = false;
 
 // ---- W2: the race circuit ----------------------------------------------------------------------------
 /** At the race circuit (shared/circuit.ts): a place of its own, like the roof, through a gate in the city. */
@@ -5265,7 +5267,17 @@ function frame(ts?: number) {
     }, 700);
   }
   // W1 island: down on the street the camera sees out past the haze to the sea's horizon (world/ocean.ts fades the sea out before it).
-  if (!upTop && !away()) {
+  // The title flies round the island wherever you left off (the roof, the circuit, the arena): the island shows till Play.
+  const flying = !!title?.active;
+  if (flying !== titleIsland) {
+    titleIsland = flying;
+    world.group.visible = flying || (!upTop && !away());
+    holiday.group.visible = flying ? inOffice() : inOffice() && !upTop && !away();
+    if (roof) roof.group.visible = !flying && upTop;
+    if (circuit) circuit.group.visible = !flying && atCircuit;
+    if (arenaWorld) arenaWorld.group.visible = !flying && atArena;
+  }
+  if (flying || (!upTop && !away())) {
     const far = title?.active || (inOffice() && Math.abs(player.pos.y - player.street) < 3) ? SHORE_FAR : FAR;
     if (camera.far !== far) {
       camera.far = far;
