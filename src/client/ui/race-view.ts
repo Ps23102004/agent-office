@@ -1,4 +1,24 @@
-import { RACE, type Racer, type RaceState } from '../../shared/race';
+import { CHECKPOINTS } from '../../shared/circuit';
+import { RACE, SECTORS, type Racer, type RaceState, type Timing } from '../../shared/race';
+
+/** Signed office-timed sector difference. A missing comparison isn't a zero. */
+export function sectorDelta(ms?: number): string {
+  if (ms === undefined || !Number.isFinite(ms)) return 'No previous best';
+  if (ms === 0) return 'Same as best';
+  return `${ms < 0 ? '−' : '+'}${(Math.abs(ms) / 1000).toFixed(2)}s`;
+}
+
+/** Only active drivers get guidance; the finish line is checkpoint zero. */
+export function checkpointHint(timing?: Timing): string {
+  if (!timing) return 'Drive a circuit car to practise';
+  const next = (timing.checkpoint + 1) % CHECKPOINTS;
+  return timing.checkpoint < 0 ? 'Cross the start line to begin' : next === 0 ? 'Next: start / finish line' : `Next: checkpoint ${next} / ${CHECKPOINTS - 1}`;
+}
+
+/** The office's completed sector times and session bests; no locally predicted splits. */
+export function sectorReadings(timing?: Timing): string[] {
+  return SECTORS.map((_, i) => `S${i + 1} · ${raceTime(timing?.sectors?.[i])} · best ${raceTime(timing?.bestSectors?.[i] ?? undefined)}`);
+}
 
 /** Race clocks use whole hundredths, so they never round up into the next minute. */
 export function raceTime(ms?: number): string {

@@ -1159,10 +1159,10 @@ function meetTick() {
 }
 
 wireTogether({ send: (msg) => net.send(msg), go: meetGo, readyToRide });
-// A ride offered: a word, and the palette has the answers (Sol's Hang out window will too).
+// A ride offered: both Hang out and the palette have the answers.
 store.on('ride', () => {
   const o = rideOffer();
-  if (o) toast(`🚗 ${o.name} offers you a ride: ${IS_MAC ? '⌘K' : 'Ctrl+K'} → Accept ride`);
+  if (o) toast(`🚗 ${o.name} offers you a ride: open Hang out, or ${IS_MAC ? '⌘K' : 'Ctrl+K'} → Accept ride`);
 });
 
 // The race (shared/race.ts). Its panel and HUD are ui/race.ts's; until then, R in a car and a toast or two.
