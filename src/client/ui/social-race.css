@@ -1,0 +1,23 @@
+/* W9 stays in the screen-space UI: the existing paper and ink palette, no renderer cost. */
+.hangout-meets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.hangout-meets .btn { white-space: normal; text-align: left; }
+.hangout-ride { padding: 12px; margin: 16px 0; border: 2px solid var(--ink); border-radius: 8px; background: var(--paper-2); }
+.hangout-ride p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.hangout-person-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.race-practice { border-top: 1px solid var(--ink); margin-top: 14px; padding-top: 10px; }
+.race-practice h3 { margin: 0 0 8px; }
+.race-practice .note { margin-bottom: 0; }
+.race-coach { font-weight: 800; margin: 10px 0 6px; }
+.race-sectors { list-style: none; padding: 0; margin: 8px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.race-sectors li { padding: 4px 0; }
+#hud > .race-hud { pointer-events: auto; }
+.race-hud .race-sectors { font-size: 11px; }
+.race-hud .race-coach, .race-hud .race-split { font-size: 12px; }
+.race-split { font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.race-split[data-trend="quicker"] { color: #176237; }
+.race-split[data-trend="slower"] { color: #913718; }
+.race-hud [aria-label="Your practice laps"] > div:last-child { grid-column: auto; }
+@media (max-width: 520px) {
+  .hangout-meets { grid-template-columns: 1fr; }
+  .hangout-person-actions { width: 100%; }
+}

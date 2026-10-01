@@ -1,9 +1,10 @@
-import { RACE } from '../../shared/race';
+import { RACE, SECTORS, type Timing } from '../../shared/race';
 import { store } from '../state';
 import { h, modalOpen, openModal, type Modal } from './dom';
 import { focusDialog } from './dialog-focus';
 import type { CircuitMap, RaceAdapter } from './race-adapter';
-import { countdownLights, mapProjection, raceGap, raceOrder, raceTime, speedReading } from './race-view';
+import { checkpointHint, countdownLights, mapProjection, raceGap, raceOrder, raceTime, sectorDelta, sectorReadings, speedReading } from './race-view';
+import './social-race.css';
 
 export interface DrivingGauge {
   name: string;
@@ -17,6 +18,15 @@ export interface DrivingGauge {
 const text = (el: HTMLElement, value: string) => { if (el.textContent !== value) el.textContent = value; };
 const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] => document.createElementNS('http://www.w3.org/2000/svg', tag);
 
+/** Text changes only when the office reports a split; clock ticks don't trigger announcements. */
+function renderSplit(el: HTMLElement, timing?: Timing) {
+  const split = timing?.lastSplit;
+  text(el, split ? `Last split · S${split.sector + 1} · ${raceTime(split.ms)} · ${sectorDelta(split.delta)}` : 'Cross sector lines for timed splits');
+  el.dataset.trend = split?.delta === undefined || split.delta === 0 ? 'neutral' : split.delta < 0 ? 'quicker' : 'slower';
+}
+
+const practiceScope = () => store.me.account ? 'Account bests are kept while this office is running. Sector bests are from this time out.' : 'Guest laps and bests are only from this time out; they aren’t kept when you leave practice.';
+
 /** Screen-space only: no Three.js meshes, textures, draw calls or separate animation loop. */
 export class RaceUI {
   private readonly status = h('span', { role: 'status', 'aria-live': 'polite' });
@@ -29,12 +39,27 @@ export class RaceUI {
   private readonly live = h('dl.race-metrics', {}, ...[
     ['Position', this.position], ['Lap', this.lap], ['This lap', this.clock], ['Best lap', this.best], ['Gap to leader', this.gap],
   ].map(([label, value]) => h('div', {}, h('dt', {}, label as string), h('dd', {}, value as HTMLElement))));
+  private readonly practiceLaps = h('strong');
+  private readonly practiceClock = h('strong');
+  private readonly practiceLast = h('strong');
+  private readonly practiceBest = h('strong');
+  private readonly practiceBestLabel = h('dt', {}, 'Practice best');
+  private readonly practice = h('dl.race-metrics.hidden', { 'aria-label': 'Your practice laps' },
+    h('div', {}, h('dt', {}, 'Laps completed'), h('dd', {}, this.practiceLaps)),
+    h('div', {}, h('dt', {}, 'This lap'), h('dd', {}, this.practiceClock)),
+    h('div', {}, h('dt', {}, 'Last lap'), h('dd', {}, this.practiceLast)),
+    h('div', {}, this.practiceBestLabel, h('dd', {}, this.practiceBest)));
+  private readonly coach = h('p.race-coach', { role: 'status', 'aria-live': 'polite' });
+  private readonly split = h('p.race-split', { role: 'status', 'aria-live': 'polite' });
+  private readonly sectorTimes = SECTORS.map(() => h('li'));
+  private readonly sectors = h('ul.race-sectors', { 'aria-label': 'Sector times and bests' }, ...this.sectorTimes);
+  private readonly timing = h('div', {}, this.coach, this.split, this.sectors);
   private readonly svg = svgEl('svg');
   private readonly path = svgEl('path');
   private readonly marks = new Map<string, SVGCircleElement>();
   private readonly mapNote = h('span.race-map-note', {}, 'Map unavailable');
   private readonly map = h('figure.race-map', {}, this.svg, h('figcaption', {}, 'Circuit · ', this.mapNote));
-  private readonly hud = h('section.panel.race-hud.hidden', { 'aria-label': 'Race' }, h('div.race-hud-head', {}, this.open, this.status), this.live, this.map);
+  private readonly hud = h('section.panel.race-hud.hidden', { 'aria-label': 'Race and practice' }, h('div.race-hud-head', {}, this.open, this.status), this.live, this.practice, this.timing, this.map);
   private readonly lights = Array.from({ length: RACE.countdown }, () => h('i'));
   private readonly lightText = h('strong', { role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' });
   private readonly countdown = h('div.race-countdown.hidden', { 'aria-label': 'Start lights' }, h('div.race-lights', { 'aria-hidden': 'true' }, ...this.lights), this.lightText);
@@ -68,12 +93,19 @@ export class RaceUI {
     const summary = h('p.race-summary', { role: 'status', 'aria-live': 'polite' });
     const list = h('div.race-roster');
     const record = h('p.race-record');
+    const practiceSummary = h('p');
+    const practiceRecord = h('p.race-record');
+    const practiceHelp = h('p.note');
+    const practiceSplit = h('p.race-split', { role: 'status', 'aria-live': 'polite' });
+    const practiceSectors = SECTORS.map(() => h('li'));
+    const practicePanel = h('section.race-practice', { 'aria-label': 'Practice laps' }, h('h3', {}, '⏱ Practice laps'), practiceSummary, practiceSplit,
+      h('ul.race-sectors', { 'aria-label': 'Your practice sector times' }, ...practiceSectors), practiceRecord, practiceHelp);
     const join = h('button.btn', { type: 'button', onclick: () => this.source.joinGrid() }, 'Join grid');
     const start = h('button.btn', { type: 'button', onclick: () => this.source.startRace() }, 'Start race');
     const leave = h('button.btn', { type: 'button', onclick: () => this.source.leaveRace() }, 'Leave race');
     const notice = h('p.note');
     const el = h('div.modal.race-window', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Race lobby and results' },
-      h('header', {}, heading), h('div.body', {}, summary, notice, list, record),
+      h('header', {}, heading), h('div.body', {}, summary, notice, list, record, practicePanel),
       h('footer', {}, join, start, leave));
     let signature = '';
     const render = () => {
@@ -83,17 +115,25 @@ export class RaceUI {
       const available = this.source.available();
       const liningUp = s.phase === 'idle' || s.phase === 'lobby';
       join.disabled = !available || !at || !liningUp || !!mine || s.racers.length >= RACE.slots;
-      start.disabled = !available || !at || !liningUp || s.racers.length < 1;
-      leave.disabled = !available || !mine;
+      start.disabled = !available || !at || s.phase !== 'lobby' || !mine;
+      leave.disabled = !available || !mine || s.phase === 'finished' || mine.finishedAt !== undefined;
       text(join, mine ? 'On the grid' : s.racers.length >= RACE.slots ? 'Grid full' : 'Join grid');
       const finished = s.phase === 'finished';
       const running = s.phase === 'racing';
       const phase = { idle: 'Ready to line up', lobby: 'Lining up', countdown: 'Getting ready', racing: 'Race in progress', finished: 'Finished' }[s.phase];
       text(heading, finished ? '🏁 Race results' : '🏁 Race lobby');
       text(summary, finished ? 'Everyone is in, or the finish window has closed.' : `${s.laps} laps · ${s.racers.length}/${RACE.slots} on the grid · ${phase}`);
-      text(notice, !available ? 'The circuit is not ready yet.' : !at ? 'Head through the city’s circuit gate to join the grid.' : liningUp ? 'Join the grid, then anyone here can start the race. Five red lights, then go.' : s.phase === 'countdown' ? 'Get ready. The lights go out together.' : finished ? 'Best laps and the circuit record are below.' : 'The race is on. You can watch, or leave your race.');
+      text(notice, !available ? 'The circuit is not ready yet.' : !at ? 'Head through the city’s circuit gate to join the grid.' : finished ? 'Best laps and the circuit record are below. The grid opens again when these results clear.' : liningUp ? 'Join the grid, then anyone on the grid can start the race. Five red lights, then go.' : s.phase === 'countdown' ? 'Get ready. The lights go out together.' : 'The race is on. You can watch, or leave your race.');
       text(record, s.record ? `🏆 Circuit record · ${s.record.name} · ${raceTime(s.record.ms)}` : '🏆 Circuit record · No complete lap yet');
-      const next = JSON.stringify([s, available, at, store.you]);
+      const p = s.practice.find((p) => p.id === store.you);
+      text(practiceSummary, p ? `${p.laps} completed · last ${raceTime(p.lastLap)} · ${store.me.account ? 'account' : 'session'} best ${raceTime(p.bestLap)} · ${checkpointHint(p)}` : !available ? 'The circuit is not ready yet.' : mine ? 'Leave the race, then drive through the start line to practise.' : 'Drive a circuit car through the start line to begin. Follow the checkpoints in order; practice laps start automatically outside your race.');
+      renderSplit(practiceSplit, p);
+      practiceSplit.classList.toggle('hidden', !p);
+      const readings = sectorReadings(p);
+      practiceSectors.forEach((el, i) => { text(el, readings[i]); el.classList.toggle('hidden', !p); });
+      text(practiceRecord, s.practiceRecord ? `Practice record · ${s.practiceRecord.name} · ${raceTime(s.practiceRecord.ms)}` : 'Practice record · No account lap yet');
+      text(practiceHelp, practiceScope());
+      const next = JSON.stringify([s.phase, s.laps, s.racers, available, at, store.you]);
       if (signature === next) return;
       signature = next;
       const racers = finished || s.phase === 'racing' ? raceOrder(s) : [...s.racers].sort((a, b) => a.slot - b.slot);
@@ -128,6 +168,8 @@ export class RaceUI {
     const now = this.source.now();
     const here = this.source.available() && this.source.atCircuit();
     const mine = s.racers.find((r) => r.id === store.you);
+    const p = !mine ? s.practice.find((p) => p.id === store.you) : undefined;
+    const activeTiming = mine ? s.phase === 'racing' && mine.finishedAt === undefined ? mine : undefined : p;
     if (s.phase !== this.previousPhase) {
       if (s.phase === 'countdown' && here) this.modal?.close();
       if (s.phase === 'racing' && this.previousPhase === 'countdown') this.goUntil = now + 900;
@@ -138,15 +180,30 @@ export class RaceUI {
     this.hud.classList.toggle('hidden', !here || modalOpen());
     this.live.classList.toggle('hidden', !mine || s.phase === 'idle' || s.phase === 'lobby');
     text(this.open, s.phase === 'finished' ? '🏁 Results' : '🏁 Race lobby');
-    text(this.status, mine ? s.phase === 'finished' ? mine.finishedAt === undefined ? 'Did not finish' : 'Finished' : s.phase === 'racing' ? 'Racing' : 'On the grid' : s.phase === 'racing' ? 'Watching' : 'Circuit');
+    text(this.status, mine ? s.phase === 'finished' ? mine.finishedAt === undefined ? 'Did not finish' : 'Finished' : s.phase === 'racing' ? mine.finishedAt === undefined ? 'Racing' : 'Finished' : 'On the grid' : p ? 'Practice' : s.phase === 'racing' ? 'Watching' : 'Circuit');
     if (mine) {
       text(this.position, `${mine.position || '—'} / ${s.racers.length}`);
       text(this.lap, `${Math.min(s.laps, mine.lap + 1)} / ${s.laps}`);
       const stop = mine.finishedAt ?? now;
-      text(this.clock, s.phase === 'countdown' || mine.lapStartedAt === undefined || (s.phase === 'finished' && mine.finishedAt === undefined) ? '—' : raceTime(Math.max(0, stop - mine.lapStartedAt)));
+      text(this.clock, s.phase !== 'racing' || mine.finishedAt !== undefined || mine.lapStartedAt === undefined ? '—' : raceTime(Math.max(0, stop - mine.lapStartedAt)));
       text(this.best, raceTime(mine.bestLap));
       text(this.gap, raceGap(s, mine));
     }
+    this.practice.classList.toggle('hidden', !p);
+    if (p) {
+      text(this.practiceLaps, String(p.laps));
+      text(this.practiceClock, p.lapStartedAt === undefined ? '—' : raceTime(Math.max(0, now - p.lapStartedAt)));
+      text(this.practiceLast, raceTime(p.lastLap));
+      text(this.practiceBest, raceTime(p.bestLap));
+      text(this.practiceBestLabel, store.me.account ? 'Account practice best' : 'Session practice best');
+    }
+    text(this.coach, activeTiming ? checkpointHint(activeTiming) : mine ? 'Checkpoints count in order when the race starts' : checkpointHint());
+    this.coach.classList.toggle('hidden', !!mine && !activeTiming);
+    renderSplit(this.split, mine ?? p);
+    this.split.classList.toggle('hidden', !mine && !p);
+    this.sectors.classList.toggle('hidden', !mine && !p);
+    const readings = sectorReadings(mine ?? p);
+    this.sectorTimes.forEach((el, i) => text(el, readings[i]));
     if (here) this.updateMap(this.source.map());
     const counting = s.phase === 'countdown';
     const go = s.phase === 'racing' && now < this.goUntil;
