@@ -17,7 +17,7 @@ import { kitMaterial, kitModel, type KitName } from './carkit';
 // ahead of you. Everything is in city coordinates, the ones the streets of shared/city.ts are laid out in,
 // with the street at y = 0.
 
-export const MAX_VEHICLES = 40;
+export const MAX_VEHICLES = 44;
 export const MAX_PEOPLE = 80;
 /** Things appear within this far of you (never closer than SPAWN_MIN, so nothing pops in at your feet) and go past CULL_R. */
 export const SPAWN_R = 150;

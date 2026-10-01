@@ -132,7 +132,14 @@ export async function preloadModels(): Promise<void> {
   const names = (Object.keys(MODELS) as ModelName[]).filter((name) => MODELS[name].preload);
   await Promise.all(names.map((name) => fetchModel(name).catch((err: unknown) => console.error(`${name}.glb didn't load`, err))));
   const cars = loaded.get('cars');
-  if (cars) setCarKit(cars.scene);
+  // A kit that won't read leaves the street and the garage with the cars built in code, rather than no office.
+  if (cars) {
+    try {
+      setCarKit(cars.scene);
+    } catch (err) {
+      console.error("cars.glb didn't read", err);
+    }
+  }
 }
 
 /** A copy of a `preload` model (see preloadModels()), or null if it couldn't be loaded. */
