@@ -130,5 +130,13 @@ export function showUpgraded(u: UpgradeState) {
     v ? h('p', {}, 'Now running ', h('code', {}, v.sha), `: “${v.subject}”`) : h('p', {}, 'A new version is running.'),
     h('p.upgrade-status.ok', {}, h('span.spinner'), 'Loading the new version…'),
   );
-  setTimeout(() => location.reload(), 2500);
+  setTimeout(() => {
+    // Straight back in, past the title (RELOADED_KEY in ui/title.ts).
+    try {
+      sessionStorage.setItem('agent-office.reloaded', '1');
+    } catch {
+      // no storage: the title shows again
+    }
+    location.reload();
+  }, 2500);
 }

@@ -1,0 +1,185 @@
+/* The title screen (ui/title.ts): over the office while the camera flies round the island. */
+.title {
+  --t-ink: #2b2d42;
+  --t-fill-top: #fffaf3;
+  --t-fill-low: #ffd9c4;
+  --t-edge: #ff8a5b;
+  --t-glow: rgba(91, 192, 235, .55);
+  --t-scrim: rgba(27, 29, 46, .55);
+  --t-text: #fffaf3;
+  --t-button: #fffaf3;
+  --t-button-ink: #2b2d42;
+  --t-focus: #5bc0eb;
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  overflow: hidden;
+  color: var(--t-text);
+  font-family: var(--font);
+  background: linear-gradient(100deg, var(--t-scrim) 0%, transparent 62%), linear-gradient(0deg, var(--t-scrim) 0%, transparent 40%);
+  transition: opacity .6s ease;
+}
+.title[data-look='halloween'] {
+  --t-fill-top: #ffe08a;
+  --t-fill-low: #ff7a1a;
+  --t-edge: #1a0f2e;
+  --t-glow: rgba(155, 92, 255, .7);
+  --t-scrim: rgba(26, 15, 46, .78);
+  --t-text: #f6ead2;
+  --t-button: #ff7a1a;
+  --t-button-ink: #1a0f2e;
+  --t-focus: #b98cff;
+}
+.title[data-look='christmas'] {
+  --t-fill-top: #ffffff;
+  --t-fill-low: #d8eefc;
+  --t-edge: #d7263d;
+  --t-glow: rgba(255, 255, 255, .6);
+  --t-scrim: rgba(18, 52, 44, .6);
+  --t-button: #fffaf3;
+  --t-button-ink: #1f6f50;
+  --t-focus: #ffd166;
+}
+.title[data-stage='leaving'] { opacity: 0; pointer-events: none; }
+body.title-up #hud { visibility: hidden; }
+
+.title-main {
+  position: absolute;
+  left: clamp(16px, 6vw, 96px);
+  bottom: clamp(56px, 12vh, 140px);
+  max-width: calc(100% - 32px);
+}
+
+/* The logo: two fat rounded words, each letter tipped its own way, outlined in ink and lit from behind. */
+.title-logo { position: relative; margin: 0; font-size: clamp(54px, 11vw, 150px); font-weight: 900; line-height: .86; letter-spacing: -.02em; }
+.title-logo::before {
+  content: '';
+  position: absolute;
+  inset: -30% -20% -20% -25%;
+  z-index: -1;
+  background: radial-gradient(closest-side, var(--t-glow), transparent);
+}
+.title-word { display: block; filter: drop-shadow(0 .055em 0 var(--t-ink)) drop-shadow(.035em 0 0 var(--t-ink)) drop-shadow(-.035em 0 0 var(--t-ink)) drop-shadow(0 -.035em 0 var(--t-ink)); }
+.title-word + .title-word { margin-left: .5em; }
+.title-letter {
+  display: inline-block;
+  transform: rotate(var(--tilt));
+  color: transparent;
+  background: linear-gradient(180deg, var(--t-fill-top) 15%, var(--t-fill-low) 85%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.title-tag { margin: .9em 0 0 .2em; font-size: clamp(15px, 1.8vw, 20px); font-weight: 800; color: var(--t-text); text-shadow: 0 2px 0 var(--t-ink); }
+
+/* The first touch, before the menu: it's also what lets the sound start. */
+.title-press { position: absolute; left: 0; right: 0; bottom: clamp(20px, 5vh, 48px); margin: 0; text-align: center; font-size: 17px; font-weight: 900; text-shadow: 0 2px 0 var(--t-ink); }
+.title-press span { display: inline-block; animation: title-pulse 1.8s ease-in-out infinite; }
+.title:not([data-stage='press']) .title-press { display: none; }
+@keyframes title-pulse { 50% { opacity: .35; } }
+
+.title-menu { display: grid; justify-items: start; gap: 10px; margin-top: 26px; }
+.title-menu[hidden], .title-sheet[hidden] { display: none; }
+.title-item {
+  min-width: 200px;
+  padding: 10px 22px;
+  text-align: left;
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--t-button-ink);
+  background: var(--t-button);
+  border: 3px solid var(--t-ink);
+  border-radius: 14px;
+  box-shadow: 0 4px 0 var(--t-ink);
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .08s ease;
+}
+.title-item:first-child { min-width: 240px; font-size: 28px; }
+.title-item:hover { transform: translateY(-2px); box-shadow: 0 6px 0 var(--t-ink); }
+.title-item:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--t-ink); }
+.title-item:focus-visible, .title-tab:focus-visible { outline: 4px solid var(--t-focus); outline-offset: 3px; }
+.title-menu .title-item:focus-visible { transform: translateX(8px); }
+
+/* Controls: the keys for each way of getting about. */
+.title-sheet {
+  position: absolute;
+  right: clamp(16px, 6vw, 96px);
+  bottom: clamp(56px, 12vh, 140px);
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100% - 80px);
+  overflow: auto;
+  padding: 18px 20px 20px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 3px solid var(--t-ink);
+  border-radius: 16px;
+  box-shadow: 0 5px 0 var(--t-ink);
+}
+.title-sheet h2 { margin: 0 0 12px; font-size: 22px; font-weight: 900; }
+.title-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.title-tab { padding: 5px 12px; font-size: 14px; font-weight: 800; color: var(--ink); background: #fff; border: 2px solid var(--ink); border-radius: 999px; cursor: pointer; }
+.title-tab[aria-selected='true'] { color: #fff; background: var(--ink); }
+.title-keys { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; margin: 0 0 16px; font-size: 15px; font-weight: 700; }
+.title-keys dt { display: flex; flex-wrap: wrap; gap: 4px; }
+.title-keys dd { margin: 0; }
+.title-keys kbd { min-width: 24px; padding: 1px 7px; font: 800 13px/20px var(--font); text-align: center; background: #fff; border: 2px solid var(--ink); border-bottom-width: 4px; border-radius: 7px; }
+.title-back { min-width: 0; font-size: 17px; padding: 6px 16px; }
+
+/* The night sky for Halloween: a big moon behind the logo, bats crossing it; snow for Christmas. */
+.title-sky { position: absolute; inset: 0; pointer-events: none; }
+.title-moon, .title-bat, .title-snow { display: none; }
+.title[data-look='halloween'] .title-moon {
+  display: block;
+  position: absolute;
+  left: clamp(150px, 26vw, 420px);
+  top: 9vh;
+  width: clamp(64px, 9vw, 130px);
+  mix-blend-mode: screen;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 36% 38%, #fff8e1 0 40%, #f6e3a8 70%, #e8c97a);
+  box-shadow: 0 0 60px 18px rgba(246, 227, 168, .35), 0 0 160px 60px rgba(155, 92, 255, .25);
+  animation: title-candle 4s steps(1) infinite;
+}
+.title[data-look='halloween'] .title-bat {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: calc(18% + var(--b) * 9%);
+  width: calc(46px - var(--b) * 7px);
+  fill: #1a0f2e;
+  animation: title-bat calc(16s + var(--b) * 5s) linear calc(var(--b) * -6s) infinite;
+}
+.title-bat svg { display: block; width: 100%; animation: title-flap .28s ease-in-out infinite alternate; transform-origin: 50% 40%; }
+@keyframes title-bat {
+  from { transform: translate(-10vw, 0); }
+  50% { transform: translate(50vw, -6vh); }
+  to { transform: translate(110vw, 2vh); }
+}
+@keyframes title-flap { to { transform: scaleY(.45); } }
+/* Candlelight on the moon's glow, now and then. */
+@keyframes title-candle {
+  0%, 100% { opacity: 1; }
+  41% { opacity: .82; }
+  43% { opacity: 1; }
+  77% { opacity: .9; }
+}
+.title[data-look='halloween'] .title-logo::before { animation: title-candle 2.7s steps(1) infinite; }
+.title[data-look='christmas'] .title-snow {
+  display: block;
+  position: absolute;
+  inset: -200px 0 0;
+  background-image: radial-gradient(3px 3px at 20px 30px, #fff, transparent), radial-gradient(2px 2px at 90px 120px, #fff, transparent), radial-gradient(4px 4px at 160px 60px, rgba(255, 255, 255, .9), transparent), radial-gradient(2px 2px at 140px 170px, #fff, transparent);
+  background-size: 200px 200px;
+  animation: title-snow 9s linear infinite;
+}
+@keyframes title-snow { to { transform: translate(-40px, 200px); } }
+
+@media (max-width: 700px) {
+  .title-sheet { left: 16px; right: 16px; width: auto; bottom: 16px; }
+  .title-item { min-width: 170px; font-size: 19px; }
+  .title-item:first-child { min-width: 200px; font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title, .title * { animation: none !important; transition: none !important; }
+  .title[data-look='halloween'] .title-bat { transform: translate(calc(30vw + var(--b) * 14vw), 0); }
+}
