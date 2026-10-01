@@ -361,6 +361,32 @@ export const EXIT_STAIRS = {
   run: 0.34,
 } as const;
 
+/**
+ * The trees round the office, each as (x, z, scale): along the sidewalks and about the building. Their
+ * canopies are about 1.6 m a side at scale 1 (a second ball 0.8 m off to one side), so they stand well
+ * clear of the exit stairs and the lots (see tests/world.test.ts).
+ */
+export const OFFICE_TREES: readonly (readonly [x: number, z: number, scale: number])[] = [
+  [-38, 22, 1.1],
+  [-19.5, 22, 1],
+  [19.5, 22, 1.05],
+  [38, 22, 0.95],
+  [-40, 32.5, 1.1],
+  [-12, 32.5, 1],
+  [14, 32.5, 1.15],
+  [42, 32.5, 1],
+  [-20.5, -8, 1.2],
+  // West of the exit stairs, not over them.
+  [-24.5, 9, 1],
+  [-24.5, 2.5, 0.9],
+  [21, -6, 1.1],
+  [21, 6, 1.25],
+  [-12, -22, 1.2],
+  [4, -24, 1],
+  // Clear of the back office, when a floor's built out into one (see WING).
+  [23, -19, 1.1],
+];
+
 /** Glass doors out to the balcony, on the south wall. They slide apart into the wall on either side. */
 export const BALCONY_DOOR: Opening = { wall: 'south', u: -4, width: 3, y0: 0, y1: 2.5 };
 /** The smoking balcony, hanging over the garage entrance. */

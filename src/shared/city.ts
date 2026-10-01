@@ -19,6 +19,8 @@ export const ROAD_W = 8;
 export const WALK = 2;
 /** How far out the city goes: past this the haze has it anyway. */
 export const RADIUS = 330;
+/** How far a park tree's trunk stands from the line of either path across the park (m): the path's edge and a metre. */
+const PATH_CLEAR = 2.2;
 /** The lots and parks between the streets are this wide (m). */
 export const INNER = PERIOD - ROAD_W - WALK * 2;
 
@@ -86,6 +88,16 @@ export const keepClear = (x: number, z: number) => CLEAR.some((a) => x > a.minX 
 
 /** The block behind the office, east of it, left open as a paved plaza with the gate to the race circuit on it (circuit.ts). */
 export const RACE_PLAZA: Area = rect(STREET_X + PERIOD / 2, STREET_Z - PERIOD * 1.5, INNER, INNER);
+
+/**
+ * The tall lit pylons on the race plaza that say where the two gates are, seen from down the street
+ * (client/world/landmarks.ts draws them): the circuit's in the plaza's south-west corner, the arena's in
+ * the north-east, each clear of its gate's runway. Their feet are solid.
+ */
+export const GATE_PYLONS: readonly { id: 'race' | 'arena'; x: number; z: number; h: number; half: number }[] = [
+  { id: 'race', x: 42, z: -41, h: 32, half: 0.8 },
+  { id: 'arena', x: 66, z: -75, h: 32, half: 0.8 },
+];
 
 // ---- The lots ------------------------------------------------------------------------------------
 
@@ -196,7 +208,9 @@ export function cityLayout(): CityLayout {
         for (let k = 0; k < 7; k++) {
           const s = 0.8 + r() * 0.7;
           const tone = r() < 0.5 ? 0 : 1;
-          park.trees.push({ s, tone, x: bx + (r() - 0.5) * (inner - 6), z: bz + (r() - 0.5) * (inner - 6) });
+          // Off the two paths across it (2.4 m wide, client/world/city.ts): a trunk's a metre clear of their edge.
+          const off = (d: number) => (Math.abs(d) < PATH_CLEAR ? (d < 0 ? -PATH_CLEAR : PATH_CLEAR) : d);
+          park.trees.push({ s, tone, x: bx + off((r() - 0.5) * (inner - 6)), z: bz + off((r() - 0.5) * (inner - 6)) });
         }
         parks.push(park);
         continue;
@@ -285,7 +299,15 @@ export function cityLayout(): CityLayout {
           delete lot.top;
           if (k() < 0.65) {
             const side = k() < 0.5 ? -3.5 : 3.5;
-            lot.yard = { x: lot.x + lot.fx * (lot.w / 2 + 3) + lot.fz * side, z: lot.z + lot.fz * (lot.d / 2 + 3) + lot.fx * 3.5, s: 0.9 + k() * 0.4, tone: k() < 0.5 ? 0 : 1 };
+            const s = 0.9 + k() * 0.4;
+            const tone = k() < 0.5 ? 0 : 1;
+            // In front of the house, but no nearer the sidewalk than its canopy (2.2 m from the plot's edge): where there's no room it has no tree.
+            const pl = lot.plot;
+            const room = (lot.fz > 0 ? pl.maxZ - (lot.z + lot.d / 2) : lot.fz < 0 ? lot.z - lot.d / 2 - pl.minZ : lot.fx > 0 ? pl.maxX - (lot.x + lot.w / 2) : lot.x - lot.w / 2 - pl.minX) - 2.2;
+            if (room >= 0.8) {
+              const out = Math.min(3, room);
+              lot.yard = { x: lot.x + lot.fx * (lot.w / 2 + out) + lot.fz * side, z: lot.z + lot.fz * (lot.d / 2 + out) + lot.fx * 3.5, s, tone };
+            }
           }
         } else if (dist < SHOPS_TO && h < 34) lot.kind = kr < 0.55 ? 'shop' : kr < 0.8 ? 'walkup' : 'block';
         lots.push(lot);
@@ -398,6 +420,77 @@ export const PROP_RADIUS = 200;
 
 let scape: Streetscape | null = null;
 
+// ---- Street names ----------------------------------------------------------------------------------
+
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+/** The east-west streets by their `j` (z = STREET_Z + PERIOD·j), from the north: Main Street is the road out front. */
+const STREETS_EW = ['Lighthouse Road', 'Skyline Boulevard', 'Market Street', 'Arena Street', 'Plaza Street', 'Main Street', 'Harbour Street', 'Golf Street', 'Garden Street', 'Pier Street', 'Beach Road'];
+/** The north-south avenues by their `i` (x = STREET_X + PERIOD·i), from the west. */
+const AVENUES_NS = ['Orchard Avenue', 'Park Avenue', 'Old Town Avenue', 'Bakery Avenue', 'Rose Avenue', 'Office Avenue', 'Cafe Avenue', 'Cedar Avenue', 'Maple Avenue', 'Downtown Avenue', 'Coast Avenue'];
+
+/**
+ * A street's name: `axis` 'z' is the east-west streets (at z = STREET_Z + PERIOD·index), 'x' the
+ * north-south avenues (at x = STREET_X + PERIOD·index). The same for everyone; past the named ones it counts ("12th Avenue").
+ */
+export function streetName(axis: 'x' | 'z', index: number): string {
+  const names = axis === 'z' ? STREETS_EW : AVENUES_NS;
+  return names[index + 5] ?? `${ordinal(Math.abs(index) + 1)} ${axis === 'z' ? 'Street' : 'Avenue'}`;
+}
+
+// ---- The shop fronts -------------------------------------------------------------------------------
+
+/** A shop's ground floor is this tall (m), and each of its fronts is about this wide (client/world/city.ts shopAtlas draws one in a 256 × 160 cell). */
+export const SHOP_H = 4;
+const MODULE_W = 6.5;
+/** Where the door is in a front, from its start to its end (fractions of the front's width: 176 to 240 of 256 in the picture). */
+export const SHOP_DOOR = [176 / 256, 240 / 256] as const;
+
+/** One shop front on a lot's street side: where it starts along the wall, which way it runs (its width), and the way it faces. */
+export interface ShopModule {
+  a: [x: number, z: number];
+  u: [x: number, z: number];
+  n: [x: number, z: number];
+}
+
+/** The storefronts along a shop's front: one business each, side by side, about MODULE_W wide. */
+export function shopModules(l: Lot): ShopModule[] {
+  const span = l.fz !== 0 ? l.w : l.d;
+  const count = Math.max(1, Math.round(span / MODULE_W));
+  const step = span / count;
+  const out: ShopModule[] = [];
+  for (let m = 0; m < count; m++) {
+    if (l.fz > 0) out.push({ a: [l.x - l.w / 2 + step * m, l.z + l.d / 2], u: [step, 0], n: [0, 1] });
+    else if (l.fz < 0) out.push({ a: [l.x + l.w / 2 - step * m, l.z - l.d / 2], u: [-step, 0], n: [0, -1] });
+    else if (l.fx > 0) out.push({ a: [l.x + l.w / 2, l.z + l.d / 2 - step * m], u: [0, -step], n: [1, 0] });
+    else out.push({ a: [l.x - l.w / 2, l.z - l.d / 2 + step * m], u: [0, step], n: [-1, 0] });
+  }
+  return out;
+}
+
+let doors: { x: number; z: number; nx: number; nz: number; half: number }[] | null = null;
+/**
+ * Whether (x, z) is in front of a shop's door, where something standing would block the way in: the width of the door and a little
+ * more either side, from the wall out across the sidewalk. Props and dressing keep out of it.
+ */
+export function atShopDoor(x: number, z: number, margin = 0.7): boolean {
+  doors ??= cityLayout().lots.flatMap((l) =>
+    l.kind !== 'shop' || l.hand
+      ? []
+      : shopModules(l).map((m) => {
+          const mid = (SHOP_DOOR[0] + SHOP_DOOR[1]) / 2;
+          const w = Math.hypot(m.u[0], m.u[1]);
+          return { x: m.a[0] + m.u[0] * mid, z: m.a[1] + m.u[1] * mid, nx: m.n[0], nz: m.n[1], half: (w * (SHOP_DOOR[1] - SHOP_DOOR[0])) / 2 };
+        }),
+  );
+  return doors.some((d) => {
+    const dx = x - d.x;
+    const dz = z - d.z;
+    const out = dx * d.nx + dz * d.nz;
+    const side = Math.abs(-dx * d.nz + dz * d.nx);
+    return out > -0.3 && out < 6 && side < d.half + margin;
+  });
+}
+
 const R = Math.ceil(RADIUS / PERIOD) + 1;
 
 /** The intersections, street lamps, signal poles and benches, bins and hydrants of the city, made once. */
@@ -453,7 +546,7 @@ export function cityStreetscape(): Streetscape {
         const rot = alongX ? (sign < 0 ? Math.PI : 0) : sign < 0 ? -Math.PI / 2 : Math.PI / 2;
         const put = (kind: Prop['kind'], u: number) => {
           const p = alongX ? { x: bx + u, z: line } : { x: line, z: bz + u };
-          if (!keepClear(p.x, p.z) && Math.hypot(p.x, p.z) <= PROP_RADIUS) props.push({ kind, ...p, rot });
+          if (!keepClear(p.x, p.z) && Math.hypot(p.x, p.z) <= PROP_RADIUS && !atShopDoor(p.x, p.z)) props.push({ kind, ...p, rot });
         };
         if (k() < 0.4) put('bench', -9 + k() * 4);
         if (k() < 0.55) put('bin', 8 + k() * 4);
@@ -766,6 +859,7 @@ function solids(): Map<number, Area[]> {
     for (const t of p.trees) post(t.x, t.z, 0.3 * t.s);
   }
   post(LIGHTHOUSE.x, LIGHTHOUSE.z, LIGHTHOUSE.radius);
+  for (const p of GATE_PYLONS) post(p.x, p.z, p.half);
   for (const s of [-1, 1]) {
     const x = PIER.x + s * (PIER.width / 2 - 0.1);
     add({ minX: x - 0.1, maxX: x + 0.1, minZ: PIER.rails[1], maxZ: PIER.rails[0] });

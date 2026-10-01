@@ -1,4 +1,7 @@
 import { cityLayout, LIGHTHOUSE, PIER, RACE_PLAZA } from './city.js';
+
+// The streets' names (for the map's labels and the signs at the corners) are city.ts's: `streetName('z' | 'x', index)`.
+export { streetName } from './city.js';
 import { VENUES } from './venues.js';
 import { CITY_GATE } from './circuit.js';
 import { CITY_ARENA_GATE } from './arena.js';
