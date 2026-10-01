@@ -139,8 +139,8 @@ function poles(list: { x: number; z: number; h: number }[]): THREE.InstancedMesh
 function nameplates(group: THREE.Group, list: Dress[]) {
   const named = list.filter((d) => d.kind === 'streetSign' && d.name);
   if (!named.length) return;
-  const geo = new THREE.PlaneGeometry(2.2, 0.5);
   const mats = new Map<string, THREE.MeshBasicMaterial>();
+  const byName = new Map<string, THREE.BufferGeometry[]>();
   for (const d of named) {
     let mat = mats.get(d.name!);
     if (!mat) {
@@ -166,11 +166,13 @@ function nameplates(group: THREE.Group, list: Dress[]) {
       mat.userData.outlineParameters = { visible: false };
       mats.set(d.name!, mat);
     }
-    const plate = new THREE.Mesh(geo, mat);
-    plate.position.set(d.x, 2.85, d.z);
-    plate.rotation.y = d.rot + Math.PI / 2;
-    group.add(plate);
+    const placed = new THREE.PlaneGeometry(2.2, 0.5).rotateY(d.rot + Math.PI / 2).translate(d.x, 2.85, d.z);
+    const list = byName.get(d.name!) ?? [];
+    list.push(placed);
+    byName.set(d.name!, list);
   }
+  // One mesh a name, not a plate a sign.
+  for (const [name, geos] of byName) group.add(new THREE.Mesh(mergeGeometries(geos)!, mats.get(name)!));
 }
 
 function flags(group: THREE.Group, list: Dress[]) {

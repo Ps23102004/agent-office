@@ -7,9 +7,7 @@ const d = cityDressing();
 const count = (k: string) => d.items.filter((i) => i.kind === k).length;
 
 test('the city is dressed: signs, parasols, flags, birds', () => {
-  for (const k of ['streetSign', 'warning', 'flag']) assert.ok(count(k) > 3, k);
-  // Parasols keep out from under the awnings and off the doors, so there are few.
-  assert.ok(count('parasol') >= 2);
+  for (const k of ['streetSign', 'warning', 'parasol', 'flag']) assert.ok(count(k) > 3, k);
   assert.ok(d.birds.some((b) => b.kind === 'pigeon') && d.birds.some((b) => b.kind === 'gull' && b.orbit));
 });
 

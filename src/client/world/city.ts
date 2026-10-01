@@ -976,7 +976,7 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   };
 
   // The gas station's forecourt, canopy, pumps and sign, with the lot's shop behind them.
-  const GAS_POLE = 9;
+  const GAS_POLE = 11.6;
   const station = () => {
     if (!gas) return;
     const p = gas.plot;

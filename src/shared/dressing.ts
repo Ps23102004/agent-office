@@ -58,7 +58,7 @@ export function placeDressing(clear: (x: number, z: number, r: number) => boolea
   const stairsEnd = st.landingZ1 + st.steps * st.run;
   const atOffice = (x: number, z: number, r: number) =>
     (x > st.minX - r && x < st.maxX + r && z > st.landingZ0 - r && z < stairsEnd + r) || OFFICE_TREES.some(([tx, tz, s]) => Math.hypot(x - tx, z - tz) < r + 0.3 * s + 0.3);
-  const ok = (x: number, z: number, r: number) => !keepClear(x, z) && Math.hypot(x, z) < DRESS_RADIUS && !atOffice(x, z, r) && !atShopDoor(x, z, r) && clear(x, z, r);
+  const ok = (x: number, z: number, r: number, door = r) => !keepClear(x, z) && Math.hypot(x, z) < DRESS_RADIUS && !atOffice(x, z, r) && !atShopDoor(x, z, door) && clear(x, z, r);
   const cone = (x: number, z: number, rot: number) => {
     items.push({ kind: 'cone', x, z, rot, v: 0 });
     solids.push({ area: disc(x, z, 0.2), h: 0.3 });
@@ -127,7 +127,15 @@ export function placeDressing(clear: (x: number, z: number, r: number) => boolea
     }
     // 1.2 m of canopy, and the shop's awning 1.5 m out from its wall: the canopy stays out from under it.
     const wall = l.fz ? Math.abs(l.z + l.fz * (l.d / 2) - z) : Math.abs(l.x + l.fx * (l.w / 2) - x);
-    if (wall >= 2.6 && !inPlaza(x, z) && ok(x, z, 1.2)) put('parasol', x, z, r() * 6.28, r() < 0.5 ? 0 : 1, 0.35);
+    // Off the door's line if it's right in front of one: slid along the front to either side.
+    for (const slide of [0, 2.2, -2.2]) {
+      const px = l.fz ? x + slide : x;
+      const pz = l.fz ? z : z + slide;
+      if (wall >= 2.6 && !inPlaza(px, pz) && ok(px, pz, 1.2, 0.1)) {
+        put('parasol', px, pz, r() * 6.28, r() < 0.5 ? 0 : 1, 0.35);
+        break;
+      }
+    }
   }
 
   // Flags: a pole in each park's corner, at the corners of the race plaza, and at the end of the pier.

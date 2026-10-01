@@ -18,6 +18,15 @@ test('no tree round the office reaches the exit stairs (canopy, and the side bal
   }
 });
 
+test('every office tree is off the road and clear of the exit stairs and of what stands on the sidewalk', () => {
+  for (const [x, z, s] of OFFICE_TREES) {
+    assert.notEqual(surfaceAt(x, z), 'road', `tree at ${x}, ${z}`);
+    assert.ok(!onStairs(x, z, 1.6 * s) && !onStairs(x + 0.8 * s, z, 1.1 * s), `tree at ${x}, ${z}`);
+    const hit = citySolids(x, z, 0.3 * s + 0.1).filter((a) => x + 0.3 > a.minX && x - 0.3 < a.maxX && z + 0.3 > a.minZ && z - 0.3 < a.maxZ);
+    assert.equal(hit.length, 0, `tree at ${x}, ${z} is in a bin or bench`);
+  }
+});
+
 test('no street dressing stands on the stairs, in an office tree or in front of a shop door', () => {
   for (const d of cityDressing().items) {
     if (d.kind === 'flag') continue;
@@ -64,6 +73,12 @@ test('park trees stand off the paths across their park, and yard trees are on th
 test('the gate pylons are on the plaza, clear of the gates, and solid', () => {
   for (const p of GATE_PYLONS) {
     assert.ok(p.x > RACE_PLAZA.minX && p.x < RACE_PLAZA.maxX && p.z > RACE_PLAZA.minZ && p.z < RACE_PLAZA.maxZ);
+    // Nor on the straight way from the street's corner to a gate.
+    const near = (a: readonly [number, number], b: readonly [number, number]) => {
+      const t = Math.max(0, Math.min(1, ((p.x - a[0]) * (b[0] - a[0]) + (p.z - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)));
+      return Math.hypot(p.x - (a[0] + t * (b[0] - a[0])), p.z - (a[1] + t * (b[1] - a[1])));
+    };
+    for (const [a, g] of [[[28, -29], CITY_GATE], [[56, -29], CITY_GATE], [[83, -29], CITY_ARENA_GATE]] as const) assert.ok(near(a, [g.x, g.z]) > 4, `pylon ${p.id} is on the way to a gate`);
     for (const g of [CITY_GATE, CITY_ARENA_GATE]) {
       // Not within the gate's width of its opening or its runway.
       assert.ok(Math.hypot(p.x - g.x, p.z - g.z) > g.width / 2 + 3, `pylon ${p.id} is by the gate`);
@@ -79,9 +94,15 @@ test('shop fronts come as one door each, and the street names are the same for e
     const span = l.fz ? l.w : l.d;
     assert.ok(Math.abs(mods.reduce((s, m) => s + Math.hypot(...m.u), 0) - span) < 1e-6);
   }
+  // Every street the city has a crossing of is named, not counted.
   const names = new Set<string>();
-  for (let k = -5; k <= 5; k++) for (const axis of ['x', 'z'] as const) names.add(streetName(axis, k));
-  assert.equal(names.size, 22);
+  for (const it of cityStreetscape().intersections) {
+    for (const n of [streetName('x', it.i), streetName('z', it.j)]) {
+      assert.ok(!/^\d+(st|nd|rd|th) /.test(n), n);
+      names.add(n);
+    }
+  }
+  assert.ok(names.size >= 22);
   assert.equal(streetName('z', 0), 'Main Street');
   assert.equal(streetName('x', 9), '10th Avenue');
 });

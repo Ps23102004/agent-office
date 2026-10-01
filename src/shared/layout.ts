@@ -376,9 +376,9 @@ export const OFFICE_TREES: readonly (readonly [x: number, z: number, scale: numb
   [14, 32.5, 1.15],
   [42, 32.5, 1],
   [-20.5, -8, 1.2],
-  // West of the exit stairs, not over them.
-  [-24.5, 9, 1],
-  [-24.5, 2.5, 0.9],
+  // West of the exit stairs on the street's far sidewalk (the road starts at x -24), not over them.
+  [-22.7, -4, 1],
+  [-22.7, 1.5, 0.9],
   [21, -6, 1.1],
   [21, 6, 1.25],
   [-12, -22, 1.2],

@@ -91,11 +91,11 @@ export const RACE_PLAZA: Area = rect(STREET_X + PERIOD / 2, STREET_Z - PERIOD * 
 
 /**
  * The tall lit pylons on the race plaza that say where the two gates are, seen from down the street
- * (client/world/landmarks.ts draws them): the circuit's in the plaza's south-west corner, the arena's in
+ * (client/world/landmarks.ts draws them): the circuit's on the plaza's west edge, off the way from the street to its gate, the arena's in
  * the north-east, each clear of its gate's runway. Their feet are solid.
  */
 export const GATE_PYLONS: readonly { id: 'race' | 'arena'; x: number; z: number; h: number; half: number }[] = [
-  { id: 'race', x: 42, z: -41, h: 32, half: 0.8 },
+  { id: 'race', x: 37, z: -62, h: 32, half: 0.8 },
   { id: 'arena', x: 66, z: -75, h: 32, half: 0.8 },
 ];
 
@@ -423,10 +423,10 @@ let scape: Streetscape | null = null;
 // ---- Street names ----------------------------------------------------------------------------------
 
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
-/** The east-west streets by their `j` (z = STREET_Z + PERIOD·j), from the north: Main Street is the road out front. */
-const STREETS_EW = ['Lighthouse Road', 'Skyline Boulevard', 'Market Street', 'Arena Street', 'Plaza Street', 'Main Street', 'Harbour Street', 'Golf Street', 'Garden Street', 'Pier Street', 'Beach Road'];
+/** The east-west streets by their `j` from -6 (z = STREET_Z + PERIOD·j), from the north: Main Street is the road out front. */
+const STREETS_EW = ['North Ring Road', 'Lighthouse Road', 'Skyline Boulevard', 'Market Street', 'Arena Street', 'Plaza Street', 'Main Street', 'Harbour Street', 'Golf Street', 'Garden Street', 'Pier Street', 'Beach Road'];
 /** The north-south avenues by their `i` (x = STREET_X + PERIOD·i), from the west. */
-const AVENUES_NS = ['Orchard Avenue', 'Park Avenue', 'Old Town Avenue', 'Bakery Avenue', 'Rose Avenue', 'Office Avenue', 'Cafe Avenue', 'Cedar Avenue', 'Maple Avenue', 'Downtown Avenue', 'Coast Avenue'];
+const AVENUES_NS = ['West Ring Avenue', 'Orchard Avenue', 'Park Avenue', 'Old Town Avenue', 'Bakery Avenue', 'Rose Avenue', 'Office Avenue', 'Cafe Avenue', 'Cedar Avenue', 'Maple Avenue', 'Downtown Avenue', 'Coast Avenue'];
 
 /**
  * A street's name: `axis` 'z' is the east-west streets (at z = STREET_Z + PERIOD·index), 'x' the
@@ -434,7 +434,7 @@ const AVENUES_NS = ['Orchard Avenue', 'Park Avenue', 'Old Town Avenue', 'Bakery 
  */
 export function streetName(axis: 'x' | 'z', index: number): string {
   const names = axis === 'z' ? STREETS_EW : AVENUES_NS;
-  return names[index + 5] ?? `${ordinal(Math.abs(index) + 1)} ${axis === 'z' ? 'Street' : 'Avenue'}`;
+  return names[index + 6] ?? `${ordinal(Math.abs(index) + 1)} ${axis === 'z' ? 'Street' : 'Avenue'}`;
 }
 
 // ---- The shop fronts -------------------------------------------------------------------------------
