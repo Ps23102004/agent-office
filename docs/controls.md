@@ -25,7 +25,13 @@ Back to the [README](../README.md).
 | / | Search the chat and every terminal on your floor |
 | Ctrl + K (⌘K on a Mac) | Command palette: find a worker, issue, PR, service, board, teammate or action; Enter opens it, Shift+Enter walks you there first |
 | V | Join voice; in voice, hold to talk (you're muted when you let go) |
-| M | Mute / unmute in voice |
+| M (with or without Shift) | Open / close the world map in the city |
+| ? | Walking, driving, race and arena controls |
+| U | Mute / unmute in voice |
+| Z | Change camera on foot or in a car |
+| X (in a car) | Look back |
+| Shift (in a car) | Boost with the gas (not bicycles) |
+| Backspace (at the circuit) | Reset the car |
 | Tab | The ☰ menu: every window, and what shows on screen |
 | Esc | Close any window (a terminal too) and get back to looking around |
 | Ctrl + [ | Send Esc to a terminal instead, to close a menu like Claude's `/skills` or interrupt Claude. **⎋ Esc** in the terminal's header does the same |

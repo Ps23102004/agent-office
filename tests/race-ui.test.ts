@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { idleRace, type Racer } from '../src/shared/race.js';
-import { countdownLights, mapProjection, raceGap, raceOrder, raceTime, speedReading } from '../src/client/ui/race-view.js';
+import { boostAvailable, countdownLights, mapProjection, raceGap, raceOrder, raceTime, speedReading } from '../src/client/ui/race-view.js';
 
 const racer = (id: string, extra: Partial<Racer> = {}): Racer => ({ id, name: id, car: 0, slot: 0, lap: 0, checkpoint: -1, position: 1, ...extra });
 
@@ -55,6 +55,16 @@ test('the general gauge converts m/s and handles reverse, bicycles and invalid v
   assert.equal(speedReading(0.01, 20).mode, 'N');
   assert.equal(speedReading(100, 20).fill, 1);
   assert.deepEqual(speedReading(NaN, 0), { kmh: 0, mode: 'N', fill: 0 });
+});
+
+test('boost is available only behind the wheel of a car, even when a passenger has a full tank', () => {
+  assert.equal(boostAvailable({ boost: 1 }), true);
+  assert.equal(boostAvailable({ boost: 0 }), true);
+  assert.equal(boostAvailable({ boost: 1, bicycle: true }), false);
+  assert.equal(boostAvailable({ boost: 1, passenger: true }), false);
+  assert.equal(boostAvailable({}), false);
+  assert.equal(boostAvailable({ boost: NaN }), false);
+  assert.equal(boostAvailable(null), false);
 });
 
 test('minimap projection preserves shape and rejects missing or corrupt outlines', () => {

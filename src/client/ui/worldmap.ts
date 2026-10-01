@@ -5,7 +5,8 @@ import { FLOOR } from '../../shared/layout';
 import { roadSegments, route, snapToRoad, type RoadPoint, type Route } from '../../shared/route';
 import { focusDialog } from './dialog-focus';
 import { h, modalOpen, openModal, type Modal } from './dom';
-import { mapOffset, waypointIndicator } from './map-view';
+import { clampMapCenter, DistrictBanner, mapLabels, mapOffset, waypointArrival, waypointIndicator, wheelPixels, type LabelBox } from './map-view';
+import { CONTROLS } from './controls';
 import './map.css';
 
 const ICONS: Record<PlaceKind, string> = { office: '▣', cafe: '☕', bar: '🍸', race: '🏁', arena: '⊕', gas: '⛽', parking: 'P', park: '♣', golf: '⚐', pier: '⚓', lighthouse: '✦' };
@@ -66,14 +67,10 @@ function arrow(c: CanvasRenderingContext2D, x: number, y: number, angle: number,
   c.fillStyle = color; c.strokeStyle = '#142029'; c.lineWidth = 2; c.fill(); c.stroke(); c.restore();
 }
 
-function icon(c: CanvasRenderingContext2D, p: Place, x: number, y: number, label: boolean) {
+function icon(c: CanvasRenderingContext2D, p: Place, x: number, y: number) {
   c.fillStyle = p.kind === 'office' ? '#edc658' : '#e8efed'; c.strokeStyle = '#19262d'; c.lineWidth = 2;
   c.beginPath(); c.arc(x, y, 10, 0, Math.PI * 2); c.fill(); c.stroke();
   c.font = 'bold 13px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#13232b'; c.fillText(ICONS[p.kind], x, y);
-  if (label) {
-    c.font = '600 12px system-ui'; c.textAlign = 'left'; c.strokeStyle = '#142029'; c.lineWidth = 4;
-    c.strokeText(p.name, x + 15, y); c.fillStyle = '#fff'; c.fillText(p.name, x + 15, y);
-  }
 }
 
 function routeLine(c: CanvasRenderingContext2D, r: Route | null, point: (p: RoadPoint) => { x: number; y: number }) {
@@ -99,11 +96,12 @@ export class WorldMap {
   private frame: MapFrame = { x: 0, z: 0, heading: 0, cameraHeading: Math.PI, speed: 0, onIsland: true };
   private waypoint: (RoadPoint & { name: string; blurb: string }) | null = null;
   private path: Route | null = null;
+  private approached = false;
   private routedFrom: RoadPoint | null = null;
   private lastRoute = -Infinity;
   private lastUpdate = -Infinity;
   private visible = false;
-  private districtName = '';
+  private readonly districts = new DistrictBanner();
   private districtUntil = 0;
   private zoom = 1;
   private center: RoadPoint = { x: 0, z: 0 };
@@ -142,7 +140,7 @@ export class WorldMap {
     this.canvas.addEventListener('pointercancel', () => { this.drag = null; });
     this.canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); this.clear(); });
     this.canvas.addEventListener('wheel', (e) => {
-      e.preventDefault(); this.zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.001));
+      e.preventDefault(); this.zoomAt(e.offsetX, e.offsetY, Math.exp(-wheelPixels(e.deltaY, e.deltaMode, this.height) * 0.001));
     }, { passive: false });
   }
 
@@ -158,7 +156,7 @@ export class WorldMap {
   /** M toggles even while the map has focus; other office windows keep their own keys. */
   key(e: KeyboardEvent): boolean {
     if (this.modal && this.modal.backdrop === document.querySelector('#modal-root > .backdrop:last-child')) {
-      if (e.code === 'KeyM' && !e.shiftKey) { if (!e.repeat) this.modal.close(); }
+      if (e.code === 'KeyM') { if (!e.repeat) this.modal.close(); }
       else if (e.code === 'Backspace') this.clear();
       else if (e.key === '+' || e.key === '=') this.zoomAt(this.width / 2, this.height / 2, 1.25);
       else if (e.key === '-') this.zoomAt(this.width / 2, this.height / 2, 0.8);
@@ -175,7 +173,7 @@ export class WorldMap {
   toggle() {
     if (this.modal) return this.modal.close();
     if (modalOpen()) return;
-    this.center = { x: 0, z: 0 }; this.zoom = 1;
+    this.center = { x: this.frame.x, z: this.frame.z }; this.zoom = 1;
     const list = h('div.map-places', {}, ...places().map((p) => h('button', { type: 'button', title: p.blurb, onclick: () => this.setWaypoint(p) },
       h('span', { 'aria-hidden': 'true' }, ICONS[p.kind]), h('span', {}, p.name, h('small', {}, p.blurb)))));
     const legend = h('div.map-buildings', { 'aria-label': 'Building colours' }, ...Object.entries(COLORS).map(([kind, color]) => h('span', {}, h('i', { style: `background:${color}` }), kind)));
@@ -196,15 +194,8 @@ export class WorldMap {
 
   controls() {
     if (modalOpen()) return;
-    const groups = [
-      ['Walking', [['W / S · A / D', 'Move'], ['Shift · Space', 'Run · jump'], ['Mouse / drag', 'Look / orbit camera'], ['Settings', 'First / third person'], ['E', 'Use / interact']]],
-      ['Driving', [['W / S · A / D', 'Accelerate / brake · steer'], ['Space · Shift', 'Handbrake · boost'], ['Q · H · E', 'Camera · horn · get out']]],
-      ['Race circuit', [['R', 'Join grid / start race'], ['W / S · A / D', 'Drive; follow the checkpoints'], ['E', 'Use the gate to return to the city']]],
-      ['Arena', [['Mouse · left / right click', 'Look · fire / aim'], ['R · Tab', 'Reload · hold scoreboard'], ['W / S · A / D · Space', 'Move · jump']]],
-      ['Everywhere', [['M · ? · Esc', 'Map · controls · close'], ['T / Enter · V', 'Chat · hold to talk'], ['Shift + M', 'Mute / unmute voice']]],
-    ] as const;
     const el = h('section.modal.map-controls', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Game controls' }, h('header', {}, h('h2', {}, 'Controls')),
-      h('div.body', {}, ...groups.map(([name, rows]) => h('section', {}, h('h3', {}, name), h('dl', {}, ...rows.map(([key, action]) => h('div', {}, h('dt', {}, key), h('dd', {}, action))))))));
+      h('div.body', {}, ...Object.entries(CONTROLS).map(([name, rows]) => h('section', {}, h('h3', {}, name), h('dl', {}, ...rows.map(([key, action]) => h('div', {}, h('dt', {}, key.join(' / ')), h('dd', {}, action))))))));
     let release = () => {};
     openModal(el, { onClose: () => release() });
     release = focusDialog(el);
@@ -219,11 +210,11 @@ export class WorldMap {
     }
   }
   private setWaypoint(at: RoadPoint & { name: string; blurb: string }) {
-    this.waypoint = at; this.routedFrom = null; this.refreshRoute();
+    this.waypoint = at; this.approached = false; this.routedFrom = null; this.refreshRoute();
     text(this.destination, `${at.name} · ${at.blurb} Follow the gold streets; the dotted end is the approach on foot.`);
     this.drawWorld();
   }
-  private clear() { this.waypoint = null; this.path = null; this.routedFrom = null; text(this.destination, 'Waypoint cleared. Pick a place or road.'); text(this.distance, ''); this.drawWorld(); }
+  private clear() { this.waypoint = null; this.path = null; this.approached = false; this.routedFrom = null; text(this.destination, 'Waypoint cleared. Pick a place or road.'); text(this.distance, ''); this.drawWorld(); }
   private refreshRoute() {
     if (!this.waypoint) return;
     this.path = route(this.frame, this.waypoint); this.routedFrom = { x: this.frame.x, z: this.frame.z };
@@ -253,13 +244,14 @@ export class WorldMap {
     this.mini.hidden = !this.visible || modalOpen();
     const district = districtAt(this.frame.x, this.frame.z);
     text(this.note, frame.onIsland ? `You are in ${district}` : `Island map · last city position in ${district}`);
-    if (this.visible && district !== this.districtName) {
-      if (this.districtName) { text(this.district, `Entering ${district}`); this.districtUntil = now + 3000; }
-      this.districtName = district;
-    }
+    const entered = this.visible && frame.onIsland ? this.districts.update(now, this.frame) : null;
+    if (!this.visible || !frame.onIsland) this.districts.pause();
+    if (entered) { text(this.district, `Entering ${entered}`); this.districtUntil = now + 3000; }
     this.district.hidden = !this.visible || modalOpen() || now >= this.districtUntil;
-    if (this.waypoint && frame.onIsland && Math.hypot(frame.x - this.waypoint.x, frame.z - this.waypoint.z) < 15) {
-      const name = this.waypoint.name; this.clear(); text(this.destination, `Arrived at ${name}.`);
+    if (this.waypoint && frame.onIsland) {
+      const arrival = waypointArrival(frame, this.waypoint, this.path, this.approached);
+      this.approached = arrival.approached;
+      if (arrival.arrived) { const name = this.waypoint.name; this.clear(); text(this.destination, `Arrived at ${name}.`); }
     }
     if (this.waypoint && frame.onIsland && now - this.lastRoute >= 1000 && (!this.routedFrom || Math.hypot(frame.x - this.routedFrom.x, frame.z - this.routedFrom.z) > 5)) {
       this.refreshRoute(); this.lastRoute = now;
@@ -272,20 +264,44 @@ export class WorldMap {
 
   private drawWorld() {
     if (!this.modal || !this.width || !this.height) return;
+    this.center = clampMapCenter(this.center, this.width, this.height, this.scale());
     const c = this.canvas.getContext('2d')!;
     c.setTransform(this.canvas.width / this.width, 0, 0, this.canvas.height / this.height, 0, 0);
     c.fillStyle = '#142a38'; c.fillRect(0, 0, this.width, this.height);
     const corner = this.project({ x: -EXTENT, z: -EXTENT });
     c.drawImage(this.image, corner.x, corner.y, SIZE * this.scale(), SIZE * this.scale());
-    c.font = '700 15px system-ui'; c.textAlign = 'center'; c.fillStyle = '#c4d3cc';
-    for (const d of DISTRICT_LABELS) { const q = this.project(d); c.fillText(d.name.toUpperCase(), q.x, q.y); }
+    const reserved: LabelBox[] = [{ x: 0, y: 0, width: 70, height: 60 }, { x: this.width - 190, y: 0, width: 190, height: 65 }];
+    c.font = '700 15px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#c4d3cc';
+    for (const d of DISTRICT_LABELS) {
+      const q = this.project(d), name = d.name.toUpperCase(), width = c.measureText(name).width;
+      c.fillText(name, q.x, q.y);
+      reserved.push({ x: q.x - width / 2 - 3, y: q.y - 11, width: width + 6, height: 22 });
+    }
     this.drawRoute(c, this.project);
     if (this.waypoint) {
       const q = this.project(this.waypoint);
       c.beginPath(); c.arc(q.x, q.y, 16, 0, Math.PI * 2); c.strokeStyle = '#f4cc54'; c.lineWidth = 3; c.stroke();
     }
-    for (const p of places()) { const q = this.project(p); icon(c, p, q.x, q.y, p.kind !== 'park' || this.zoom > 1.8 || p.id === 'plaza'); }
-    for (const peer of this.peers) { const q = this.project(peer); c.beginPath(); c.arc(q.x, q.y, 4, 0, Math.PI * 2); c.fillStyle = peer.color; c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 1; c.stroke(); c.font = '11px system-ui'; c.fillStyle = '#fff'; c.fillText(peer.name, q.x, q.y - 10); }
+    const markers = places().map((p) => ({ p, ...this.project(p) }));
+    for (const { p, x, y } of markers) {
+      icon(c, p, x, y);
+      reserved.push({ x: x - 12, y: y - 12, width: 24, height: 24 });
+    }
+    c.font = '600 12px system-ui';
+    const labels = markers.filter(({ p }) => p.name !== 'Park').map(({ p, x, y }) => ({
+      id: p.id, x, y, width: c.measureText(p.name).width,
+      priority: p.name === this.waypoint?.name ? 100 : p.kind === 'office' ? 90 : p.kind === 'race' || p.kind === 'arena' ? 80 : p.kind === 'park' || p.kind === 'golf' ? 10 : 60,
+    }));
+    for (const label of mapLabels(labels, this.width, this.height, reserved)) {
+      const p = markers.find(({ p }) => p.id === label.id)!.p;
+      // A short leader keeps an offset name attached to its own marker.
+      const nearX = Math.max(label.left, Math.min(label.left + label.width, label.x));
+      c.beginPath(); c.moveTo(label.x, label.y); c.lineTo(nearX, label.top + 8);
+      c.strokeStyle = '#b8cbc6'; c.lineWidth = 1; c.stroke();
+      c.font = '600 12px system-ui'; c.textAlign = 'left'; c.textBaseline = 'top'; c.strokeStyle = '#142029'; c.lineWidth = 4;
+      c.strokeText(p.name, label.left, label.top); c.fillStyle = '#fff'; c.fillText(p.name, label.left, label.top);
+    }
+    for (const peer of this.peers) { const q = this.project(peer); c.beginPath(); c.arc(q.x, q.y, 4, 0, Math.PI * 2); c.fillStyle = peer.color; c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 1; c.stroke(); c.font = '11px system-ui'; c.textAlign = 'center'; c.textBaseline = 'bottom'; c.fillStyle = '#fff'; c.fillText(peer.name, q.x, q.y - 10); }
     const you = this.project(this.frame); arrow(c, you.x, you.y, Math.PI - this.frame.heading);
   }
 
@@ -300,7 +316,7 @@ export class WorldMap {
     c.save(); c.translate(90, 90); c.rotate(heading + Math.PI); c.scale(scale, scale); c.translate(-this.frame.x, -this.frame.z);
     c.drawImage(this.image, -EXTENT, -EXTENT, SIZE, SIZE); c.restore();
     this.drawRoute(c, point);
-    for (const p of places()) { const q = point(p); if (Math.hypot(q.x - 90, q.y - 90) < 80) icon(c, p, q.x, q.y, false); }
+    for (const p of places()) { const q = point(p); if (Math.hypot(q.x - 90, q.y - 90) < 80) icon(c, p, q.x, q.y); }
     for (const peer of this.peers) { const q = point(peer); c.fillStyle = peer.color; c.beginPath(); c.arc(q.x, q.y, 3, 0, Math.PI * 2); c.fill(); }
     if (this.waypoint) {
       const q = waypointIndicator(mapOffset(this.waypoint, this.frame, heading, scale), 76);
