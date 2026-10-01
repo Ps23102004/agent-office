@@ -294,3 +294,23 @@ test("the street's traffic is one batch of Kenney's models, wheels on the road t
   }
   assert.ok(wheels > 40, `${wheels} wheels seen`);
 });
+
+test("a Kenney car's front wheel steers about its own middle, not its inner face", () => {
+  for (const kind of ['sedan-sports', 'suv', 'police', 'taxi', 'race', 'race-future'] as const) {
+    // The model's wheel is centred on its hub, so traffic (which places it the same way) turns it in place too.
+    const c = new THREE.Box3().setFromBufferAttribute(kitModel(kind)!.wheel.attributes.position as THREE.BufferAttribute).getCenter(new THREE.Vector3());
+    assert.ok(c.length() < 0.01, `${kind} wheel is ${c.length()} m off its hub`);
+    const car = supercar(kind, '#123456');
+    for (const w of car.wheels.filter((w) => w.userData.front)) {
+      const middle = () => {
+        car.root.updateMatrixWorld(true);
+        return new THREE.Box3().setFromObject(w, true).getCenter(new THREE.Vector3());
+      };
+      const straight = middle();
+      w.rotation.y = 0.5;
+      assert.ok(middle().distanceTo(straight) < 0.01, `${kind} wheel moves ${middle().distanceTo(straight)} m on full lock`);
+      // And it's inside the body's width, out at the side.
+      assert.ok(Math.abs(straight.x) < SPECS[kind].width / 2 && Math.abs(straight.x) > SPECS[kind].width / 4, `${kind} wheel at x ${straight.x}`);
+    }
+  }
+});

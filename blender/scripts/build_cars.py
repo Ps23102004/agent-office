@@ -11,7 +11,7 @@ node `<name>` (no mesh) holding three meshes, in metres, nose to +z, left +x, wh
 
     <name>_body   everything that keeps its colors
     <name>_paint  the bodywork in the model's main color, white-ish (its shading only), for tinting
-    <name>_wheel  one wheel, its hub facing -x (the right side's), at the origin: the code places four
+    <name>_wheel  one wheel, its hub facing -x (the right side's), centred on the origin: the code places four
 
 and its extras: the wheels' hubs, where its head-, tail- and roof lights are, its size, its beltline
 (where the glass starts) and the cabin's length, and the paint it came in.
@@ -186,12 +186,15 @@ def build(kit: Path, out: Path):
         # One wheel (a right-hand one, hub facing -x), shared between the models that have the same.
         w = next(p for p in wheels if p['name'].endswith('-right'))
         key = (len(w['pos']), round(float(np.abs(w['pos']).sum()), 3))
+        # Centred on its middle (Kenney's is on its inner face), so a steered wheel turns about itself.
+        mid = float(w['pos'][:, 0].min() + w['pos'][:, 0].max()) / 2 * SY
         if key not in wheels_seen:
             col, _ = sample(w['uv'])
             # Evenly, by the height: a stretched wheel would wobble as it turns.
-            wheels_seen[key] = add_mesh(f'wheel{len(wheels_seen)}', w['pos'] * SY, w['nrm'], col, w['idx'])
+            wheels_seen[key] = add_mesh(f'wheel{len(wheels_seen)}', w['pos'] * SY - [mid, 0, 0], w['nrm'], col, w['idx'])
         children.append(node(f'{name}_wheel', wheels_seen[key]))
-        hubs = [r3(p['t'] * S) for p in wheels]
+        # The right side's wheel's middle is `mid` out from its node; the left's (turned round) the other way.
+        hubs = [r3(p['t'] * S - [np.sign(p['t'][0]) * mid, 0, 0]) for p in wheels]
         radius = float(np.abs(w['pos'][:, 1]).max() * SY)
 
         def lights(mask):

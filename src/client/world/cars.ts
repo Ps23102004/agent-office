@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SPECS, CARS, SEATS, seatOffset, seatHips, leanAngle, carPoint, type Box, type CarDef, type CarKind, type CarPose, type CarSeat, type CarState } from '../../shared/garage';
+import { SPECS, CARS, seatOffset, seatHips, leanAngle, carPoint, type Box, type CarDef, type CarKind, type CarPose, type CarSeat, type CarState } from '../../shared/garage';
 import { citySolids } from '../../shared/city';
 import { FLOOR, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
 import type { Collider, Interactable } from './office';
@@ -104,7 +104,10 @@ export function supercar(kind: CarKind, color: string): CarModel {
   if (kind === 'motorbike' || kind === 'bicycle') return bike(kind, color);
   const kit = kind === 'lambo' || kind === 'ferrari' ? null : kitModel(kind satisfies KitName);
   if (kit) return kitCar(kind, kit, color);
-  // A Kenney car before its model's in (or if it never loads): drawn as a Ferrari of its size.
+  // A Kenney car before its model's in (or if it never loads): a Ferrari stretched to its size, with its seats.
+  const spec = SPECS[kind];
+  const ref = SPECS.ferrari;
+  const fit = kind === 'lambo' || kind === 'ferrari' ? null : new THREE.Vector3(spec.width / ref.width, spec.roof / ref.roof, spec.length / ref.length);
   const g = new THREE.Group();
   const lights = new THREE.Group();
   const paint = toon(color);
@@ -136,13 +139,13 @@ export function supercar(kind: CarKind, color: string): CarModel {
   };
   const wheels: THREE.Object3D[] = [];
   for (const sx of [-1, 1]) {
-    const x = sx * (WIDTH / 2 - 0.16);
-    const rear = wheel(x, -axle), front = wheel(x, axle);
+    const x = sx * (WIDTH / 2 - 0.16) * (fit?.x ?? 1);
+    const rear = wheel(x, -axle * (fit?.z ?? 1)), front = wheel(x, axle * (fit?.z ?? 1));
     rear.userData.front = false;
     front.userData.front = true;
     wheels.push(rear, front);
   }
-  const L = SPECS[kind].length / 2;
+  const L = (fit ? ref : spec).length / 2;
   if (kind === 'lambo') {
     for (const sx of [-1, 1]) {
       const head = mesh(new THREE.BoxGeometry(0.5, 0.06, 0.26), lamp, sx * 0.62, 0.46, L - 0.14);
@@ -183,27 +186,36 @@ export function supercar(kind: CarKind, color: string): CarModel {
 
   // Roof off: a windshield up from the hood, bucket seats, and a wheel in front of the driver.
   const open = new THREE.Group();
+  const glassUp = new THREE.Group();
+  if (fit) glassUp.scale.copy(fit);
+  open.add(glassUp);
   const [z0, y0, z1, y1] = screen;
   const pane = mesh(new THREE.BoxGeometry(1.36, 0.04, Math.hypot(z1 - z0, y1 - y0)), glass, 0, (y0 + y1) / 2, (z0 + z1) / 2);
   pane.rotation.x = Math.atan2(y1 - y0, z0 - z1);
-  open.add(pane);
-  for (const s of Object.values(SEATS)) {
+  glassUp.add(pane);
+  // The seats where their riders sit (seatOffset), not stretched: one, in the middle, in a single-seater.
+  for (const seat of spec.seats < 2 ? (['driver'] as const) : (['driver', 'passenger'] as const)) {
+    const s = seatOffset(kind, seat);
     const back = mesh(new THREE.BoxGeometry(0.5, 0.6, 0.1), dark, s.x, 0.95, s.z - 0.34);
     back.rotation.x = -0.18;
     open.add(back, mesh(new THREE.BoxGeometry(0.5, 0.1, 0.52), dark, s.x, 0.5, s.z));
   }
-  const hoop = mesh(new THREE.TorusGeometry(0.16, 0.028, 6, 18), dark, SEATS.driver.x, 0.98, SEATS.driver.z + 0.5);
+  const driver = seatOffset(kind, 'driver');
+  const hoop = mesh(new THREE.TorusGeometry(0.16, 0.028, 6, 18), dark, driver.x, 0.98, driver.z + 0.5);
   hoop.rotation.x = -0.45;
   open.add(hoop);
 
   const root = new THREE.Group();
   const top = packed(closed);
+  const shell = packed(g, true);
+  lights.traverse((o) => { o.castShadow = false; });
+  const lit = mergeByMaterial(lights);
+  for (const part of fit ? [shell, lit, top] : []) part.scale.copy(fit!);
   const inside = packed(open);
   inside.visible = false;
   const bodyGroup = new THREE.Group();
-  lights.traverse((o) => { o.castShadow = false; });
   // A car's springs move its body, not its wheels: the tires stay on the road (only a bike's wheels lean with it).
-  bodyGroup.add(packed(g, true), mergeByMaterial(lights), top, inside);
+  bodyGroup.add(shell, lit, top, inside);
   root.add(bodyGroup, ...wheels);
   return { root, body: bodyGroup, top, open: inside, wheels };
 }
