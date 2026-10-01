@@ -35,12 +35,12 @@ import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
 import { CARS, SPECS, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
-import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
+import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, resetPose, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
 import { ARENA, ARENA_GATE, ARENA_NAME, CITY_ARENA_GATE } from '../shared/arena';
 import { buildArena, type ArenaWorld } from './world/arena';
 import { ArenaPlay } from './arena';
-import { joinGrid, leaveRace, missedCheckpoint, myRacer, nextCheckpoint, startRace, wireRace } from './race';
+import { Ghost, Marshal, joinGrid, leaveRace, missedCheckpoint, myRacer, myTiming, nextCheckpoint, progress, standings, startRace, wireRace } from './race';
 import { MEET_SPOTS, answerRide, meetLabel, offerRide, postMeet, rideCandidates, rideOffer, wireTogether, type MeetPin, type MeetSpotId } from './together';
 import { pinFloor } from '../shared/meet';
 import { RACE } from '../shared/race';
@@ -1261,6 +1261,64 @@ store.on('race', () => {
   }
 });
 
+// ---- The race, live: the wrong way round, back on the track, where you are in it, your best lap's ghost.
+const marshal = new Marshal();
+const ghost = new Ghost();
+/** While the screen's dipped to put your car back on the track: its timer. */
+let resetting = 0;
+/**
+ * Your car back on the track at the last checkpoint you went through, stopped and facing the way
+ * round (Backspace, or the marshal after a few seconds off it, stuck or the wrong way round). The
+ * office takes it as a reset, not a jump (server/race.ts). Not on the grid, nor once you're home.
+ */
+function resetCar() {
+  const r = myRacer();
+  if (!atCircuit || !driver.driving || resetting || (r && (store.race.phase !== 'racing' || r.finishedAt !== undefined))) return;
+  fade(true, true);
+  resetting = window.setTimeout(() => {
+    resetting = 0;
+    fade(false, true);
+    if (!atCircuit || !driver.driving) return;
+    const pose = { ...resetPose(myTiming()?.checkpoint ?? -1), speed: 0, steer: 0, slip: 0 };
+    fleet().place(driver.car!, pose);
+    // Not driven there: it went through no lines on the way.
+    coachFrom = null;
+    marshal.clear();
+    net.send({ t: 'car.drive', car: driver.car!, ...pose });
+  }, 250);
+}
+/** Each frame at the circuit: store.raceLive for the race's HUD, putting you back on the track when it's time, and the ghost. */
+function raceFrame(dt: number, c: Circuit) {
+  const live = store.raceLive;
+  const pose = driver.driving ? driver.pose : null;
+  const r = myRacer();
+  const t = myTiming();
+  const race = store.race;
+  const onLap = !!pose && !!t && t.checkpoint >= 0 && (!r || (race.phase === 'racing' && r.finishedAt === undefined));
+  const surface = pose ? trackSurface(pose.x, pose.z) : 'out';
+  if (onLap && !resetting && surface !== 'paddock') {
+    live.resetIn = marshal.step(dt, pose!, surface === 'grass', driver.gas !== 0);
+    if (live.resetIn === 0) resetCar();
+  } else {
+    marshal.clear();
+    live.resetIn = null;
+  }
+  live.wrongWay = marshal.wrongWay;
+  const at = r && race.phase === 'racing'
+    ? standings(race.racers.map((x) => {
+        const car = c.fleet.cars[x.car]?.pose;
+        return { id: x.id, name: x.name, at: car ? progress(x, car.x, car.z) : -Infinity, speed: car?.speed ?? 0, finishedAt: x.finishedAt };
+      }), store.you)
+    : null;
+  live.position = at?.position ?? null;
+  live.racers = r ? race.racers.length : 0;
+  live.gapAhead = at?.ahead ?? null;
+  live.gapBehind = at?.behind ?? null;
+  const ghostAt = onLap && t!.lapStartedAt !== undefined ? (ghost.record(t!.lapStartedAt, t!.bestLap, store.officeNow(), pose!), ghost.at(store.officeNow() - t!.lapStartedAt)) : null;
+  c.ghost(ghostAt ? carDefs()[driver.car!] : null, ghostAt);
+  live.ghost = !!ghostAt;
+}
+
 /** In a car: how fast, who with, and the keys. */
 function renderDriveHint(el: HTMLElement) {
   const i = driver.car!;
@@ -1272,7 +1330,7 @@ function renderDriveHint(el: HTMLElement) {
     const other = name(c?.passenger);
     hint = {
       k: `drive|${kmh}|${other}`,
-      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), key('E', 'Get out')],
+      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), ...(atCircuit ? [key('⌫', 'Back on track')] : []), key('E', 'Get out')],
     };
     hint.k += `|${raceKey() ?? ''}`;
   } else {
@@ -4445,9 +4503,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // In a car, E gets you out and H honks (W A S D and Space drive, see Driver); nothing else is in reach.
-  if (driver.active && (e.code === 'KeyE' || e.code === 'KeyH' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
+  if (driver.active && (e.code === 'KeyE' || e.code === 'KeyH' || e.code === 'KeyF' || e.code in DESK_KEYS || (atCircuit && e.code === 'Backspace'))) {
     if (e.repeat) return;
     if (e.code === 'KeyE') getOut();
+    else if (e.code === 'Backspace') resetCar();
     else if (e.code === 'KeyH') honk();
     else if (e.code === 'KeyR' && raceKey()) raceAction();
     return;
@@ -5330,6 +5389,7 @@ function frame(ts?: number) {
   if (atCircuit && circuit) {
     circuit.update(dt, t, store.race, store.officeNow(), circuit.fleet.cars.map((v) => v.pose));
     circuit.coach(driver.driving ? nextCheckpoint() : null);
+    raceFrame(dt, circuit);
   }
   gates();
   sound.setWeather(sky.rain, 1 - sky.daylight);

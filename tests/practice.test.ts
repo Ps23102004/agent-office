@@ -33,10 +33,11 @@ test('practice laps: on your own outside the race, timed from the first time ove
   assert.equal(race.state().record, undefined, 'the race record is the race’s');
   assert.equal(race.state().phase, 'idle');
   // A quicker second lap is the new best.
+  const first = p.bestLap!;
   driveOn(race, 'p', 4, L, now, 80, WHO);
   p = practicer(race)!;
   assert.equal(p.laps, 2);
-  assert.ok(p.lastLap! < 70_000 && p.bestLap === p.lastLap);
+  assert.ok(p.lastLap! < first && p.bestLap === p.lastLap);
 });
 
 test('practice laps answer to the same rules: no teleporting, no going backwards, no skipping a line', () => {
@@ -88,7 +89,7 @@ test('practice ends when you get out or line up for the race; your best is still
 
 test('sector splits: three of them, timed by the office, adding up to the lap, with deltas against your best', () => {
   assert.equal(SECTORS.length, 3);
-  assert.deepEqual([sectorOf(0), sectorOf(4), sectorOf(5), sectorOf(13)], [0, 0, 1, 2]);
+  assert.deepEqual([sectorOf(0), sectorOf(SECTORS[1] - 1), sectorOf(SECTORS[1]), sectorOf(CHECKPOINTS - 1)], [0, 0, 1, 2]);
   const race = new RaceControl();
   const now = { t: 0 };
   ['a', 'b'].forEach((id, i) => race.join(id, id.toUpperCase(), i, now.t));
@@ -181,4 +182,51 @@ test('practice laps go no quicker than the car can: a spoofed fast lap takes not
   driveOn(guest, 'g', -20, L + 40, { t: 0 }, 100, { name: 'Guest', car: 4 });
   assert.equal(practicer(guest, 'g')!.laps, 1);
   assert.equal(guest.state().practiceRecord, undefined);
+});
+
+test('live: places and gaps from how far round everyone is, the wrong way, put back after trouble, and the ghost of your best lap', async () => {
+  const { Ghost, MARSHAL, Marshal, progress, standings } = await import('../src/client/race.js');
+  // Past the start line on lap 1 is ahead of just short of it on lap 0; short of the line isn't a lap ahead.
+  const near = pointAt(-5), past = pointAt(5);
+  assert.ok(progress({ lap: 1, checkpoint: 0 }, past.x, past.z) > progress({ lap: 0, checkpoint: CHECKPOINTS - 1 }, near.x, near.z));
+  assert.ok(progress({ lap: 0, checkpoint: 0 }, near.x, near.z) < 0);
+  const at = (id: string, s: number, speed = 20) => ({ id, name: id, at: s, speed });
+  const st = standings([at('a', 500), at('me', 400, 40), at('c', 300)], 'me')!;
+  assert.equal(st.position, 2);
+  assert.deepEqual([st.ahead!.id, st.ahead!.metres, st.ahead!.seconds], ['a', 100, 2.5]);
+  assert.deepEqual([st.behind!.id, st.behind!.metres, st.behind!.seconds], ['c', 100, 5]);
+  assert.equal(standings([{ ...at('home', 0), finishedAt: 1 }, at('me', 9000)], 'me')!.position, 2, 'whoever is home is ahead');
+
+  // Going round the wrong way: told after a second, put back after a few.
+  const m = new Marshal();
+  const p = pointAt(800);
+  const back = { x: p.x, z: p.z, rotY: Math.atan2(-p.tx, -p.tz), speed: 15 };
+  let left: number | null = null;
+  for (let t = 0; t < MARSHAL.wrongWay + 0.05; t += 0.05) left = m.step(0.05, back, false, true);
+  assert.ok(m.wrongWay);
+  assert.ok(left !== null && left > 0);
+  for (let t = 0; t < MARSHAL.reset; t += 0.05) left = m.step(0.05, back, false, true);
+  assert.equal(left, 0);
+  // The right way at speed on the asphalt is all fine.
+  m.clear();
+  const fine = { ...back, rotY: Math.atan2(p.tx, p.tz) };
+  for (let t = 0; t < 5; t += 0.05) left = m.step(0.05, fine, false, true);
+  assert.equal(left, null);
+  assert.equal(m.wrongWay, false);
+  // Stuck in the grass, foot down.
+  for (let t = 0; t < MARSHAL.reset + 0.1; t += 0.05) left = m.step(0.05, { ...fine, speed: 0.5 }, true, true);
+  assert.equal(left, 0);
+
+  // The ghost: a lap the office says is your best is kept, and played back by the time into the lap.
+  const g = new Ghost();
+  for (let t = 0; t <= 60_000; t += 16) g.record(1000, undefined, 1000 + t, { x: t / 100, z: 0, rotY: 0 });
+  assert.equal(g.at(30_000), null, 'nothing until a lap is done');
+  g.record(61_000, 60_000, 61_000, { x: 0, z: 0, rotY: 0 });
+  assert.equal(g.time, 60_000);
+  assert.ok(Math.abs(g.at(30_000)!.x - 300) < 1);
+  assert.equal(g.at(60_500), null, 'past its finish');
+  // A slower lap after it isn't kept.
+  for (let t = 0; t <= 70_000; t += 50) g.record(61_000, 60_000, 61_000 + t, { x: -t, z: 0, rotY: 0 });
+  g.record(131_000, 60_000, 131_000, { x: 0, z: 0, rotY: 0 });
+  assert.ok(g.at(30_000)!.x > 0);
 });

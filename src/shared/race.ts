@@ -11,7 +11,7 @@ export type RacePhase = 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished';
  * The lap split in three sectors: each starts at one of these checkpoints (the first at the start
  * line) and ends at the next one's. The office times them (server/race.ts), racing or practising.
  */
-export const SECTORS = [0, 5, 10] as const;
+export const SECTORS = [0, 11, 22] as const;
 
 /** A sector just done: which, how long it took (ms), and against your best before it (ms, - is quicker). */
 export interface Split {

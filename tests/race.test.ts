@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CENTER, CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, PADDOCK, TRACK, checkpoint, circuitGround, crossed, gridPose, inGate, nearestProgress, onTrack, pointAt, surfaceAt, track } from '../src/shared/circuit.js';
+import { CENTER, CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, PADDOCK, TRACK, checkpoint, circuitGround, crossed, gridPose, inGate, nearestProgress, onTrack, pointAt, resetPose, surfaceAt, track } from '../src/shared/circuit.js';
 import { RACE_PLAZA, cityPaved, citySolids } from '../src/shared/city.js';
 import { RACE } from '../src/shared/race.js';
 import { RaceControl } from '../src/server/race.js';
@@ -9,21 +9,69 @@ import { Garage } from '../src/server/garage.js';
 const BAND = TRACK.width / 2 + TRACK.runoff;
 
 test('the circuit is a closed loop of a proper length, never running into itself', () => {
-  const { points, length } = track();
-  assert.ok(length > 1200 && length < 1800, `about a lap: ${length.toFixed(0)} m`);
+  const { points, length, corners } = track();
+  assert.ok(length > 3000 && length < 3600, `about a lap: ${length.toFixed(0)} m`);
   const first = points[0], last = points[points.length - 1];
   assert.ok(Math.hypot(first.x - last.x, first.z - last.z) < 3, 'the last point comes round to the first');
-  // Parts of the track a good way apart round the lap are never within two run-offs of each other.
-  for (let i = 0; i < points.length; i += 3) {
-    for (let j = i + 1; j < points.length; j += 3) {
+  // Parts of the track a good way apart round the lap are never close enough for one's barrier to stand on the other's grass.
+  for (let i = 0; i < points.length; i += 2) {
+    for (let j = i + 1; j < points.length; j += 2) {
       const apart = Math.min(Math.abs(points[i].s - points[j].s), length - Math.abs(points[i].s - points[j].s));
-      if (apart < 150) continue;
-      assert.ok(Math.hypot(points[i].x - points[j].x, points[i].z - points[j].z) > 2 * BAND, `s ${points[i].s.toFixed(0)} and ${points[j].s.toFixed(0)}`);
+      if (apart < 250) continue;
+      assert.ok(Math.hypot(points[i].x - points[j].x, points[i].z - points[j].z) > 2 * BAND + 4, `s ${points[i].s.toFixed(0)} and ${points[j].s.toFixed(0)}`);
     }
   }
+  // Nor does the centre line cross itself anywhere.
+  const n = points.length;
+  const side = (a: { x: number; z: number }, b: { x: number; z: number }, c: { x: number; z: number }) => Math.sign((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
+  for (let i = 0; i < n; i++) {
+    const a = points[i], b = points[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if ((j + 1) % n === i) continue;
+      const c = points[j], d = points[(j + 1) % n];
+      assert.ok(!(side(a, b, c) !== side(a, b, d) && side(c, d, a) !== side(c, d, b)), `crosses at s ${a.s.toFixed(0)} and ${c.s.toFixed(0)}`);
+    }
+  }
+  // A proper lap: hairpins and slow corners to brake for, fast sweepers, and a long straight to the first corner.
+  assert.ok(corners.some((c) => Math.abs(c.turn) >= 150 && c.r < 20), 'a hairpin');
+  assert.ok(corners.filter((c) => c.brake).length >= 3);
+  assert.ok(corners.some((c) => c.r >= 100));
+  assert.ok(corners[0].s0 >= 400, 'a long run down to Turn 1');
+  // About one checkpoint every hundred metres.
+  assert.ok(length / CHECKPOINTS > 80 && length / CHECKPOINTS < 130);
   // The start line is on the main straight, heading east past the paddock.
   const line = pointAt(0);
   assert.ok(Math.abs(line.tx - 1) < 0.01 && Math.abs(line.z - CENTER.z) < 0.5);
+});
+
+test('the barriers stand clear of the track all round the outside of every corner and along the straights', () => {
+  const RAIL = BAND + 1;
+  const clear = (x: number, z: number) => Math.abs(nearestProgress(x, z).d) > RAIL - 0.5;
+  const { points, corners } = track();
+  let blocked = 0;
+  for (const p of points) {
+    for (const side of [-1, 1]) {
+      const x = p.x + p.tz * RAIL * side, z = p.z - p.tx * RAIL * side;
+      if (clear(x, z)) continue;
+      blocked++;
+      // Only ever round the inside of a tight corner, near it.
+      const c = corners.find((c) => p.s > c.s0 - 80 && p.s < c.s1 + 80 && c.r < 2 * RAIL && (c.turn > 0 ? -1 : 1) === side);
+      assert.ok(c, `a barrier on the track's grass at s ${p.s.toFixed(0)}, side ${side}`);
+    }
+  }
+  assert.ok(blocked < points.length * 0.1);
+});
+
+test('a car put back on the track is on the centre line just past its last checkpoint, facing the way round', () => {
+  for (const k of [-1, 0, 5, CHECKPOINTS - 1]) {
+    const r = resetPose(k);
+    const at = nearestProgress(r.x, r.z);
+    const line = k < 0 ? track().length - 10 : (k * track().length) / CHECKPOINTS;
+    assert.ok(Math.abs(at.d) < 0.3);
+    assert.ok(Math.abs(at.s - line) < 12 || Math.abs(at.s - line) > track().length - 12);
+    const p = pointAt(at.s);
+    assert.ok(Math.sin(r.rotY) * p.tx + Math.cos(r.rotY) * p.tz > 0.99);
+  }
 });
 
 test('where you are on the track: how far round, how far off it, and what it is underfoot', () => {
@@ -278,4 +326,25 @@ test('counting down, a car stays on its slot; starting from anywhere else counts
   race.drove('a', b.x, b.z, RACE.countdown * 1000 + 100);
   race.drove('a', a.x, a.z, RACE.countdown * 1000 + 200);
   assert.equal(race.state().racers[0].checkpoint, 0);
+});
+
+test('put back on the track at the last checkpoint, a racer carries on from there; anywhere else is still a jump', () => {
+  const now = { t: 0 };
+  const race = started(['a'], now);
+  race.drove('a', gridPose(0).x, gridPose(0).z, now.t);
+  const L = track().length;
+  // Through three lines, then off into the grass a long way on and back to the third.
+  driveOn(race, 'a', -7, (3 * L) / CHECKPOINTS + 20, now);
+  assert.equal(race.state().racers[0].checkpoint, 3);
+  const r = resetPose(3);
+  now.t += 100;
+  race.drove('a', r.x, r.z, now.t);
+  driveOn(race, 'a', (3 * L) / CHECKPOINTS + 4, L / CHECKPOINTS, now);
+  assert.equal(race.state().racers[0].checkpoint, 4, 'the next line counts straight away');
+  // Hopping to the next checkpoint's reset spot instead is a jump: nothing counts from there for a while.
+  const ahead = resetPose(6);
+  now.t += 100;
+  race.drove('a', ahead.x, ahead.z, now.t);
+  driveOn(race, 'a', (6 * L) / CHECKPOINTS + 4, 30, now);
+  assert.equal(race.state().racers[0].checkpoint, 4);
 });
