@@ -373,20 +373,24 @@ test('put back on the track at the last checkpoint, a racer carries on from ther
   assert.equal(race.state().racers[0].checkpoint, 4);
 });
 
-test('a reset is never further round than the car was', () => {
+test('a reset is never further round than the line the car was last credited with', () => {
   const now = { t: 0 };
   const race = started(['a'], now);
   race.drove('a', gridPose(0).x, gridPose(0).z, now.t);
   const L = track().length;
   driveOn(race, 'a', -7, (3 * L) / CHECKPOINTS + 10, now);
   assert.equal(race.state().racers[0].checkpoint, 3);
-  // Back the wrong way a long way, then asking to be put back just past line 3: ahead of where it is, so not taken.
+  // Spun and off the wrong way a long way: put back just past line 3, which it already has, so it gains nothing and is taken.
   for (let s = (3 * L) / CHECKPOINTS + 10; s > (3 * L) / CHECKPOINTS - 100; s -= 2) race.drove('a', pointAt(s).x, pointAt(s).z, (now.t += 100));
   const r = resetSpots({ checkpoint: 3 })[0];
   race.drove('a', r.x, r.z, (now.t += 100));
-  // Driving on from there (quicker than the office gives up holding it where it was) counts nothing.
   for (let s = (3 * L) / CHECKPOINTS + 4; s < (4 * L) / CHECKPOINTS + 10; s += 2) race.drove('a', pointAt(s).x, pointAt(s).z, (now.t += 50));
-  assert.equal(race.state().racers[0].checkpoint, 3);
+  assert.equal(race.state().racers[0].checkpoint, 4, 'driving on from the reset counts');
+  // But not the reset spot of a line it hasn't reached: that's a jump, and the next line doesn't count for a while.
+  const ahead = resetSpots({ checkpoint: 7 })[0];
+  race.drove('a', ahead.x, ahead.z, (now.t += 100));
+  for (let s = (7 * L) / CHECKPOINTS + 4; s < (8 * L) / CHECKPOINTS + 10; s += 2) race.drove('a', pointAt(s).x, pointAt(s).z, (now.t += 50));
+  assert.equal(race.state().racers[0].checkpoint, 4);
 });
 
 test('cutting across the grass to the next line counts nothing', () => {

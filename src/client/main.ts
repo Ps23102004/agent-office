@@ -1352,18 +1352,18 @@ function raceFrame(dt: number, c: Circuit) {
   live.ghost = !!ghostAt;
 }
 
-/** In a car: how fast, who with, and the keys. */
+/** In a car: who with, and the keys. */
 function renderDriveHint(el: HTMLElement) {
   const i = driver.car!;
   const c = store.cars[i];
   const name = (id?: string) => (id && id !== store.you ? (store.peers.get(id)?.name ?? '') : '');
   let hint: Hint;
   if (driver.driving) {
-    const kmh = Math.round(Math.abs(driver.pose?.speed ?? 0) * 3.6);
+    // How fast is the speedometer's (ui/drivehud.ts): the hint keeps still while you speed up.
     const other = name(c?.passenger);
     hint = {
-      k: `drive|${kmh}|${other}`,
-      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), ...(carDefs()[i].kind === 'bicycle' ? [] : [key('Shift', 'Boost')]), key('Z', 'Camera'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), ...(atCircuit ? [key('⌫', 'Back on track')] : []), key('E', 'Get out')],
+      k: `drive|${other}`,
+      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), ...(other ? [aside(`with ${clip(other, 20)}`)] : []), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), ...(carDefs()[i].kind === 'bicycle' ? [] : [key('Shift', 'Boost')]), key('Z', 'Camera'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), ...(atCircuit ? [key('⌫', 'Back on track')] : []), key('E', 'Get out')],
     };
     hint.k += `|${raceKey() ?? ''}`;
   } else {
@@ -5277,14 +5277,19 @@ function frame(ts?: number) {
   }
   // W1 island: down on the street the camera sees out past the haze to the sea's horizon (world/ocean.ts fades the sea out before it).
   // The title flies round the island wherever you left off (the roof, the circuit, the arena): the island shows till Play.
+  // Every frame of the flight (the welcome or a floor change can put you somewhere else meanwhile), and once more after it.
   const flying = !!title?.active;
-  if (flying !== titleIsland) {
+  if (flying || titleIsland) {
     titleIsland = flying;
     world.group.visible = flying || (!upTop && !away());
     holiday.group.visible = flying ? inOffice() : inOffice() && !upTop && !away();
     if (roof) roof.group.visible = !flying && upTop;
     if (circuit) circuit.group.visible = !flying && atCircuit;
     if (arenaWorld) arenaWorld.group.visible = !flying && atArena;
+    if (!flying && (upTop || away())) {
+      camera.far = 700;
+      camera.updateProjectionMatrix();
+    }
   }
   if (flying || (!upTop && !away())) {
     const far = title?.active || (inOffice() && Math.abs(player.pos.y - player.street) < 3) ? SHORE_FAR : FAR;

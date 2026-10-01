@@ -155,7 +155,8 @@ export class RaceUI {
     if (s.phase !== this.previousPhase) {
       if (s.phase === 'countdown' && here) this.modal?.close();
       if (s.phase === 'racing' && this.previousPhase === 'countdown') this.goUntil = now + 900;
-      if (s.phase === 'finished' && here && !modalOpen()) {
+      // Not over the title screen: the results wait in the lobby for you.
+      if (s.phase === 'finished' && here && !modalOpen() && !document.body.classList.contains('title-up')) {
         if (isTyping()) toast('🏁 Results are in — open the race lobby');
         else this.openLobby();
       }
@@ -194,8 +195,13 @@ export class RaceUI {
         text(this.practiceBest, raceTime(p.bestLap));
         text(this.practiceBestLabel, store.me.account ? 'Account practice best' : 'Session practice best');
       }
-      text(this.coach, activeTiming ? checkpointHint(activeTiming) : mine ? 'Checkpoints count in order when the race starts' : checkpointHint());
-      this.coach.classList.toggle('hidden', !!mine && !activeTiming);
+      // Live from your own page (store.raceLive): going the wrong way, or about to be put back on the track, comes first.
+      const live = store.raceLive;
+      const warn = live.wrongWay ? '⚠️ Wrong way: turn round' : live.resetIn !== null ? `Back on track in ${Math.max(1, Math.ceil(live.resetIn))}… (⌫ now)` : null;
+      text(this.coach, warn ?? (activeTiming ? checkpointHint(activeTiming) : mine ? 'Checkpoints count in order when the race starts' : checkpointHint()));
+      this.coach.classList.toggle('warn', !!warn);
+      this.coach.classList.toggle('hidden', !warn && !!mine && !activeTiming);
+      if (mine && live.position !== null && s.phase === 'racing' && mine.finishedAt === undefined) text(this.position, `${live.position} / ${live.racers}`);
       renderSplit(this.split, mine ?? p);
       this.split.classList.toggle('hidden', !mine && !p);
       this.sectors.classList.toggle('hidden', !mine && !p);

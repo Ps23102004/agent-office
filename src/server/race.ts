@@ -1,4 +1,4 @@
-import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, pastLine, resetSpots, track } from '../shared/circuit.js';
+import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, pastLine, RESET_PAST, resetSpots, track } from '../shared/circuit.js';
 import { BOOST, SPECS } from '../shared/garage.js';
 import { RACE, SECTORS, idleRace, type Practicer, type RaceState, type Racer, type Timing } from '../shared/race.js';
 
@@ -193,7 +193,8 @@ export class RaceControl {
     if (far > JUMP || budget < 0) {
       // Put back on the track: onto one of its spots for where it's got to, and no further round than it was.
       const reset = resetSpots(t).some((r) => Math.hypot(x - r.x, z - r.z) < 1);
-      if (reset && pastLine(t.checkpoint, x, z) <= pastLine(t.checkpoint, from.x, from.z) + 1) {
+      // (Back onto the line it's already been credited with is fine too, if it had spun round and gone off the wrong way.)
+      if (reset && pastLine(t.checkpoint, x, z) <= Math.max(RESET_PAST, pastLine(t.checkpoint, from.x, from.z)) + 1) {
         this.last.set(id, { x, z, at: now, budget: 0, driven: 0 });
         return undefined;
       }

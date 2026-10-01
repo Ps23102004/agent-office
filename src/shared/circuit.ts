@@ -249,7 +249,7 @@ export function crossed(i: number, a: { x: number; z: number }, b: { x: number; 
 }
 
 /** How far past a checkpoint's line a car put back on the track is set down (m). */
-const RESET_PAST = 3;
+export const RESET_PAST = 3;
 
 /** As fast as a car goes on the circuit's grass (m/s): slower than round any of its corners. */
 export const GRASS_TOP = 12;

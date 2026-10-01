@@ -8,6 +8,7 @@
 .race-practice h3 { margin: 0 0 8px; }
 .race-practice .note { margin-bottom: 0; }
 .race-coach { font-weight: 800; margin: 10px 0 6px; }
+.race-coach.warn { color: #fff; background: #d62828; padding: 4px 8px; border-radius: 8px; }
 .race-sectors { list-style: none; padding: 0; margin: 8px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .race-sectors li { padding: 4px 0; }
 .race-hud .race-sectors { font-size: 11px; }
