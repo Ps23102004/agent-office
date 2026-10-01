@@ -841,15 +841,19 @@ function carAt(i: number): { x: number; y: number; z: number } {
   return { x: p.x, y: streetY() + 0.6, z: p.z };
 }
 
-/** E at a car: behind the wheel if nobody's driving it, else beside whoever is. */
+/** E at a car: behind the wheel if nobody's driving it (beside a driver only when they offer you the seat). */
 function getIn(i: number) {
   const c = store.cars[i];
   const def = carDefs()[i];
   if (trip || climber.active || driver.active || !c || !def) return;
   if (carrying) return toast('🗂️ Your hands are full: put the card back first (Q)', 'warn');
   if (holdingBall()) return toast('🏀 Put the ball down first (Q)', 'warn');
-  const seat: CarSeat | null = !c.driver ? 'driver' : SPECS[def.kind].seats > 1 && !c.passenger ? 'passenger' : null;
-  if (!seat) return toast(`🏎️ The ${def.name} is full`, 'warn');
+  // Beside someone driving only when they offer you the seat (client/together.ts): the office won't seat you otherwise.
+  const seat: CarSeat | null = !c.driver ? 'driver' : null;
+  if (!seat) {
+    const free = SPECS[def.kind].seats > 1 && !c.passenger;
+    return toast(free ? `🚗 ${store.peers.get(c.driver!)?.name ?? 'The driver'} has to offer you the seat` : `🏎️ The ${def.name} is full`, 'warn');
+  }
   if (player.seat) standUp();
   if (hanger.active) hanger.cancel();
   if (walkingTo) stopWalking();
@@ -1091,7 +1095,7 @@ let meeting: { pin: MeetPin; walking: boolean; steps: number } | null = null;
 function meetGo(pin: MeetPin) {
   const floor = pinFloor(pin);
   if (!floor || (floor !== CIRCUIT && floor !== ROOF && !store.floors.some((f) => f.id === floor))) return toast('That floor isn’t in the building any more', 'warn');
-  if (floor === ROOF && !builtFloors().length) return toast('There’s no rooftop bar to go up to yet', 'warn');
+  if (floor === ROOF && (!builtFloors().length || (!inOffice() && !atCircuit))) return toast('There’s no rooftop bar to go up to from here', 'warn');
   if (!getOut()) return;
   if (walkingTo) stopWalking();
   errand = null;
@@ -1117,31 +1121,41 @@ function meetTick() {
   }
   const spot = MEET_SPOTS[m.pin.spot];
   const floor = pinFloor(m.pin)!;
-  const there = () => {
+  const there = (why: 'arrived' | 'stuck' = 'arrived') => {
     meeting = null;
-    toast(`📍 Here: ${spot.name}`);
+    toast(why === 'arrived' ? `📍 Here: ${spot.name}` : `🚧 Couldn’t find a way to ${spot.name}`, why === 'arrived' ? 'info' : 'warn');
   };
-  const walk = (then: () => void) => {
+  const walk = (then: (why: 'arrived' | 'stuck') => void) => {
     m.walking = true;
-    errand = { at: spot, what: spot.name, then };
+    errand = { at: spot, what: spot.name, then, quiet: true };
     const to = { x: spot.x, y: 0, z: spot.z };
     player.walkPath(inOffice() && !upTop && !downstairs() ? wayTo(player.pos, to, officeWing()) : [{ x: spot.x, z: spot.z }]);
   };
-  if (spot.where === 'circuit') {
-    if (atCircuit) return walk(there);
-    // Through the gate in the city, from the street under your floor (a map of its own has no city: straight there).
-    if (!inOffice()) return toCircuit();
-    if (upTop || !downstairs()) return ride(GARAGE);
-    return walk(() => {
-      m.walking = false;
-      toCircuit();
-    });
+  const step = () => {
+    if (spot.where === 'circuit') {
+      if (atCircuit) return walk(there);
+      // Through the gate in the city, from the street under your floor (a map of its own has no city: straight there).
+      if (!inOffice()) return toCircuit();
+      if (upTop || !downstairs()) return ride(GARAGE);
+      // Only once you're really at the gate: stuck on the way, you're not going anywhere.
+      return walk((why) => {
+        m.walking = false;
+        if (why === 'arrived') toCircuit();
+        else there(why);
+      });
+    }
+    if (store.floor !== floor) return ride(floor);
+    if (!inOffice()) return there();
+    if (spot.where === 'street' && !downstairs()) return ride(GARAGE);
+    if (spot.where === 'floor' && downstairs()) return ride(floor);
+    walk(there);
+  };
+  step();
+  // A step that went nowhere (no ride, no gate, no walk: say the elevator wouldn't go) won't go anywhere next frame either.
+  if (meeting === m && !trip && !m.walking) {
+    meeting = null;
+    toast('🚧 Couldn’t find a way there', 'warn');
   }
-  if (store.floor !== floor) return ride(floor);
-  if (!inOffice()) return there();
-  if (spot.where === 'street' && !downstairs()) return ride(GARAGE);
-  if (spot.where === 'floor' && downstairs()) return ride(floor);
-  walk(there);
 }
 
 wireTogether({ send: (msg) => net.send(msg), go: meetGo, readyToRide });
@@ -2245,7 +2259,7 @@ player.onPathEnd = (why) => {
 
 // ---- Walking over to something, then using it (Shift+Enter in the palette) -----------------------
 /** What you're on your way to (see walkThen): where to stand, what it's called, what to turn to and what to do there. */
-let errand: { at: { x: number; z: number }; what: string; face?: { x: number; z: number }; then: () => void } | null = null;
+let errand: { at: { x: number; z: number }; what: string; face?: { x: number; z: number }; then: (why: 'arrived' | 'stuck') => void; quiet?: boolean } | null = null;
 
 /**
  * Walks you over to `at` on this floor and does `then` when you get there, as if you'd walked up
@@ -2271,10 +2285,10 @@ function errandEnd(why: 'arrived' | 'cancelled' | 'stuck') {
   const e = errand!;
   errand = null;
   if (why === 'cancelled') return;
-  if (why === 'stuck') toast(`🚧 Couldn't find a way over to ${e.what}, so here it is from where you are`, 'warn');
-  else if (e.face) arrivedAt(e.face);
+  if (why === 'stuck' && !e.quiet) toast(`🚧 Couldn't find a way over to ${e.what}, so here it is from where you are`, 'warn');
+  if (why === 'arrived' && e.face) arrivedAt(e.face);
   else stopWalking();
-  e.then();
+  e.then(why);
 }
 
 // ---- Workers ------------------------------------------------------------------------------------

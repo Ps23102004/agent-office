@@ -61,7 +61,9 @@ test('a ride offer lapses: too late, the driver got out or into another car, or 
   g.enter('a', 0, 'driver');
   now.t += OFFER_EVERY;
   g.offer('a', 'b');
-  g.enter('c', 0, 'passenger');
+  now.t += OFFER_EVERY;
+  assert.equal(g.offer('a', 'c'), 0);
+  assert.equal(g.answer('c', 'a', true), 0);
   assert.equal(g.answer('b', 'a', true), undefined, 'someone took the seat');
   assert.equal(g.seatOf('b'), undefined);
   // Gone from the floor: the offer goes with them.
@@ -79,4 +81,18 @@ test('meeting spots: only the ones there are, each on the right floor', () => {
   assert.equal(pinFloor({ spot: 'pits', floor: 'f1' }), CIRCUIT);
   assert.equal(pinFloor({ spot: 'lounge', floor: 'f1' }), 'f1');
   assert.equal(pinFloor({ spot: 'gate', floor: 'f1' }), 'f1');
+});
+
+test('nobody gets in beside a driver uninvited; an empty car’s passenger seat is anyone’s', () => {
+  const g = new Garage(() => 0);
+  assert.ok(g.enter('a', 0, 'passenger'), 'nobody driving');
+  assert.ok(g.enter('b', 1, 'driver'));
+  assert.equal(g.enter('c', 1, 'passenger'), false);
+  assert.equal(g.seatOf('c'), undefined);
+});
+
+test('a pin to a spot there isn’t has no label, rather than breaking the chat', async () => {
+  const { meetLabel } = await import('../src/client/together.js');
+  assert.equal(meetLabel({ spot: 'nowhere' as never }), '');
+  assert.equal(meetLabel({ spot: 'firepit' }), '🔥 the roof fire pit');
 });

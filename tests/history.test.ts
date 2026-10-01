@@ -106,3 +106,13 @@ test('scrollback files are per worker, and pruning keeps only workers still at a
   store.remove('aaa');
   assert.equal(store.load('aaa'), undefined);
 });
+
+test('a meeting spot in the chat survives a restart; a made-up one is dropped', (t) => {
+  const dir = dataDir(t);
+  const first = new ChatLog(dir);
+  first.add({ ...line('🔥 Meet me at the roof fire pit'), meet: { spot: 'firepit' } });
+  first.add({ ...line('🛋️ Meet me at the office lounge'), meet: { spot: 'lounge', floor: 'f1' } });
+  first.add({ ...line('nope'), meet: { spot: 'nowhere' as never } });
+  first.add({ ...line('nope'), meet: { spot: 'lounge', floor: 7 as never } });
+  assert.deepEqual(new ChatLog(dir).recent(4).map((l) => l.meet), [{ spot: 'firepit' }, { spot: 'lounge', floor: 'f1' }, undefined, undefined]);
+});

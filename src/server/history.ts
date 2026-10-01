@@ -3,6 +3,7 @@ import path from 'node:path';
 import type headless from '@xterm/headless';
 import type serialize from '@xterm/addon-serialize';
 import type { ChatLine } from '../shared/protocol.js';
+import { isMeetSpot, type MeetPin } from '../shared/meet.js';
 import { logicalLines, searchKey, snippet } from '../shared/search.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
@@ -63,7 +64,7 @@ export class ChatLog {
       try {
         const l = JSON.parse(s) as Partial<ChatLine>;
         if (typeof l.text !== 'string' || typeof l.name !== 'string' || typeof l.at !== 'number') continue;
-        this.lines.push({ from: typeof l.from === 'string' ? l.from : '', name: l.name, color: typeof l.color === 'string' ? l.color : '#4f86f7', text: l.text, at: l.at, ...(l.account === true ? { account: true } : {}) });
+        this.lines.push({ from: typeof l.from === 'string' ? l.from : '', name: l.name, color: typeof l.color === 'string' ? l.color : '#4f86f7', text: l.text, at: l.at, ...(l.account === true ? { account: true } : {}), ...meetOf(l.meet) });
       } catch {
         // a torn last line (the office died mid-write) is skipped
       }
@@ -183,4 +184,12 @@ export function searchTerminal(term: HeadlessTerminal, needle: string, limit: nu
     }
   }
   return { hits, more: false };
+}
+
+/** A chat line's meeting spot as saved, if it's one there is (shared/meet.ts): `{ meet }`, or nothing. */
+function meetOf(m: unknown): { meet?: MeetPin } {
+  if (!m || typeof m !== 'object') return {};
+  const { spot, floor } = m as { spot?: unknown; floor?: unknown };
+  if (!isMeetSpot(spot) || (floor !== undefined && typeof floor !== 'string')) return {};
+  return { meet: { spot, ...(floor !== undefined ? { floor } : {}) } };
 }
