@@ -514,6 +514,10 @@ export interface Avoid {
   z: number;
   vx: number;
   vz: number;
+  /** A car: the way it's facing and how big it is (else it's taken for a 3 m square, as a person). */
+  yaw?: number;
+  len?: number;
+  wid?: number;
 }
 
 /** Something moving that you can bump into, and the way it's going (m/s). */
@@ -528,7 +532,7 @@ export interface StreetLife {
   group: THREE.Group;
   /** `t` is shared time (s), `night` 0–1; `near` is where you are (what's far from it isn't kept up), `avoid` your car if you're in one (else it's you). */
   update(t: number, dt: number, night: number, near: { x: number; z: number }, avoid?: readonly Avoid[], hour?: number): void;
-  /** The moving vehicles within `reach` of (x, z), as boxes to collide with. */
+  /** The moving vehicles within `reach` of (x, z), as boxes to collide with (turned as they are: see Box.rotY). */
   obstacles(x: number, z: number, reach: number): Obstacle[];
   /** Something of yours hit at `at` at `speed`: a person tumbles, a car stops. Says what it was (null: nothing there). */
   hit(at: { x: number; z: number }, speed: number): 'person' | 'car' | null;
@@ -1263,7 +1267,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     p.state = s.kind === 'door' ? 'door' : s.kind === 'bench' ? 'sit' : 'idle';
   }
 
-  const avoidBody = (a: Avoid): Body => ({ x: a.x, z: a.z, yaw: 0, len: 3, wid: 3 });
+  const avoidBody = (a: Avoid): Body => ({ x: a.x, z: a.z, yaw: a.yaw ?? 0, len: a.len ?? 3, wid: a.wid ?? 3 });
 
   function stepVehicle(v: Vehicle, dt: number, t: number, avoidBodies: Body[]) {
     const K = SPECS[v.kind];
@@ -1319,7 +1323,10 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     }
     for (const b of avoidBodies) {
       const g = gapAhead(v, b);
-      if (g !== null) target = Math.min(target, safeSpeed(g, 0, K.vmax));
+      if (g === null) continue;
+      target = Math.min(target, safeSpeed(g, 0, K.vmax));
+      // Run into it after all (it pulled out in front): stop there, rather than shove on through it.
+      if (g < 0.3) v.hold = Math.max(v.hold, 1.5);
     }
     // Its ghost is where it should be by now: behind it, it hurries (up to the top speed); ahead, it eases off.
     if (gh) {
@@ -1751,7 +1758,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
         const c = Math.abs(Math.cos(v.yaw));
         const hx = (s * v.len + c * v.wid) / 2;
         const hz = (c * v.len + s * v.wid) / 2;
-        out.push({ box: { minX: v.x - hx, maxX: v.x + hx, minZ: v.z - hz, maxZ: v.z + hz }, vx: Math.sin(v.yaw) * v.v, vz: Math.cos(v.yaw) * v.v });
+        out.push({ box: { minX: v.x - hx, maxX: v.x + hx, minZ: v.z - hz, maxZ: v.z + hz, rotY: v.yaw, hx: v.wid / 2, hz: v.len / 2 }, vx: Math.sin(v.yaw) * v.v, vz: Math.cos(v.yaw) * v.v });
       }
       return out;
     },

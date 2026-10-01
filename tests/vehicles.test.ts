@@ -7,7 +7,7 @@ import { kitModel, setCarKit } from '../src/client/world/carkit.js';
 import { buildStreetLife } from '../src/client/world/streetlife.js';
 import { STREET_Z, citySolids, surfaceAt } from '../src/shared/city.js';
 import { CIRCUIT_CARS } from '../src/shared/circuit.js';
-import { CARS, SPECS, DRIVE_STEP, drive, impact, leanAngle, carFits, overlaps, type CarPose, type CarKind, type Pedals } from '../src/shared/garage.js';
+import { BOOST, CARS, SPECS, DRIVE_STEP, collide, contact, drive, leanAngle, carFits, overlaps, type CarPose, type CarKind, type Pedals } from '../src/shared/garage.js';
 import { Garage } from '../src/server/garage.js';
 import { Fleet, supercar } from '../src/client/world/cars.js';
 import { STREET_Y } from '../src/shared/layout.js';
@@ -73,6 +73,8 @@ test('bikes have no lateral drift, lean into the turn, and a bicycle pedals up t
 
 test('a hit keeps the tangent, bounces off a wall, and loses more speed into a heavier vehicle', () => {
   const p = { ...still, speed: 10, slip: 3 };
+  // Square on, through its middle.
+  const impact = (q: CarPose, kind: CarKind, nx: number, nz: number, other = {}) => collide(q, kind, { nx, nz, depth: 0, x: q.x, z: q.z }, other);
   const wall = impact(p, 'lambo', 0, -1);
   assert.equal(wall.slip, 3, 'the motion along the wall survives');
   assert.ok(wall.speed < 0 && Math.abs(wall.speed) < p.speed);
@@ -81,6 +83,26 @@ test('a hit keeps the tangent, bounces off a wall, and loses more speed into a h
   assert.ok(heavy.speed < light.speed);
   assert.deepEqual(impact(p, 'lambo', 0, 1), p, 'already going away');
   assert.ok(impact(p, 'lambo', 0, -1, { mass: 1450, vz: 10 }).speed === 10, 'no hit at the same speed');
+});
+
+test('a turned car is a turned box: hit off-centre it spins, and the way out is the shortest', () => {
+  // A car across the road ahead, turned 30°: its corner, not its bounding square, is what you meet.
+  const other = { x: 0, z: 5, rotY: Math.PI / 6, hx: 1, hz: 2.3 };
+  const s = Math.abs(Math.sin(other.rotY)), c = Math.abs(Math.cos(other.rotY));
+  const ex = c * other.hx + s * other.hz, ez = s * other.hx + c * other.hz;
+  const box = { minX: -ex, maxX: ex, minZ: 5 - ez, maxZ: 5 + ez, rotY: other.rotY, hx: other.hx, hz: other.hz, mass: 1500 };
+  assert.equal(contact({ x: 2.6, z: 1.4, rotY: 0 }, box), null, 'inside its bounds but clear of it');
+  const hit = contact({ x: 0.8, z: 0.6, rotY: 0 }, box)!;
+  assert.ok(hit && hit.depth > 0 && hit.nz < 0, `in it, and back out the way it came (${JSON.stringify(hit)})`);
+  // Nose-first at 20 m/s into a wall: square on, it bounces straight back; on the left front corner, most of the hit slews it round.
+  const p: CarPose = { x: 0, z: 0, rotY: 0, speed: 20, steer: 0, slip: 0, yaw: 0 };
+  const square = collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0, z: 2.3 });
+  assert.ok(square.speed < 0 && square.speed > -20 && square.yaw === 0, `bounced (${square.speed.toFixed(1)} m/s)`);
+  const after = collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0.9, z: 2.3 });
+  assert.ok(after.speed > square.speed && after.speed < 10, `slowed (${after.speed.toFixed(1)} m/s)`);
+  assert.ok(Math.abs(after.yaw ?? 0) > 0.5, `spun (${after.yaw?.toFixed(2)} rad/s)`);
+  // Into a heavier car, less bounce: its mass takes less of the hit.
+  assert.ok(collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0, z: 2.3 }, { mass: 3000 }).speed < collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0, z: 2.3 }, { mass: 500 }).speed);
 });
 
 test('a bike clears a gap a supercar cannot, and all four new spots are in the side lot', () => {
@@ -97,7 +119,7 @@ test('the office accepts old poses, clamps each kind, rejects nonsense slip, and
     assert.ok(g.enter('driver', i, 'driver'));
     const p = { ...still, x: def.x, z: def.z, speed: 999, slip: 999 };
     const checked = g.drive('driver', i, p)!;
-    assert.equal(checked.speed, SPECS[def.kind].top);
+    assert.equal(checked.speed, SPECS[def.kind].top * BOOST.top);
     assert.equal(checked.slip, SPECS[def.kind].width < 1 ? 0 : SPECS[def.kind].top * 0.75);
     assert.equal(g.drive('driver', i, { ...p, speed: -999 })?.speed, -SPECS[def.kind].reverse);
     assert.equal(g.drive('driver', i, { ...p, slip: NaN }), undefined);
@@ -219,6 +241,10 @@ test('every car tire stays on the ground at speed with steer, and under hard bra
     // Flat out to stopped in one step: a hard dive on the nose.
     step(0, 0, 1);
     assert.ok(Math.abs(v.body.rotation.x) > 0.01, 'the nose dives');
+    // It dives and rolls about its axles, not the road: the body over the hubs stays over them, never down onto the tires.
+    const hub = v.wheels[0].position.y;
+    const over = v.body.position.clone().add(new THREE.Vector3(0, hub, 0).applyEuler(v.body.rotation));
+    assert.ok(Math.abs(over.x) < 0.001 && Math.abs(over.y - hub) < 0.02 && Math.abs(over.z) < 0.001, `${kind} pivots at ${over.toArray().map((n) => n.toFixed(3))}`);
     step(0, 0, 10);
   }
 });

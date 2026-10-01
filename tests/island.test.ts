@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GRID, LIGHTHOUSE, PIER, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, citySolids, coastAt, shoreRespawn, shoreRespawns, surfaceAt } from '../src/shared/city.js';
-import { CARS, GROUND, carFits, drive, paved, type CarPose, type Pedals } from '../src/shared/garage.js';
+import { CARS, DRIVE, GROUND, carFits, drive, paved, type CarPose, type Pedals } from '../src/shared/garage.js';
 import { Garage } from '../src/server/garage.js';
 
 const GAS: Pedals = { gas: 1, turn: 0, brake: false };
@@ -108,11 +108,11 @@ test('the beach is sand right into the corners, where the coast comes nearest th
 test('off-road the tires grip less and the ground drags: grass is slippery, sand bogs you down', () => {
   const top = (surface?: Parameters<typeof drive>[4]) => run(still(), GAS, 12, surface).speed;
   assert.equal(top(), top('road'), 'a road unless said');
-  assert.ok(Math.abs(top('road') - 20) < 1e-9);
+  assert.ok(Math.abs(top('road') - DRIVE.top) < 1e-9);
   assert.ok(top('grass') < top('road') && top('sand') < top('grass'), `grass ${top('grass').toFixed(1)}, sand ${top('sand').toFixed(1)}`);
   // Onto the sand at speed, it bogs down to what the sand allows (not a dead stop).
-  const bogged = run({ ...still(), speed: 20 }, GAS, 0.5, 'sand');
-  assert.ok(bogged.speed > GROUND.sand.top * 20 && bogged.speed < 18);
+  const bogged = run({ ...still(), speed: DRIVE.top }, GAS, 0.5, 'sand');
+  assert.ok(bogged.speed > GROUND.sand.top * DRIVE.top && bogged.speed < DRIVE.top - 2);
   // A hard turn at speed on grass: the tires let go sooner, so it turns less sharply.
   const turn = (surface: Parameters<typeof drive>[4]) => run({ ...still(), speed: 12 }, { gas: 0, turn: 1, brake: false }, 0.8, surface).rotY;
   assert.ok(turn('grass') < turn('road'), `grass ${turn('grass').toFixed(2)} vs road ${turn('road').toFixed(2)}`);

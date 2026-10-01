@@ -812,9 +812,9 @@ export class OfficeSound {
 
   /**
    * The engines running: one for each car somebody's driving, where it is, how fast it's going and
-   * how hard it's pushed. One that's dropped off the list dies away.
+   * how hard it's pushed (on the boost, harder and higher). One that's dropped off the list dies away.
    */
-  setEngines(running: { car: number; at: Pos; speed: number; gas: number; kind?: CarKind }[]) {
+  setEngines(running: { car: number; at: Pos; speed: number; gas: number; kind?: CarKind; boost?: boolean }[]) {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -833,14 +833,14 @@ export class OfficeSound {
       // Still catching, with its rev.
       if (now - m.born < 0.7) continue;
       const v = Math.abs(e.speed);
-      const push = Math.abs(e.gas);
-      // Up through the gears: the revs climb in each one and drop back as it shifts up.
-      const gear = Math.min(3, Math.floor(v / 5.5));
-      const f = (44 + gear * 7 + Math.min(1.5, (v - gear * 5.5) / 5.5) * 46 + push * 5) * (kind === 'motorbike' ? 1.65 : 1);
+      const push = Math.abs(e.gas) * (e.boost ? 1.5 : 1);
+      // Up through six gears: the revs climb in each one and drop back as it shifts up.
+      const gear = Math.min(5, Math.floor(v / 13));
+      const f = (44 + gear * 7 + Math.min(1.5, (v - gear * 13) / 13) * 46 + push * 5) * (kind === 'motorbike' ? 1.65 : 1) * (e.boost ? 1.12 : 1);
       m.saw.frequency.setTargetAtTime(f, now, 0.06);
       m.sub.frequency.setTargetAtTime(f / 2, now, 0.06);
       m.tone.frequency.setTargetAtTime(240 + f * 5 + push * 450, now, 0.08);
-      m.gain.gain.setTargetAtTime(0.035 + 0.04 * push + 0.025 * Math.min(1, v / 20), now, 0.1);
+      m.gain.gain.setTargetAtTime(0.035 + 0.04 * push + 0.025 * Math.min(1, v / 40), now, 0.1);
     }
     for (const [car, m] of this.motors) {
       if (on.has(car)) continue;

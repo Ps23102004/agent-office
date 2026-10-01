@@ -1,11 +1,11 @@
 import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, track } from '../shared/circuit.js';
-import { SPECS } from '../shared/garage.js';
+import { BOOST, SPECS } from '../shared/garage.js';
 import { RACE, SECTORS, idleRace, type Practicer, type RaceState, type Racer, type Timing } from '../shared/race.js';
 
 /** Further than this between two of a driver's reports (m) isn't driving: it's a jump, and crosses nothing. */
-const JUMP = 40;
-/** Faster than circuit car `car` goes, with a little room for a slide (m/s); the fastest kind for one there isn't. */
-const fastest = (car: number) => (SPECS[CIRCUIT_CARS[car]?.kind]?.top ?? Math.max(...Object.values(SPECS).map((s) => s.top))) * 1.15;
+const JUMP = 60;
+/** Faster than circuit car `car` goes on the boost, with a little room for a slide (m/s); the fastest kind for one there isn't. */
+const fastest = (car: number) => (SPECS[CIRCUIT_CARS[car]?.kind]?.top ?? Math.max(...Object.values(SPECS).map((s) => s.top))) * BOOST.top * 1.15;
 /** How far ahead of that pace (m, as seconds of it) a car's reports can get, bunched up by a laggy connection, before they're taken for not driving. */
 const LAG = 1;
 /** No lap in circuit car `car` is quicker than this (ms): flat out all the way round the centre line. */

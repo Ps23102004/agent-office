@@ -566,7 +566,7 @@ class Store {
       case 'car.move': {
         const c = this.cars[msg.car];
         if (!c) break;
-        Object.assign(c, { x: msg.x, z: msg.z, rotY: msg.rotY, speed: msg.speed, steer: msg.steer, slip: msg.slip ?? 0 });
+        Object.assign(c, { x: msg.x, z: msg.z, rotY: msg.rotY, speed: msg.speed, steer: msg.steer, slip: msg.slip ?? 0, boost: msg.boost === true });
         this.carsAt[msg.car] = performance.now();
         break;
       }

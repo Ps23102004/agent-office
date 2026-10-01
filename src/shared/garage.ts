@@ -7,19 +7,19 @@ import { surfaceAt, type Surface } from './city.js';
 
 export type CarKind = 'lambo' | 'ferrari' | 'motorbike' | 'bicycle' | 'sedan-sports' | 'suv' | 'police' | 'taxi' | 'race' | 'race-future';
 
-/** Metres for the body, kg with riders for the mass, m/s at the top, m/s² on the gas, and tire grip. */
+/** Metres for the body, kg with riders for the mass, m/s at the top (a supercar's ≈ 240 km/h), m/s² on the gas off the line, and tire grip. */
 export const SPECS = {
-  lambo: { length: 4.6, width: 2, body: 0.82, roof: 1.12, mass: 1450, top: 20, accel: 8, grip: 1.15, seats: 2, wheelbase: 2.8, reverse: 7 },
-  ferrari: { length: 4.6, width: 2, body: 0.82, roof: 1.16, mass: 1550, top: 22, accel: 7.6, grip: 1.2, seats: 2, wheelbase: 2.72, reverse: 7 },
-  motorbike: { length: 2.2, width: 0.78, body: 0.8, roof: 1.15, mass: 260, top: 24, accel: 6, grip: 1.05, seats: 2, wheelbase: 1.5, reverse: 3 },
-  bicycle: { length: 1.85, width: 0.62, body: 0.82, roof: 1.12, mass: 95, top: 7, accel: 1.8, grip: 0.9, seats: 1, wheelbase: 1.12, reverse: 2 },
+  lambo: { length: 4.6, width: 2, body: 0.82, roof: 1.12, mass: 1450, top: 66, accel: 10, grip: 1.15, seats: 2, wheelbase: 2.8, reverse: 9 },
+  ferrari: { length: 4.6, width: 2, body: 0.82, roof: 1.16, mass: 1550, top: 64, accel: 9.6, grip: 1.2, seats: 2, wheelbase: 2.72, reverse: 9 },
+  motorbike: { length: 2.2, width: 0.78, body: 0.8, roof: 1.15, mass: 260, top: 50, accel: 9, grip: 1.05, seats: 2, wheelbase: 1.5, reverse: 3 },
+  bicycle: { length: 1.85, width: 0.62, body: 0.82, roof: 1.12, mass: 95, top: 9, accel: 1.8, grip: 0.9, seats: 1, wheelbase: 1.12, reverse: 2 },
   // Kenney's cars (client/world/carkit.ts): their sizes are the models'. `seatZ`/`hips`: where you sit, if not the usual.
-  'sedan-sports': { length: 4.34, width: 1.76, body: 1.08, roof: 1.49, mass: 1350, top: 21, accel: 7.4, grip: 1.12, seats: 2, wheelbase: 2.24, reverse: 7 },
-  suv: { length: 4.59, width: 2.03, body: 1.08, roof: 1.76, mass: 2100, top: 17, accel: 5.6, grip: 1.0, seats: 2, wheelbase: 2.24, reverse: 6 },
-  police: { length: 5.27, width: 2.03, body: 1.08, roof: 1.76, mass: 1750, top: 21, accel: 7, grip: 1.1, seats: 2, wheelbase: 2.75, reverse: 7 },
-  taxi: { length: 4.68, width: 2.03, body: 1.08, roof: 2.03, mass: 1500, top: 16, accel: 5.5, grip: 1.0, seats: 2, wheelbase: 2.58, reverse: 6 },
-  race: { length: 4.35, width: 1.62, body: 0.66, roof: 0.99, mass: 760, top: 26, accel: 10, grip: 1.4, seats: 1, wheelbase: 2.58, reverse: 5, seatZ: -0.35, hips: 0.25 },
-  'race-future': { length: 4.52, width: 1.62, body: 0.8, roof: 1.12, mass: 780, top: 27, accel: 10.4, grip: 1.45, seats: 1, wheelbase: 2.58, reverse: 5, seatZ: -0.45, hips: 0.3 },
+  'sedan-sports': { length: 4.34, width: 1.76, body: 1.08, roof: 1.49, mass: 1350, top: 58, accel: 8.6, grip: 1.12, seats: 2, wheelbase: 2.24, reverse: 8 },
+  suv: { length: 4.59, width: 2.03, body: 1.08, roof: 1.76, mass: 2100, top: 44, accel: 6.4, grip: 1.0, seats: 2, wheelbase: 2.24, reverse: 7 },
+  police: { length: 5.27, width: 2.03, body: 1.08, roof: 1.76, mass: 1750, top: 55, accel: 8, grip: 1.1, seats: 2, wheelbase: 2.75, reverse: 8 },
+  taxi: { length: 4.68, width: 2.03, body: 1.08, roof: 2.03, mass: 1500, top: 42, accel: 6, grip: 1.0, seats: 2, wheelbase: 2.58, reverse: 7 },
+  race: { length: 4.35, width: 1.62, body: 0.66, roof: 0.99, mass: 760, top: 78, accel: 12, grip: 1.4, seats: 1, wheelbase: 2.58, reverse: 6, seatZ: -0.35, hips: 0.25 },
+  'race-future': { length: 4.52, width: 1.62, body: 0.8, roof: 1.12, mass: 780, top: 80, accel: 12.4, grip: 1.45, seats: 1, wheelbase: 2.58, reverse: 6, seatZ: -0.45, hips: 0.3 },
 } as const;
 // Older callers mean a Lambo when they don't give a kind.
 export const CAR = SPECS.lambo;
@@ -33,6 +33,13 @@ export interface Box {
   maxX: number;
   minZ: number;
   maxZ: number;
+  /**
+   * Turned (another vehicle): the rectangle `hx` across and `hz` along (half-sizes) about the box's
+   * middle, its nose `rotY` round like a car's. The min/max are then only its bounds.
+   */
+  rotY?: number;
+  hx?: number;
+  hz?: number;
   /** Another vehicle: its mass and motion. A wall has no mass here (it never moves). */
   mass?: number;
   vx?: number;
@@ -134,6 +141,8 @@ export interface CarPose {
 export interface CarState extends CarPose {
   driver?: string;
   passenger?: string;
+  /** Its driver's on the boost (car.move says): flames out the back. */
+  boost?: boolean;
 }
 
 /** Every car in its spot, as the office starts (the garage's, or `defs`: the race circuit's). */
@@ -147,35 +156,44 @@ export interface Pedals {
   turn: number;
   /** Space: the handbrake on a car, an ordinary brake on a bike. */
   brake: boolean;
+  /** Shift, with boost in the tank (client/driving.ts keeps the meter): faster, and on past top speed. */
+  boost?: boolean;
 }
 
+/** Boost: how far past top speed it takes you, and the extra shove (m/s²) on top of the engine's. */
+export const BOOST = { top: 1.35, accel: 9 } as const;
+
 export const DRIVE = {
-  /** Flat out, forward and in reverse (m/s). */
-  top: 20,
-  reverse: 7,
+  /** Flat out, forward and in reverse (m/s): a Lambo's. */
+  top: SPECS.lambo.top,
+  reverse: SPECS.lambo.reverse,
   /** Speeding up, forward and back, and slowing down on the brake or rolling (m/s²). */
   accel: 8,
   reverseAccel: 5,
   brake: 20,
   coast: 2.5,
+  /** The air, off the gas: m/s² for each (m/s)², so a fast car slows quicker than a slow one. */
+  drag: 0.0015,
   /** Between the axles (m): how tight it turns. */
   wheelbase: 2.8,
   /** How far the front wheels turn at a crawl (radians): less the faster you go, so it doesn't spin out. */
   steer: 0.6,
   /** How fast they turn (radians a second). */
   steerRate: 2.8,
+  /** How hard a turn full lock asks for at speed (m/s² sideways): a little past what the tires hold, so you can lean on them. */
+  turn: 14,
 } as const;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** How far the front wheels can turn at `speed`. */
+/** How far the front wheels can turn at `speed`: less the faster you go, down to what keeps the turn on the tires. */
 export function steerLimit(speed: number): number {
-  return DRIVE.steer / (1 + Math.abs(speed) / 9);
+  return Math.min(DRIVE.steer / (1 + Math.abs(speed) / 9), Math.atan((DRIVE.wheelbase * DRIVE.turn) / Math.max(1, speed * speed)));
 }
 
 /** A short physics step (seconds), the same at 30 fps as at 60. */
 export const DRIVE_STEP = 1 / 120;
-export const TIRES = { gravity: 9.81, stiffness: 18, height: 0.45, rearBrakeGrip: 0.16, inertia: 1.3, restitution: 0.22 } as const;
+export const TIRES = { gravity: 9.81, stiffness: 40, height: 0.45, rearBrakeGrip: 0.16, inertia: 1.3, restitution: 0.25 } as const;
 
 /** How far a bike leans into a corner: upright at rest, never laid flat. */
 export function leanAngle(p: CarPose, kind: CarKind): number {
@@ -212,9 +230,12 @@ export function drive(p: CarPose, pedals: Pedals, dt: number, kind: CarKind = 'l
 function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground: (typeof GROUND)[Surface]): CarPose {
   const spec = SPECS[kind];
   const grip = spec.grip * ground.grip;
-  const top = spec.top * ground.top;
+  const boost = !!pedals.boost && pedals.gas > 0;
+  const fastest = spec.top * (boost ? BOOST.top : 1);
+  const top = fastest * ground.top;
   const bike = spec.width < 1;
-  const want = clamp(pedals.turn, -1, 1) * steerLimit(p.speed);
+  // On the handbrake you can throw it in harder: that's how a drift starts.
+  const want = clamp(pedals.turn, -1, 1) * (pedals.brake && !bike ? DRIVE.steer / (1 + Math.abs(p.speed) / 9) : steerLimit(p.speed));
   const steer = p.steer + clamp(want - p.steer, -DRIVE.steerRate * dt, DRIVE.steerRate * dt);
   // Crumbs of speed left from a slide count as stopped, so the gas isn't read as braking out of reverse forever.
   let v = Math.abs(p.speed) < 1e-3 ? 0 : p.speed;
@@ -226,11 +247,14 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
   if (pedals.brake) toward(0, bike ? brake : brake * 0.5);
   else if (gas > 0) {
     if (v < 0) toward(0, brake);
-    else if (v < top) v = Math.min(top, v + spec.accel * gas * dt);
+    // The pull falls away toward top speed (a fifth of it left there, so it gets there): quick off the line, a long haul to the top.
+    else if (v < top) v = Math.min(top, v + (spec.accel * (1 - 0.8 * (v / top) ** 2) + (boost ? BOOST.accel : 0)) * gas * dt);
   } else if (gas < 0) {
     if (v > 0) toward(0, brake);
     else v = Math.max(-spec.reverse * Math.max(0.5, ground.top), v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
-  } else toward(0, kind === 'bicycle' ? 0.65 : kind === 'motorbike' ? 2 : DRIVE.coast);
+  } else toward(0, kind === 'bicycle' ? 0.65 : (kind === 'motorbike' ? 2 : DRIVE.coast) + DRIVE.drag * v * v);
+  // Off the boost, past top speed: the air slows you back to it.
+  if (!boost && v > spec.top * ground.top) toward(spec.top * ground.top, 4);
   // Off the road: the ground drags at the wheels, and bogs you down to what it lets you do.
   if (ground.drag) {
     // Rolling resistance grows with speed from nothing at rest: even a bicycle creeps across the sand.
@@ -264,7 +288,7 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
     yaw += axle * (front - rear) / inertia * dt;
     slip += ((front + rear) / spec.mass - v * yaw) * dt;
   }
-  v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top);
+  v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top * BOOST.top);
   slip = clamp(slip, -spec.top * 0.75, spec.top * 0.75);
   if (Math.abs(v) < 1e-3 && Math.abs(slip) < 0.01) { v = 0; slip = 0; yaw = 0; }
   const mid = p.rotY + yaw * dt / 2;
@@ -274,20 +298,6 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
     rotY: Math.atan2(Math.sin(p.rotY + yaw * dt), Math.cos(p.rotY + yaw * dt)),
     speed: v, steer, slip, yaw,
   };
-}
-
-/** A hit takes away the motion into it, leaving the motion along it: mass matters for another vehicle. */
-export function impact(p: CarPose, kind: CarKind, nx: number, nz: number, other: Pick<Box, 'mass' | 'vx' | 'vz'> = {}): CarPose {
-  const s = Math.sin(p.rotY), c = Math.cos(p.rotY);
-  let vx = s * p.speed + c * (p.slip ?? 0);
-  let vz = c * p.speed - s * (p.slip ?? 0);
-  const into = (vx - (other.vx ?? 0)) * nx + (vz - (other.vz ?? 0)) * nz;
-  if (into >= 0) return { ...p };
-  const share = other.mass ? other.mass / (SPECS[kind].mass + other.mass) : 1;
-  const impulse = -(1 + TIRES.restitution) * into * share;
-  vx += nx * impulse;
-  vz += nz * impulse;
-  return { ...p, speed: vx * s + vz * c, slip: SPECS[kind].width < 1 ? 0 : vx * c - vz * s, yaw: 0 };
 }
 
 /** A point in the car's own frame (x across, +x left; z toward the nose), out in the world. */
@@ -325,24 +335,106 @@ export function onPavement(p: { x: number; z: number; rotY: number }, kind: CarK
   return true;
 }
 
-/** Whether the car's footprint (a rectangle turned by rotY) overlaps box `b` (separating axes). */
+/** A rectangle on the ground: its middle, half-sizes across (`hx`) and along (`hz`), turned `rotY` like a car. */
+interface Rect {
+  x: number;
+  z: number;
+  hx: number;
+  hz: number;
+  rotY: number;
+}
+
+const rectOf = (b: Box): Rect => ({
+  x: (b.minX + b.maxX) / 2,
+  z: (b.minZ + b.maxZ) / 2,
+  hx: b.rotY === undefined ? (b.maxX - b.minX) / 2 : b.hx ?? 0,
+  hz: b.rotY === undefined ? (b.maxZ - b.minZ) / 2 : b.hz ?? 0,
+  rotY: b.rotY ?? 0,
+});
+
+/** Its four corners, out in the world. */
+const corners = (r: Rect) => [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([sx, sz]) => carPoint(r, sx * r.hx, sz * r.hz));
+
+/** Whether (x, z) is inside `r`. */
+function inside(r: Rect, x: number, z: number): boolean {
+  const s = Math.sin(r.rotY), c = Math.cos(r.rotY);
+  const dx = x - r.x, dz = z - r.z;
+  return Math.abs(dx * c - dz * s) < r.hx && Math.abs(dx * s + dz * c) < r.hz;
+}
+
+/** Where the car's in box `b`: which way out (`nx`, `nz`, a unit vector from it), how far in (m), and about where they touch. */
+export interface Contact {
+  nx: number;
+  nz: number;
+  depth: number;
+  x: number;
+  z: number;
+}
+
+/**
+ * How the car's footprint at `p` (a rectangle turned by rotY) is into box `b`, or null if it's clear
+ * (touching isn't in). Separating axes: of the four sides' directions, the one it's least far in along
+ * is the way out.
+ */
+export function contact(p: { x: number; z: number; rotY: number }, b: Box, kind: CarKind = 'lambo'): Contact | null {
+  const car: Rect = { x: p.x, z: p.z, hx: SPECS[kind].width / 2, hz: SPECS[kind].length / 2, rotY: p.rotY };
+  // Nowhere near its bounds: clear, without the trigonometry.
+  const reach = Math.hypot(car.hx, car.hz);
+  if (p.x + reach <= b.minX || p.x - reach >= b.maxX || p.z + reach <= b.minZ || p.z - reach >= b.maxZ) return null;
+  const box = rectOf(b);
+  const dx = box.x - car.x, dz = box.z - car.z;
+  let best: Contact | null = null;
+  for (const r of [car, box]) {
+    const s = Math.sin(r.rotY), c = Math.cos(r.rotY);
+    // Across it, and along it.
+    for (const [ax, az] of [[c, -s], [s, c]]) {
+      const radius = (q: Rect) => {
+        const qs = Math.sin(q.rotY), qc = Math.cos(q.rotY);
+        return q.hx * Math.abs(ax * qc - az * qs) + q.hz * Math.abs(ax * qs + az * qc);
+      };
+      const d = dx * ax + dz * az;
+      const depth = radius(car) + radius(box) - Math.abs(d);
+      if (depth <= 0) return null;
+      if (!best || depth < best.depth) best = { nx: d > 0 ? -ax : ax, nz: d > 0 ? -az : az, depth, x: 0, z: 0 };
+    }
+  }
+  // Where they touch: the corners of each that are in the other, or halfway between their middles.
+  const pts = [...corners(car).filter((q) => inside(box, q.x, q.z)), ...corners(box).filter((q) => inside(car, q.x, q.z))];
+  const at = pts.length ? pts.reduce((m, q) => ({ x: m.x + q.x / pts.length, z: m.z + q.z / pts.length }), { x: 0, z: 0 }) : { x: (car.x + box.x) / 2, z: (car.z + box.z) / 2 };
+  return { ...best!, ...at };
+}
+
+/** Whether the car's footprint (a rectangle turned by rotY) overlaps box `b`. */
 export function overlaps(p: { x: number; z: number; rotY: number }, b: Box, kind: CarKind = 'lambo'): boolean {
-  const hx = SPECS[kind].width / 2;
-  const hz = SPECS[kind].length / 2;
-  const ex = (b.maxX - b.minX) / 2;
-  const ez = (b.maxZ - b.minZ) / 2;
-  const dx = (b.minX + b.maxX) / 2 - p.x;
-  const dz = (b.minZ + b.maxZ) / 2 - p.z;
-  const s = Math.abs(Math.sin(p.rotY));
-  const c = Math.abs(Math.cos(p.rotY));
-  if (Math.abs(dx) >= c * hx + s * hz + ex) return false;
-  if (Math.abs(dz) >= s * hx + c * hz + ez) return false;
-  const sn = Math.sin(p.rotY);
-  const cs = Math.cos(p.rotY);
-  // Across the car, and along it.
-  if (Math.abs(dx * cs - dz * sn) >= hx + ex * c + ez * s) return false;
-  if (Math.abs(dx * sn + dz * cs) >= hz + ex * s + ez * c) return false;
-  return true;
+  return contact(p, b, kind) !== null;
+}
+
+/** How hard the car's turned about its middle by a shove off-centre: its mass spread over its footprint. */
+export const inertia = (kind: CarKind) => SPECS[kind].mass * (SPECS[kind].length ** 2 + SPECS[kind].width ** 2) / 12 * TIRES.inertia;
+
+/**
+ * The car bouncing off what it hit at `c`: the motion into it at the point of contact, less the
+ * restitution's bounce, comes off. Off-centre, that spins it; into another vehicle, its mass takes
+ * its share. Already parting: as it was.
+ */
+export function collide(p: CarPose, kind: CarKind, c: Contact, other: Pick<Box, 'mass' | 'vx' | 'vz'> = {}): CarPose {
+  const s = Math.sin(p.rotY), co = Math.cos(p.rotY);
+  let vx = s * p.speed + co * (p.slip ?? 0);
+  let vz = co * p.speed - s * (p.slip ?? 0);
+  let yaw = p.yaw ?? 0;
+  const rx = c.x - p.x, rz = c.z - p.z;
+  // Turning at `yaw`, a point `r` from the middle goes yaw × (rz, -rx); a push along n at r turns it by r × n.
+  const arm = rz * c.nx - rx * c.nz;
+  const into = (vx + yaw * rz - (other.vx ?? 0)) * c.nx + (vz - yaw * rx - (other.vz ?? 0)) * c.nz;
+  if (into >= 0) return { ...p };
+  const m = SPECS[kind].mass;
+  const I = inertia(kind);
+  const j = (-(1 + TIRES.restitution) * into) / (1 / m + (arm * arm) / I + (other.mass ? 1 / other.mass : 0));
+  vx += (j * c.nx) / m;
+  vz += (j * c.nz) / m;
+  yaw += (j * arm) / I;
+  const bike = SPECS[kind].width < 1;
+  return { ...p, speed: vx * s + vz * co, slip: bike ? 0 : vx * co - vz * s, yaw: bike ? 0 : yaw };
 }
 
 /**
