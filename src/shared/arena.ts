@@ -1,3 +1,4 @@
+import type { BotSettings } from './bots.js';
 import type { Gate } from './circuit.js';
 
 // The arena: a walled container yard of its own, like the race circuit, reached through a second gate
@@ -153,6 +154,8 @@ export interface ArenaPlayer {
   alive: boolean;
   /** When they're back in (epoch ms), while they're dead. */
   respawnAt?: number;
+  /** One of the office's bots (shared/bots.ts). */
+  bot?: boolean;
 }
 
 export interface KillLine {
@@ -171,6 +174,8 @@ export interface ArenaState {
   players: ArenaPlayer[];
   /** The last few kills, newest last. */
   feed: KillLine[];
+  /** How the bots top the match up. */
+  bots?: BotSettings;
 }
 
 export function idleArena(): ArenaState {

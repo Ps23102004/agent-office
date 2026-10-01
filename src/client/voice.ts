@@ -184,9 +184,9 @@ export class Voice {
 
   /** Called whenever the set of peers changes. */
   syncPeers() {
-    // Nobody on the 2D view has voice (see PeerInfo.lite), so there's nothing to connect to.
-    for (const [id, p] of store.peers) if (id !== store.you && !p.lite && !this.conns.has(id)) this.connect(id);
-    for (const id of [...this.conns.keys()]) if (!store.peers.has(id) || store.peers.get(id)!.lite) this.drop(id);
+    // Nobody on the 2D view has voice (see PeerInfo.lite), and bots don't talk, so there's nothing to connect to.
+    for (const [id, p] of store.peers) if (id !== store.you && !p.lite && !p.bot && !this.conns.has(id)) this.connect(id);
+    for (const id of [...this.conns.keys()]) if (!store.peers.has(id) || store.peers.get(id)!.lite || store.peers.get(id)!.bot) this.drop(id);
   }
 
   reset() {

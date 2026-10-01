@@ -15,6 +15,7 @@ import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { RaceState } from './race.js';
 import type { ArenaState, V3 } from './arena.js';
+import type { BotLevel } from './bots.js';
 import type { MeetPin, MeetSpotId } from './meet.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
@@ -319,6 +320,8 @@ export interface PeerInfo {
   reading?: boolean;
   /** On the 2D view (/lite: a phone, say, or a slow computer): in the office, but not standing anywhere in it. */
   lite?: boolean;
+  /** One of the office's own players (shared/bots.ts): no voice, and not in the people lists. */
+  bot?: boolean;
 }
 
 /** A styled run of text on a terminal row: [text, fg, bg, flags]. */
@@ -1281,6 +1284,8 @@ export type ClientMsg =
   | { t: 'arena.fire'; o: V3; d: V3 }
   /** In the arena: reload. */
   | { t: 'arena.reload' }
+  /** In the arena: bots top the match up to `fill` players, you included (1: none), at `level` (shared/bots.ts). */
+  | { t: 'arena.bots'; fill: number; level: BotLevel }
   /** Post a meeting spot to the office chat (shared/meet.ts): on or under your floor where it's one of those. */
   | { t: 'meet.post'; spot: MeetSpotId }
   /** Driving, offer the empty seat beside you to `to` (a peer id) nearby on your floor: they're seated only once they say yes. */
