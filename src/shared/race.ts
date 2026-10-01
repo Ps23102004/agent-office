@@ -28,6 +28,8 @@ export interface Timing {
   lapStartedAt?: number;
   /** Their fastest whole lap, ms. */
   bestLap?: number;
+  /** The last whole lap's time (ms): one the office counted. */
+  lastLap?: number;
   /** This lap's sector times so far (ms), in SECTORS order. */
   sectors?: number[];
   /** Their fastest time for each sector (ms; null: none yet). */
@@ -61,8 +63,6 @@ export interface Practicer extends Timing {
   car: number;
   /** Whole practice laps done this time out. */
   laps: number;
-  /** The last whole lap's time (ms). */
-  lastLap?: number;
 }
 
 export interface RaceState {

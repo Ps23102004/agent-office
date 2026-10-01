@@ -1,4 +1,4 @@
-import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, resetPose, track } from '../shared/circuit.js';
+import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, pastLine, resetSpots, track } from '../shared/circuit.js';
 import { BOOST, SPECS } from '../shared/garage.js';
 import { RACE, SECTORS, idleRace, type Practicer, type RaceState, type Racer, type Timing } from '../shared/race.js';
 
@@ -19,6 +19,12 @@ const LAP_CAP = 5 * 60_000;
 const STALL = 3 * 60_000;
 /** Held off from where they said they were this long (ms), a driver's car is taken to be where it now says, but that report crosses nothing. */
 const REANCHOR = 3000;
+/**
+ * Less than this much of the way between two lines driven (by the centre line), and getting to the
+ * next line was across the grass: it doesn't count. The tightest line round the track itself is over
+ * 0.8 of it everywhere.
+ */
+const CUT = 0.7;
 
 /**
  * The race at the circuit, as the office keeps it: who's on the grid, the countdown, and each
@@ -31,7 +37,7 @@ export class RaceControl {
    * Where each racer's car was when they last said, and when. `jumped`: it got there some way other
    * than driving (a long gap in its reports), so the next move from there crosses no line.
    */
-  private last = new Map<string, { x: number; z: number; at: number; jumped?: boolean; held?: number; budget?: number }>();
+  private last = new Map<string, { x: number; z: number; at: number; jumped?: boolean; held?: number; budget?: number; driven?: number }>();
   /** The account of each person on practice laps, if they're signed in with one: only theirs are kept. */
   private accounts = new Map<string, string>();
   /** When the results come down, once it's finished. */
@@ -147,9 +153,9 @@ export class RaceControl {
       return changed;
     }
     if (racer.finishedAt !== undefined) return changed;
-    const from = this.step(id, x, z, now, racer.car, racer.checkpoint);
+    const from = this.step(id, x, z, now, racer.car, racer);
     const next = (racer.checkpoint + 1) % CHECKPOINTS;
-    if (!from || !crossed(next, from, { x, z })) {
+    if (!from || !crossed(next, from, { x, z }) || !this.fair(id, racer)) {
       // Positions shift as people pass each other between the lines, too.
       return this.order() || changed;
     }
@@ -169,10 +175,11 @@ export class RaceControl {
    * The car has got to (x, z) at `now`: where it came from, if it got here by driving and can have
    * crossed a line on the way. Further than a car could have gone since is not driving: where it was
    * stands, unless it stays away a while (a bad connection), when it's taken to be here, but can't
-   * cross a line from here. A jump back onto the track at the last checkpoint it went through
-   * (`last`: shared/circuit.ts resetPose) is a reset, which gains nothing: it's there straight away.
+   * cross a line from here. A jump back onto the track behind it, at the last checkpoint it went
+   * through (`t`, its timing: shared/circuit.ts resetSpots) is a reset, which gains nothing: it's
+   * there straight away. How far it's driven since its last line is kept, for fair().
    */
-  private step(id: string, x: number, z: number, now: number, car: number, last: number): { x: number; z: number } | undefined {
+  private step(id: string, x: number, z: number, now: number, car: number, t: Timing & { lap?: number; slot?: number }): { x: number; z: number } | undefined {
     const max = fastest(car);
     const cap = max * LAG;
     const from = this.last.get(id);
@@ -184,18 +191,31 @@ export class RaceControl {
     const far = Math.hypot(x - from.x, z - from.z);
     const budget = Math.min(cap, (from.budget ?? cap) + (max * Math.max(0, now - from.at)) / 1000 - far);
     if (far > JUMP || budget < 0) {
-      const reset = resetPose(last);
-      if (Math.hypot(x - reset.x, z - reset.z) < 1) {
-        this.last.set(id, { x, z, at: now, budget: 0 });
+      // Put back on the track: onto one of its spots for where it's got to, and no further round than it was.
+      const reset = resetSpots(t).some((r) => Math.hypot(x - r.x, z - r.z) < 1);
+      if (reset && pastLine(t.checkpoint, x, z) <= pastLine(t.checkpoint, from.x, from.z) + 1) {
+        this.last.set(id, { x, z, at: now, budget: 0, driven: 0 });
         return undefined;
       }
       const held = from.held ?? now;
       // Taken to be here after all: owing the time it saved (up to a few seconds' worth), so a jump ahead gains nothing.
-      this.last.set(id, now - held >= REANCHOR ? { x, z, at: now, jumped: true, budget: Math.max(-3 * cap, Math.min(0, budget)) } : { ...from, held });
+      this.last.set(id, now - held >= REANCHOR ? { x, z, at: now, jumped: true, budget: Math.max(-3 * cap, Math.min(0, budget)), driven: 0 } : { ...from, held });
       return undefined;
     }
-    this.last.set(id, { x, z, at: now, budget });
+    this.last.set(id, { x, z, at: now, budget, driven: (from.driven ?? 0) + far });
     return from.jumped ? undefined : from;
+  }
+
+  /**
+   * Whether `id` drove round the track to the line they've just gone over, rather than across the
+   * grass to it (CUT): far enough since their last one. The first time over the start line on practice
+   * laps is from wherever. Counting it starts them on the next.
+   */
+  private fair(id: string, t: Timing): boolean {
+    const at = this.last.get(id);
+    if (!at || (t.checkpoint >= 0 && (at.driven ?? 0) < (CUT * track().length) / CHECKPOINTS)) return false;
+    at.driven = 0;
+    return true;
   }
 
   /** Practice laps: the same checkpoints in the same order, from the first time over the start line. */
@@ -216,9 +236,9 @@ export class RaceControl {
       p.name = who.name;
       changed = true;
     }
-    const from = this.step(id, x, z, now, p.car, p.checkpoint);
+    const from = this.step(id, x, z, now, p.car, p);
     const next = (p.checkpoint + 1) % CHECKPOINTS;
-    if (!from || !crossed(next, from, { x, z })) return changed;
+    if (!from || !crossed(next, from, { x, z }) || !this.fair(id, p)) return changed;
     p.checkpoint = next;
     this.split(p, next, now);
     if (next !== 0) return true;
@@ -277,6 +297,7 @@ export class RaceControl {
     // Quicker than a car can go round: not a lap.
     if (ms < quickestLap(racer.car)) return;
     racer.lap++;
+    racer.lastLap = ms;
     if (ms > 0 && (racer.bestLap === undefined || ms < racer.bestLap)) racer.bestLap = ms;
     if (ms > 0 && (!r.record || ms < r.record.ms)) r.record = { name: racer.name, ms };
     if (racer.lap < r.laps) return;

@@ -232,7 +232,8 @@ export function drive(p: CarPose, pedals: Pedals, dt: number, kind: CarKind = 'l
 function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground: (typeof GROUND)[Surface]): CarPose {
   const spec = SPECS[kind];
   const grip = spec.grip * ground.grip;
-  const boost = !!pedals.boost && pedals.gas > 0;
+  // No boost off the road: the grass and the sand only spin the wheels.
+  const boost = !!pedals.boost && pedals.gas > 0 && !ground.drag;
   const fastest = spec.top * (boost ? BOOST.top : 1);
   const top = fastest * ground.top;
   const bike = spec.width < 1;

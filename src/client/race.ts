@@ -129,7 +129,7 @@ export const MARSHAL = { reset: 3, wrongWay: 1, warn: 1 } as const;
 
 /**
  * Keeps an eye on your car while you're on a lap: going the wrong way round, and in trouble long
- * enough to be put back on the track (main.ts does that: shared/circuit.ts resetPose).
+ * enough to be put back on the track (main.ts does that: shared/circuit.ts resetSpots).
  */
 export class Marshal {
   private wrong = 0;
@@ -172,7 +172,7 @@ const GHOST_EVERY = 50;
 
 /**
  * Your best lap this time out, to race against: recorded as you drive (every GHOST_EVERY ms of the
- * lap), and kept when the office says the lap you just did was your best. Only this page's.
+ * lap), and kept when the office counts a lap quicker than any this page has seen. Only this page's.
  */
 export class Ghost {
   private lap: Sample[] = [];
@@ -181,12 +181,12 @@ export class Ghost {
   /** When the lap being recorded started (office clock). */
   private started: number | undefined;
 
-  /** Each frame on a lap: the lap started at `startedAt` (office clock), your best's `bestLap` ms, your car where it is `now`. */
-  record(startedAt: number, bestLap: number | undefined, now: number, car: { x: number; z: number; rotY: number }) {
+  /** Each frame on a lap: the lap started at `startedAt` (office clock), the last lap the office counted took `lastLap` ms, your car where it is `now`. */
+  record(startedAt: number, lastLap: number | undefined, now: number, car: { x: number; z: number; rotY: number }) {
     if (startedAt !== this.started) {
-      // A new lap: the one before, if the office has it as your best (and it's the quickest this page has seen).
+      // A new lap: the one before, if the office counted it and it's the quickest this page has seen.
       const ms = this.started === undefined ? NaN : startedAt - this.started;
-      if (ms === bestLap && ms < this.bestMs && this.lap.length > 1) {
+      if (ms === lastLap && ms < this.bestMs && this.lap.length > 1) {
         this.best = this.lap.filter((s) => s.t <= ms);
         this.bestMs = ms;
       }
