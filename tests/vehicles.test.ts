@@ -91,7 +91,7 @@ test('the office accepts old poses, clamps each kind, rejects nonsense slip, and
     assert.equal(g.drive('driver', i, { ...p, slip: NaN }), undefined);
     assert.equal(g.drive('driver', i, { ...p, slip: Infinity }), undefined);
     assert.equal(g.drive('driver', i, { ...p, slip: undefined })?.slip, 0);
-    assert.equal(g.enter('passenger', i, 'passenger'), SPECS[def.kind].seats > 1);
+    assert.equal(g.offer('driver', 'passenger') !== undefined && g.answer('passenger', 'driver', true) === i, SPECS[def.kind].seats > 1);
     g.leave('driver');
     assert.equal(g.state()[i].slip, 0);
   }

@@ -1,16 +1,18 @@
-import { CHECKPOINTS, checkpoint, crossed, gridPose, track } from '../shared/circuit.js';
+import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, track } from '../shared/circuit.js';
 import { SPECS } from '../shared/garage.js';
 import { RACE, SECTORS, idleRace, type Practicer, type RaceState, type Racer, type Timing } from '../shared/race.js';
 
 /** Further than this between two of a driver's reports (m) isn't driving: it's a jump, and crosses nothing. */
 const JUMP = 40;
-/** Faster than any car goes, with room for a slide and a laggy report (m/s). */
-const FASTEST = Math.max(...Object.values(SPECS).map((s) => s.top)) * 1.3;
-/** No lap is quicker than this (ms): flat out all the way round the centre line. */
-const QUICKEST_LAP = (track().length / FASTEST) * 1000;
+/** Faster than circuit car `car` goes, with a little room for a slide (m/s); the fastest kind for one there isn't. */
+const fastest = (car: number) => (SPECS[CIRCUIT_CARS[car]?.kind]?.top ?? Math.max(...Object.values(SPECS).map((s) => s.top))) * 1.15;
+/** How far ahead of that pace (m, as seconds of it) a car's reports can get, bunched up by a laggy connection, before they're taken for not driving. */
+const LAG = 1;
+/** No lap in circuit car `car` is quicker than this (ms): flat out all the way round the centre line. */
+const quickestLap = (car: number) => (track().length / fastest(car)) * 1000;
 /** Nor any sector (ms), the same way. */
-const QUICKEST_SECTOR = SECTORS.map((c, k) => (((SECTORS[k + 1] ?? CHECKPOINTS) - c) / CHECKPOINTS) * QUICKEST_LAP);
-/** Practice bests kept by name, for coming back to the circuit: at most this many. */
+const quickestSector = (car: number, k: number) => (((SECTORS[k + 1] ?? CHECKPOINTS) - SECTORS[k]) / CHECKPOINTS) * quickestLap(car);
+/** Practice bests kept by account, for coming back to the circuit: at most this many. */
 const PRACTICE_BESTS = 500;
 /** A race ends after this long whatever (ms a lap), or when nobody's got through a checkpoint for STALL. */
 const LAP_CAP = 5 * 60_000;
@@ -29,7 +31,9 @@ export class RaceControl {
    * Where each racer's car was when they last said, and when. `jumped`: it got there some way other
    * than driving (a long gap in its reports), so the next move from there crosses no line.
    */
-  private last = new Map<string, { x: number; z: number; at: number; jumped?: boolean; held?: number }>();
+  private last = new Map<string, { x: number; z: number; at: number; jumped?: boolean; held?: number; budget?: number }>();
+  /** The account of each person on practice laps, if they're signed in with one: only theirs are kept. */
+  private accounts = new Map<string, string>();
   /** When the results come down, once it's finished. */
   private over = 0;
   /** When anyone last got through a checkpoint (or the lights went out). */
@@ -134,7 +138,7 @@ export class RaceControl {
    * not in the race (`who`: their name and circuit car) is on practice laps, timed the same way.
    * Says whether the race changed.
    */
-  drove(id: string, x: number, z: number, now: number, who?: { name: string; car: number }): boolean {
+  drove(id: string, x: number, z: number, now: number, who?: { name: string; car: number; account?: string }): boolean {
     let changed = this.tick(now);
     const racer = this.race.racers.find((r) => r.id === id);
     if (!racer) return this.practised(id, x, z, now, who) || changed;
@@ -143,7 +147,7 @@ export class RaceControl {
       return changed;
     }
     if (racer.finishedAt !== undefined) return changed;
-    const from = this.step(id, x, z, now);
+    const from = this.step(id, x, z, now, racer.car);
     const next = (racer.checkpoint + 1) % CHECKPOINTS;
     if (!from || !crossed(next, from, { x, z })) {
       // Positions shift as people pass each other between the lines, too.
@@ -167,35 +171,46 @@ export class RaceControl {
    * stands, unless it stays away a while (a bad connection), when it's taken to be here, but can't
    * cross a line from here.
    */
-  private step(id: string, x: number, z: number, now: number): { x: number; z: number } | undefined {
+  private step(id: string, x: number, z: number, now: number, car: number): { x: number; z: number } | undefined {
+    const max = fastest(car);
+    const cap = max * LAG;
     const from = this.last.get(id);
     if (!from) {
-      this.last.set(id, { x, z, at: now });
+      this.last.set(id, { x, z, at: now, budget: cap });
       return undefined;
     }
+    // How far it could have gone since, at that car's pace, less how far it went: what's left of a second's lead.
     const far = Math.hypot(x - from.x, z - from.z);
-    if (far > JUMP || far > (FASTEST * (now - from.at)) / 1000 + 2) {
+    const budget = Math.min(cap, (from.budget ?? cap) + (max * Math.max(0, now - from.at)) / 1000 - far);
+    if (far > JUMP || budget < 0) {
       const held = from.held ?? now;
-      this.last.set(id, now - held >= REANCHOR ? { x, z, at: now, jumped: true } : { ...from, held });
+      // Taken to be here after all: owing the time it saved (up to a few seconds' worth), so a jump ahead gains nothing.
+      this.last.set(id, now - held >= REANCHOR ? { x, z, at: now, jumped: true, budget: Math.max(-3 * cap, Math.min(0, budget)) } : { ...from, held });
       return undefined;
     }
-    this.last.set(id, { x, z, at: now });
+    this.last.set(id, { x, z, at: now, budget });
     return from.jumped ? undefined : from;
   }
 
   /** Practice laps: the same checkpoints in the same order, from the first time over the start line. */
-  private practised(id: string, x: number, z: number, now: number, who?: { name: string; car: number }): boolean {
+  private practised(id: string, x: number, z: number, now: number, who?: { name: string; car: number; account?: string }): boolean {
     const list = this.race.practice;
     let p = list.find((q) => q.id === id);
     let changed = false;
     if (!p) {
       if (!who) return false;
-      const best = this.practiceBests.get(who.name);
+      const best = who.account === undefined ? undefined : this.practiceBests.get(who.account);
       p = { id, name: who.name, car: who.car, laps: 0, checkpoint: -1, ...(best !== undefined ? { bestLap: best } : {}) };
       list.push(p);
+      if (who.account !== undefined) this.accounts.set(id, who.account);
       changed = true;
     }
-    const from = this.step(id, x, z, now);
+    // Renamed since.
+    if (who && who.name !== p.name) {
+      p.name = who.name;
+      changed = true;
+    }
+    const from = this.step(id, x, z, now, p.car);
     const next = (p.checkpoint + 1) % CHECKPOINTS;
     if (!from || !crossed(next, from, { x, z })) return changed;
     p.checkpoint = next;
@@ -203,13 +218,16 @@ export class RaceControl {
     if (next !== 0) return true;
     const ms = p.lapStartedAt === undefined ? 0 : now - p.lapStartedAt;
     Object.assign(p, { lapStartedAt: now, sectors: [] });
-    if (ms < QUICKEST_LAP) return true;
+    if (ms < quickestLap(p.car)) return true;
     p.laps++;
     p.lastLap = ms;
-    if (p.bestLap === undefined || ms < p.bestLap) {
-      p.bestLap = ms;
-      this.practiceBests.delete(p.name);
-      this.practiceBests.set(p.name, ms);
+    if (p.bestLap === undefined || ms < p.bestLap) p.bestLap = ms;
+    // Kept, and on the record, only for someone signed in with their own account: a name anyone can take.
+    const account = this.accounts.get(id);
+    if (account === undefined) return true;
+    if (ms <= (this.practiceBests.get(account) ?? Infinity)) {
+      this.practiceBests.delete(account);
+      this.practiceBests.set(account, ms);
       if (this.practiceBests.size > PRACTICE_BESTS) this.practiceBests.delete(this.practiceBests.keys().next().value!);
     }
     if (!this.race.practiceRecord || ms < this.race.practiceRecord.ms) this.race.practiceRecord = { name: p.name, ms };
@@ -221,11 +239,12 @@ export class RaceControl {
     const list = this.race.practice;
     const i = list.findIndex((p) => p.id === id);
     if (i >= 0) list.splice(i, 1);
+    this.accounts.delete(id);
     return i >= 0;
   }
 
   /** Through checkpoint `next` on a lap: the end of a sector, if it's where the next starts. Timed by the office's clock. */
-  private split(t: Timing, next: number, now: number) {
+  private split(t: Timing & { car: number }, next: number, now: number) {
     const k = SECTORS.indexOf(next as (typeof SECTORS)[number]);
     if (k < 0 || t.lapStartedAt === undefined) return;
     const done = (k + SECTORS.length - 1) % SECTORS.length;
@@ -234,7 +253,7 @@ export class RaceControl {
     if (sectors.length !== done) return;
     const ms = now - t.lapStartedAt - sectors.reduce((a, b) => a + b, 0);
     sectors.push(ms);
-    if (ms < QUICKEST_SECTOR[done]) {
+    if (ms < quickestSector(t.car, done)) {
       delete t.lastSplit;
       return;
     }
@@ -250,7 +269,7 @@ export class RaceControl {
     racer.lapStartedAt = now;
     racer.sectors = [];
     // Quicker than a car can go round: not a lap.
-    if (ms < QUICKEST_LAP) return;
+    if (ms < quickestLap(racer.car)) return;
     racer.lap++;
     if (ms > 0 && (racer.bestLap === undefined || ms < racer.bestLap)) racer.bestLap = ms;
     if (ms > 0 && (!r.record || ms < r.record.ms)) r.record = { name: racer.name, ms };

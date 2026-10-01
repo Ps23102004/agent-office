@@ -1,6 +1,6 @@
 import { CIRCUIT, CIRCUIT_CARS } from '../shared/circuit';
 import { CARS, SPECS } from '../shared/garage';
-import { MEET_SPOTS, type MeetPin, type MeetSpotId } from '../shared/meet';
+import { MEET_SPOTS, isMeetSpot, type MeetPin, type MeetSpotId } from '../shared/meet';
 import type { ClientMsg, PeerInfo } from '../shared/protocol';
 import { store } from './state';
 
@@ -33,12 +33,13 @@ export function postMeet(spot: MeetSpotId) {
 
 /** Takes you to a meeting spot someone posted (a chat line's `meet`). */
 export function goToMeet(pin: MeetPin) {
-  wiring?.go(pin);
+  if (isMeetSpot(pin.spot)) wiring?.go(pin);
 }
 
 /** What a pin is called, for a button: "🔥 the roof fire pit". */
 export function meetLabel(pin: MeetPin): string {
-  const s = MEET_SPOTS[pin.spot];
+  const s = MEET_SPOTS[pin.spot] as (typeof MEET_SPOTS)[MeetSpotId] | undefined;
+  if (!s) return '';
   const floor = pin.floor && store.floors.find((f) => f.id === pin.floor)?.name;
   return `${s.icon} ${s.name}${floor ? ` (${floor})` : ''}`;
 }
@@ -71,6 +72,7 @@ export function answerRide(accept: boolean) {
   const o = rideOffer();
   store.rideOffer = null;
   store.emit('ride');
-  if (!o || !wiring || (accept && !wiring.readyToRide())) return;
-  wiring.send({ t: 'car.invite.answer', from: o.from, accept });
+  if (!o || !wiring) return;
+  // Can't get in after all (hands full, say): that's a no, so the driver isn't left waiting.
+  wiring.send({ t: 'car.invite.answer', from: o.from, accept: accept && wiring.readyToRide() });
 }

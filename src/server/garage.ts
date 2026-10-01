@@ -48,10 +48,12 @@ export class Garage {
     return undefined;
   }
 
-  /** `id` gets into `seat` of car `car`, out of wherever they were: only if it's free. Says whether anything changed. */
-  enter(id: string, car: number, seat: CarSeat): boolean {
+  /** `id` gets into `seat` of car `car`, out of wherever they were: only if it's free (and beside a driver, only `invited`). Says whether anything changed. */
+  enter(id: string, car: number, seat: CarSeat, invited = false): boolean {
     const c = this.cars[car];
     if (!c || (seat !== 'driver' && seat !== 'passenger') || c[seat] || (seat === 'passenger' && SPECS[this.defs[car].kind].seats < 2)) return false;
+    // Beside someone driving only when they asked you (offer, answer): nobody hops into someone's car uninvited.
+    if (seat === 'passenger' && c.driver && !invited) return false;
     this.leave(id);
     c[seat] = id;
     if (seat === 'driver') this.movedAt[car] = this.now();
@@ -96,7 +98,7 @@ export class Garage {
     }
     const at = this.seatOf(from);
     if (this.now() > o.until || at?.car !== o.car || at.seat !== 'driver' || this.seatOf(to)) return undefined;
-    return this.enter(to, o.car, 'passenger') ? o.car : undefined;
+    return this.enter(to, o.car, 'passenger', true) ? o.car : undefined;
   }
 
   /** `id` gets out (or left the floor, or the office). A car nobody's driving stops where it is. Says whether they were in one. */

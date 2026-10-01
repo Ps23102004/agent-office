@@ -262,8 +262,9 @@ export async function startServer(cfg: Config) {
   const race = new RaceControl();
   /** When each person (account, or name) last posted a meeting spot. */
   const meetAt = new Map<string, number>();
-  /** How near the car (m) someone has to be for its driver to offer them a ride. */
+  /** How near the car (m) someone has to be for its driver to offer them a ride, or to take one. */
   const RIDE_REACH = 25;
+  const nearCar = (o: Client, car: { x: number; z: number }, driver: Client) => Math.hypot(o.peer.x - car.x, o.peer.z - car.z) <= RIDE_REACH && Math.abs(o.peer.y - driver.peer.y) <= 3;
   /** The cars where `c` is: their floor's garage, or the circuit's. */
   const garageOf = (c: Client): Garage | undefined => (c.peer.floor === CIRCUIT ? circuitCars : floorOf(c)?.garage);
   /** The floor a worker sits on. Worker ids are unique across the building. */
@@ -1193,8 +1194,15 @@ export async function startServer(cfg: Config) {
     for (const o of clients.values()) if (o.peer.floor === CIRCUIT) sendTo(o, { t: 'cars', cars: circuitCars.state() });
   };
   /** The race changed: everyone hears, wherever they are (it's news in the city too). */
-  const raceChanged = () => broadcast({ t: 'race', state: race.state() });
-  const raceTimer = setInterval(() => race.tick(Date.now()) && raceChanged(), 250);
+  // At most four times a second, however many cars get in and out or go through a checkpoint: the timer sends it.
+  let raceDirty = false;
+  const raceChanged = () => void (raceDirty = true);
+  const raceTimer = setInterval(() => {
+    if (race.tick(Date.now())) raceDirty = true;
+    if (!raceDirty) return;
+    raceDirty = false;
+    broadcast({ t: 'race', state: race.state() });
+  }, 250);
   const jukeboxChanged = (floor: Floor) => toFloor(floor, { t: 'jukebox', state: floor.jukebox.state() });
   const teamState = async () => ({ ...(await team.state()), deploy: cfg.deployScript });
   const teamChanged = async () => broadcast({ t: 'team', state: await teamState() });
@@ -1615,7 +1623,7 @@ export async function startServer(cfg: Config) {
         if (garage === circuitCars && race.offGrid(c.id, num(msg.x), num(msg.z))) break;
         const now = garage?.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer), slip: msg.slip === undefined ? 0 : num(msg.slip) });
         if (now) toNeighbors(c, { t: 'car.move', car, ...now }, true);
-        if (now && garage === circuitCars && race.drove(c.id, now.x, now.z, Date.now(), { name: c.peer.name, car })) raceChanged();
+        if (now && garage === circuitCars && race.drove(c.id, now.x, now.z, Date.now(), { name: c.peer.name, car, ...(c.accountId ? { account: c.accountId } : {}) })) raceChanged();
         break;
       }
       case 'race.join': {
@@ -1635,7 +1643,7 @@ export async function startServer(cfg: Config) {
         if (!isMeetSpot(msg.spot)) break;
         const spot = MEET_SPOTS[msg.spot];
         const now = Date.now();
-        const key = c.accountId ?? `name:${c.peer.name}`;
+        const key = c.accountId ?? `id:${c.id}`;
         if (now - (meetAt.get(key) ?? -Infinity) < MEET_EVERY) return warn(c, 'You only just posted a meeting spot: give it a moment');
         // On (or under) the floor they're on; from the roof or the circuit, the first floor's.
         const floor = spot.where === 'floor' || spot.where === 'street' ? (c.peer.floor && floors.has(c.peer.floor) ? c.peer.floor : floors.keys().next().value) : undefined;
@@ -1655,7 +1663,7 @@ export async function startServer(cfg: Config) {
         const at = garage?.seatOf(c.id);
         const car = at && garage!.state()[at.car];
         if (!garage || !car || !to || to === c || to.peer.floor !== c.peer.floor || to.peer.lite) break;
-        if (Math.hypot(to.peer.x - car.x, to.peer.z - car.z) > RIDE_REACH || Math.abs(to.peer.y - c.peer.y) > 3) return warn(c, `${to.peer.name} is too far away to offer a ride`);
+        if (!nearCar(to, car, c)) return warn(c, `${to.peer.name} is too far away to offer a ride`);
         const offered = garage.offer(c.id, to.id);
         if (offered === undefined) return warn(c, `You can’t offer ${to.peer.name} a ride right now`);
         sendTo(to, { t: 'car.invited', from: c.id, name: who, car: offered, until: Date.now() + OFFER_FOR });
@@ -1668,6 +1676,9 @@ export async function startServer(cfg: Config) {
         if (!garage || garage.offerTo(c.id)?.from !== from) break;
         const driver = clients.get(from);
         const yes = msg.accept === true;
+        // Still near the car to get in (the offer stands while they come closer).
+        const offered = garage.state()[garage.offerTo(c.id)!.car];
+        if (yes && (!driver || driver.peer.floor !== c.peer.floor || !nearCar(c, offered, driver))) return warn(c, 'Get closer to the car to hop in');
         const car = garage.answer(c.id, from, yes);
         if (!yes) {
           if (driver) sendTo(driver, { t: 'toast', text: `🚗 ${who} would rather walk`, level: 'info' });

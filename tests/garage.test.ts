@@ -109,7 +109,9 @@ test('the garage: one driver and one passenger a car, and only the driver moves 
   assert.deepEqual(g.state(), parked(), 'everything in its spot to start with');
   assert.ok(g.enter('ann', 1, 'driver'));
   assert.ok(!g.enter('bob', 1, 'driver'), "Ann's driving");
-  assert.ok(g.enter('bob', 1, 'passenger'));
+  assert.ok(!g.enter('bob', 1, 'passenger'), 'not beside Ann unless she asks');
+  assert.equal(g.offer('ann', 'bob'), 1);
+  assert.equal(g.answer('bob', 'ann', true), 1);
   assert.ok(!g.enter('cat', 1, 'passenger'), 'full');
   assert.deepEqual(g.seatOf('bob'), { car: 1, seat: 'passenger' });
   const pose = { x: 0, z: 17, rotY: 1, speed: 12, steer: 0.1 };
