@@ -6,12 +6,13 @@ import type { Box } from '../../shared/garage';
 import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { toonVertex } from './toon';
+import { CROWD, crowdMaterial, outlineMaterial, pickLook, type CrowdPart, type PedLook } from './crowd';
 
 // The city's street life, down at ground level: traffic that keeps to its lane, turns at the corners and
 // waits at red lights, and people on the sidewalks who cross when the walk sign says so, stop to look in a
-// window or chat, and jump out of the way of a car. Everything is instanced (a mesh per kind of vehicle and
-// per part of a person, each part a single draw call) and moves by matrices, so 40 vehicles and 80 people
-// cost 13 draw calls. Only what's near you (SPAWN_R) exists: what you drive away from is put down somewhere
+// window or chat, and jump out of the way of a car. Everything is instanced (a mesh per kind of vehicle, a
+// draw call each; everyone on foot and their dogs one BatchedMesh, see crowd.ts) and moves by matrices, so
+// 40 vehicles and 80 people cost a dozen draw calls. Only what's near you (SPAWN_R) exists: what you drive away from is put down somewhere
 // ahead of you. Everything is in city coordinates, the ones the streets of shared/city.ts are laid out in,
 // with the street at y = 0.
 
@@ -308,6 +309,14 @@ const KINDS = Object.keys(SPECS) as VKind[];
 
 const SHIRTS = ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#f4f1de', '#e07a5f', '#9d4edd', '#8ecae6', '#ff8fab', '#3d405b'];
 const PANTS = ['#3d405b', '#264653', '#5c4a3a', '#1d3557', '#6d6875', '#4a4e69'];
+const COATS = ['#c8a27a', '#3d405b', '#6d6875', '#5a6b3a', '#8d2c2c', '#264653', '#e9e3d5'];
+const GREYS = ['#d9d9d9', '#bdbdbd', '#f2f2f2', '#9e9e9e'];
+/** Bare legs under a dress, or tights. */
+const TIGHTS = ['#2b2d42', '#6d2e46'];
+const DOG_COATS = ['#c68642', '#f1dcb7', '#4a3222', '#d9d9d9', '#e0a96d'];
+/** Which of a person's instances in the crowd's BatchedMesh is which part (arms, hands and legs take two each). */
+const SLOT = { top: 0, head: 1, hair: 2, hat: 3, carry: 4, arm: 5, hand: 7, leg: 9, dog: 11 } as const;
+const SLOTS = 12;
 
 // --- The people and the traffic --------------------------------------------------------------------------
 
@@ -922,34 +931,24 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const HEAD = new THREE.Color('#fff3c4');
   const TAIL = new THREE.Color();
 
-  // People: a mesh per part (legs and arms are two instances a person), swung by their matrices.
-  const solid = (g: THREE.BufferGeometry): THREE.BufferGeometry => merged([[g, W]]);
-  const partMesh = (g: THREE.BufferGeometry, per: number) => {
-    const m = new THREE.InstancedMesh(solid(g), mat, MAX_PEOPLE * per);
-    m.frustumCulled = false;
-    m.castShadow = false;
-    group.add(m);
-    return m;
-  };
-  const torso = partMesh(new THREE.CapsuleGeometry(0.2, 0.3, 4, 8).translate(0, 1.12, 0), 1);
-  const head = partMesh(new THREE.SphereGeometry(0.19, 10, 8).translate(0, 1.65, 0), 1);
-  const hairM = partMesh(new THREE.SphereGeometry(0.2, 10, 8).scale(1, 0.75, 1).translate(0, 1.72, -0.02), 1);
-  const arms = partMesh(new THREE.BoxGeometry(0.11, 0.55, 0.12).translate(0, -0.25, 0), 2);
-  const legs = partMesh(new THREE.BoxGeometry(0.17, 0.82, 0.19).translate(0, -0.41, 0), 2);
-  // A dog on a lead for some of them: one mesh, tinted a coat each.
-  const dogs = new THREE.InstancedMesh(
-    merged([
-      [new THREE.BoxGeometry(0.22, 0.24, 0.52).translate(0, 0.36, 0), W],
-      [new THREE.BoxGeometry(0.17, 0.17, 0.2).translate(0, 0.5, 0.33), W],
-      [new THREE.BoxGeometry(0.05, 0.05, 0.22).rotateX(0.7).translate(0, 0.47, -0.36), W],
-      ...[[-1, 1], [1, 1], [-1, -1], [1, -1]].map(([sx, sz]): Part => [new THREE.BoxGeometry(0.06, 0.26, 0.06).translate(sx * 0.07, 0.13, sz * 0.18), W]),
-    ]),
-    mat,
-    MAX_PEOPLE,
-  );
-  dogs.frustumCulled = false;
-  dogs.castShadow = false;
-  group.add(dogs);
+  // People, and the dogs some of them walk: every part of everyone (see crowd.ts) is one BatchedMesh,
+  // a single draw call, and their outline another. Each person has SLOTS instances, posed by their
+  // matrices, shown only while they're out and wearing that part.
+  const parts = {} as Record<CrowdPart, number>;
+  const geos = (Object.keys(CROWD) as CrowdPart[]).map((k) => [k, CROWD[k]()] as const);
+  const verts = geos.reduce((n, [, g]) => n + g.attributes.position.count, 0);
+  const [crowd, hull] = [crowdMaterial(mat.gradientMap), outlineMaterial()].map((m) => {
+    const b = new THREE.BatchedMesh(MAX_PEOPLE * SLOTS, verts, 0, m);
+    for (const [k, g] of geos) parts[k] = b.addGeometry(g);
+    for (let n = 0; n < MAX_PEOPLE * SLOTS; n++) b.setVisibleAt(b.addInstance(parts.head), false);
+    b.frustumCulled = b.perObjectFrustumCulled = b.sortObjects = false;
+    b.castShadow = false;
+    group.add(b);
+    return b;
+  });
+  const batches = [crowd, hull];
+  /** How each of them is put together (by id). */
+  const looks: PedLook[] = [];
   // The bus shelters, all of them as one static mesh.
   const shelter = busShelters();
   if (shelter) {
@@ -959,7 +958,30 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     group.add(m);
   }
   const people: Pedestrian[] = [];
-  const tmp = new THREE.Color();
+  const tmpColor = new THREE.Color();
+  /** Picks how `q` is put together from `r`, and paints them: a kid is shorter, an elder grey. */
+  function dress(q: Pedestrian, r: () => number) {
+    const L = (looks[q.id] = pickLook(r, q.pairSide));
+    if (L.build === 'kid') q.h = 0.62 + r() * 0.1;
+    const top = L.top === 'coat' ? COATS[Math.floor(r() * COATS.length)] : SHIRTS[q.shirt];
+    const wear = (s: number, k: CrowdPart | null, c: string) => {
+      if (!k) return;
+      for (const b of batches) b.setGeometryIdAt(q.id * SLOTS + s, parts[k]);
+      crowd.setColorAt(q.id * SLOTS + s, tmpColor.set(c));
+    };
+    wear(SLOT.top, L.top, top);
+    wear(SLOT.head, 'head', SKIN_TONES[q.skin]);
+    wear(SLOT.hair, L.hair, L.build === 'elder' ? GREYS[q.hair % GREYS.length] : HAIR_COLORS[q.hair]);
+    wear(SLOT.hat, L.hat, SHIRTS[Math.floor(r() * SHIRTS.length)]);
+    wear(SLOT.carry, L.carry, [...COATS, ...SHIRTS][Math.floor(r() * (COATS.length + SHIRTS.length))]);
+    const legs = L.top === 'dress' ? (r() < 0.5 ? SKIN_TONES[q.skin] : TIGHTS[q.pants % TIGHTS.length]) : PANTS[q.pants];
+    for (let a = 0; a < 2; a++) {
+      wear(SLOT.arm + a, 'arm', top);
+      wear(SLOT.hand + a, 'hand', SKIN_TONES[q.skin]);
+      wear(SLOT.leg + a, 'leg', legs);
+    }
+    wear(SLOT.dog, 'dog', DOG_COATS[Math.floor(r() * DOG_COATS.length)]);
+  }
   for (let i = 0; i < MAX_PEOPLE; i++) {
     const r = rng(4000 + i);
     // The first forty are twenty pairs, out together.
@@ -967,15 +989,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     const seed = 4000 + (pair >= 0 ? Math.min(i, pair) : i);
     const p: Pedestrian = { id: i, on: false, state: 'walk', x: 0, z: 0, yaw: 0, axis: 'x', dir: 1, gj: -1, R: 0, stopN: 0, at: null, dr: 0, pairSide: pair < 0 ? 0 : i % 2 ? 1 : -1, look: 0, prev: 'walk', timer: 0, speed: 1.4, phase: r() * 6, retry: 0, seed, pair, dx: 0, dz: 0, jx: 0, jz: 0, hop: 0, tilt: 0, cool: 0, dog: false, dogX: 0, dogZ: 0, dogYaw: 0, skin: Math.floor(r() * SKIN_TONES.length), hair: Math.floor(r() * HAIR_COLORS.length), shirt: Math.floor(r() * SHIRTS.length), pants: Math.floor(r() * PANTS.length), h: 0.92 + r() * 0.14 };
     people.push(p);
-    torso.setColorAt(i, tmp.set(SHIRTS[p.shirt]));
-    head.setColorAt(i, tmp.set(SKIN_TONES[p.skin]));
-    // One in eight has no hair to show.
-    hairM.setColorAt(i, tmp.set(r() < 0.125 ? SKIN_TONES[p.skin] : HAIR_COLORS[p.hair]));
-    dogs.setColorAt(i, tmp.set(['#c68642', '#f1dcb7', '#4a3222', '#d9d9d9', '#e0a96d'][Math.floor(r() * 5)]));
-    for (let a = 0; a < 2; a++) {
-      arms.setColorAt(i * 2 + a, tmp.set(SHIRTS[p.shirt]));
-      legs.setColorAt(i * 2 + a, tmp.set(PANTS[p.pants]));
-    }
+    dress(p, r);
   }
 
   // --- Placing things -------------------------------------------------------------------------------------
@@ -987,7 +1001,6 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const carTaken = new Map<number, number>();
   const pedTaken = new Map<number, number>();
   const vRetry = vehicles.map(() => 0);
-  const tmpColor = new THREE.Color();
   /** Who goes first at a crossing: by ghost (the same on every page), not by which slot they're drawn in. */
   const prio = (v: Vehicle) => (v.gj >= 0 ? v.gj : 1000 + v.id);
   const release = (v: Vehicle) => {
@@ -1074,15 +1087,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     // Their looks are the ghost's (and which of a pair), the same on every page.
     const r = rng(60000 + g.j * 3 + (q.pairSide > 0 ? 1 : 0));
     Object.assign(q, { skin: Math.floor(r() * SKIN_TONES.length), hair: Math.floor(r() * HAIR_COLORS.length), shirt: Math.floor(r() * SHIRTS.length), pants: Math.floor(r() * PANTS.length), h: 0.92 + r() * 0.14 });
-    const bald = r() < 0.125;
-    torso.setColorAt(q.id, tmpColor.set(SHIRTS[q.shirt]));
-    head.setColorAt(q.id, tmpColor.set(SKIN_TONES[q.skin]));
-    hairM.setColorAt(q.id, tmpColor.set(bald ? SKIN_TONES[q.skin] : HAIR_COLORS[q.hair]));
-    dogs.setColorAt(q.id, tmpColor.set(['#c68642', '#f1dcb7', '#4a3222', '#d9d9d9', '#e0a96d'][Math.floor(r() * 5)]));
-    for (let k = 0; k < 2; k++) {
-      arms.setColorAt(q.id * 2 + k, tmpColor.set(SHIRTS[q.shirt]));
-      legs.setColorAt(q.id * 2 + k, tmpColor.set(PANTS[q.pants]));
-    }
+    dress(q, r);
     if (a.at >= 0) enter(q, g.stops[a.at], a.since > 4 ? 1 : 0);
     ground(q);
     q.yaw = ringHeading(g, q.R);
@@ -1437,9 +1442,17 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   function writePerson(p: Pedestrian) {
     const i = p.id;
     if (!p.on || hidden(p)) {
-      for (const [m, per] of [[torso, 1], [head, 1], [hairM, 1], [arms, 2], [legs, 2], [dogs, 1]] as [THREE.InstancedMesh, number][]) for (let a = 0; a < per; a++) m.setMatrixAt(i * per + a, ZERO);
+      for (let s = 0; s < SLOTS; s++) for (const b of batches) b.setVisibleAt(i * SLOTS + s, false);
       return;
     }
+    const L = looks[i];
+    /** Shows slot `s` of theirs posed by `m`, or hides it (`on` false). */
+    const pose = (s: number, m: THREE.Matrix4, on = true) => {
+      for (const b of batches) {
+        b.setVisibleAt(i * SLOTS + s, on);
+        if (on) b.setMatrixAt(i * SLOTS + s, m);
+      }
+    };
     const flail = p.state === 'down';
     const moving = p.state === 'walk' || p.state === 'cross';
     const jog = p.speed > 2.4;
@@ -1455,13 +1468,18 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     const sway = !stepping && !flail ? Math.sin(t * 0.8) * 0.025 + Math.max(0, Math.sin(t * 0.31 + 2) - 0.85) * 0.25 : stepping ? swing * 0.03 : 0;
     const bob = stepping ? Math.abs(swing) * (jog ? 0.07 : 0.035) : 0;
     // On their back the body's laid along the ground, a little up off it.
-    q.setFromAxisAngle(UP, p.yaw).multiply(qt.setFromAxisAngle(RIGHT, p.tilt + (jog && moving ? 0.12 : 0) + sit * -0.05)).multiply(new THREE.Quaternion().setFromAxisAngle(FWD, sway));
-    P.compose(pos.set(p.x + p.dx, (flail ? p.hop : Math.sin((Math.PI * p.hop) / 0.5) * 0.45) + Math.abs(p.tilt) * 0.12 + bob - sit * 0.4 * p.h, p.z + p.dz), q, sc.set(p.h, p.h * fade, p.h));
-    torso.setMatrixAt(i, P);
-    // Their head turns to look (at you, at a window) about the neck.
-    M.multiplyMatrices(P, T.makeTranslation(0, 1.5, 0)).multiply(R.makeRotationY(p.look + (p.at?.kind === 'look' ? Math.sin(t * 0.5) * 0.3 : 0))).multiply(T.makeTranslation(0, -1.5, 0));
-    head.setMatrixAt(i, M);
-    hairM.setMatrixAt(i, M);
+    // An elder stoops a little.
+    q.setFromAxisAngle(UP, p.yaw).multiply(qt.setFromAxisAngle(RIGHT, p.tilt + (jog && moving ? 0.12 : 0) + sit * -0.05 + (L.build === 'elder' ? 0.12 : 0))).multiply(new THREE.Quaternion().setFromAxisAngle(FWD, sway));
+    P.compose(pos.set(p.x + p.dx, (flail ? p.hop : Math.sin((Math.PI * p.hop) / 0.5) * 0.45) + Math.abs(p.tilt) * 0.12 + bob - sit * (0.82 * p.h - 0.42), p.z + p.dz), q, sc.set(p.h, p.h * fade, p.h));
+    pose(SLOT.top, P);
+    pose(SLOT.carry, P, !!L.carry);
+    // Their head turns to look (at you, at a window) about the neck; a kid's head is big for their size.
+    M.multiplyMatrices(P, T.makeTranslation(0, 1.5, 0)).multiply(R.makeRotationY(p.look + (p.at?.kind === 'look' ? Math.sin(t * 0.5) * 0.3 : 0)));
+    if (L.build === 'kid') M.multiply(T.makeScale(1.2, 1.2, 1.2));
+    M.multiply(T.makeTranslation(0, -1.5, 0));
+    pose(SLOT.head, M);
+    pose(SLOT.hair, M, !!L.hair);
+    pose(SLOT.hat, M, !!L.hat);
     const chat = p.state === 'idle' && p.pair >= 0 && p.at?.kind !== 'bus';
     const phone = p.state === 'idle' && p.at?.kind === 'bus';
     for (let a = 0; a < 2; a++) {
@@ -1476,14 +1494,13 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
         else if (sit > 0) arm = -0.7 * sit;
       }
       M.multiplyMatrices(P, T.makeTranslation(sd * 0.12, 0.82, 0)).multiply(R.makeRotationX(leg));
-      legs.setMatrixAt(i * 2 + a, M);
+      pose(SLOT.leg + a, M);
       M.multiplyMatrices(P, T.makeTranslation(sd * 0.28, 1.36, 0)).multiply(R.makeRotationX(arm));
-      arms.setMatrixAt(i * 2 + a, M);
+      pose(SLOT.arm + a, M);
+      pose(SLOT.hand + a, M);
     }
-    if (p.dog) {
-      qt.setFromAxisAngle(UP, p.dogYaw);
-      dogs.setMatrixAt(i, M.compose(pos.set(p.dogX, moving ? Math.abs(Math.sin(t * 9)) * 0.03 : 0, p.dogZ), qt, sc.set(1, 1, 1)));
-    } else dogs.setMatrixAt(i, ZERO);
+    qt.setFromAxisAngle(UP, p.dogYaw);
+    pose(SLOT.dog, M.compose(pos.set(p.dogX, moving ? Math.abs(Math.sin(t * 9)) * 0.03 : 0, p.dogZ), qt, sc.set(1, 1, 1)), p.dog);
   }
 
   const life: StreetLife = {
@@ -1551,7 +1568,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
         lamps.setColorAt(v.id * 2 + 1, TAIL.set(v.braking ? '#ff3030' : night > 0.3 ? '#c81e1e' : '#8a2a2a'));
       }
       for (const p of people) writePerson(p);
-      for (const m of [...KINDS.map((k) => meshes[k]), lamps, torso, head, hairM, arms, legs, dogs]) {
+      for (const m of [...KINDS.map((k) => meshes[k]), lamps]) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       }
