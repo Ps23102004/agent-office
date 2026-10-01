@@ -151,6 +151,20 @@ export class OfficeSound {
   readonly played: Record<string, number> = {};
   /** The engines of the cars being driven, by car. */
   private motors = new Map<number, Motor>();
+  /**
+   * W6: the café or the bar you're in (see setVenue): its room tone, how loud (0–1), and when the next
+   * cup, hiss of steam or bar of the bar's jazz comes.
+   */
+  private venue: { kind: 'cafe' | 'bar' | null; level: number; room: GainNode | null; band: GainNode | null; nextClink: number; nextHiss: number; nextBar: number; bar: number } = {
+    kind: null,
+    level: 0,
+    room: null,
+    band: null,
+    nextClink: 0,
+    nextHiss: 0,
+    nextBar: 0,
+    bar: 0,
+  };
 
   constructor() {
     // Browsers only allow audio after a click or key press.
@@ -318,6 +332,7 @@ export class OfficeSound {
       if (!this.outdoors) this.fidget(now);
       this.nextFidget = now + rand(10, 30);
     }
+    this.tickVenue(now);
   }
 
   // ---- Workers typing ----------------------------------------------------------------------------
@@ -952,14 +967,14 @@ export class OfficeSound {
 
   // ---- The coffee machine -------------------------------------------------------------------------
 
-  /** Grind, gurgle and drip. */
-  coffee() {
+  /** Grind, gurgle and drip: at the kitchen's machine, or `at` another (W6: the café's). */
+  coffee(at?: Pos) {
     const ctx = this.ctx;
     if (!ctx) return;
     this.count('coffee');
     // In a hall of its own it's ale drawn from a cask, where you're standing: no grinder, just the pour.
     const cask = !!this.hall;
-    const out = this.panner(cask ? { x: this.listener.x, y: this.listener.y + 0.2, z: this.listener.z } : COFFEE_MACHINE, 1.2, 1);
+    const out = this.panner(cask ? { x: this.listener.x, y: this.listener.y + 0.2, z: this.listener.z } : (at ?? COFFEE_MACHINE), 1.2, 1);
     out.connect(this.ambience);
     const t0 = ctx.currentTime + 0.05;
     // The grinder first (not at a cask), then the pour.
@@ -1573,6 +1588,134 @@ export class OfficeSound {
     wobble.stop(t0 + 1.3);
     // Slid across the bar to you.
     this.clink(out, t0 + 1.45, 3900, 0.08);
+  }
+
+  // ---- W6: the café and the bar out in the city ---------------------------------------------------
+
+  /**
+   * In the café or the bar (`kind`), or out by its door: `level` (0–1) of its murmur, cups and glasses,
+   * the café's steam wand, and the bar's piano trio at your music volume. Null (or 0) and it fades out.
+   */
+  setVenue(kind: 'cafe' | 'bar' | null, level: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const v = this.venue;
+    level = kind ? level : 0;
+    if (!v.room) {
+      // People talking: two bands of brown noise, each wobbling like voices coming and going.
+      v.room = ctx.createGain();
+      v.room.gain.value = 0;
+      v.room.connect(this.ambience);
+      for (const [f, q, lvl, rate] of [
+        [420, 0.9, 0.11, 2.6],
+        [950, 1.2, 0.05, 3.4],
+      ]) {
+        const src = this.noise(this.buf.brown, true);
+        const g = ctx.createGain();
+        g.gain.value = lvl;
+        const wob = this.noise(this.buf.gurgle, true);
+        wob.playbackRate.value = rate;
+        const depth = ctx.createGain();
+        depth.gain.value = lvl * 1.4;
+        wob.connect(depth).connect(g.gain);
+        src.connect(biquad(ctx, 'bandpass', f, q)).connect(g).connect(v.room);
+        src.start();
+        wob.start();
+      }
+      v.band = ctx.createGain();
+      v.band.gain.value = 0;
+      v.band.connect(this.musicBus);
+    }
+    if (kind) v.kind = kind;
+    if (Math.abs(level - v.level) < 0.01) return;
+    v.level = level;
+    const now = ctx.currentTime;
+    v.room.gain.setTargetAtTime(level * (v.kind === 'bar' ? 1.2 : 1), now, 0.25);
+    v.band!.gain.setTargetAtTime(v.kind === 'bar' ? level * 0.5 : 0, now, 0.25);
+    if (!level) v.kind = null;
+  }
+
+  /** Cups on saucers, glasses, the steam wand, and the next bar of the bar's music, while you're there. */
+  private tickVenue(now: number) {
+    const v = this.venue;
+    if (!v.kind || v.level < 0.02 || !v.room) return;
+    if (now >= v.nextClink) {
+      // A cup set down on a saucer at the café; glasses touching at the bar.
+      if (v.kind === 'cafe') this.blip(v.room, now + 0.02, rand(1800, 2600), 0.9, 0.09, 0.05, 'triangle');
+      else this.clink(v.room, now + 0.02, rand(2600, 4000), 0.04);
+      v.nextClink = now + rand(1.2, 4.5);
+    }
+    if (v.kind === 'cafe' && now >= v.nextHiss) {
+      // The steam wand, frothing milk.
+      if (v.nextHiss) {
+        const steam = this.noise(this.buf.white);
+        const g = this.ctx!.createGain();
+        envelope(g.gain, now, [
+          [0.15, 0.05],
+          [2.2, 0.035],
+          [2.6, 0],
+        ]);
+        steam.connect(biquad(this.ctx!, 'highpass', 3200, 0.7)).connect(g).connect(v.room);
+        steam.start(now);
+        steam.stop(now + 2.7);
+      }
+      v.nextHiss = now + rand(14, 30);
+    }
+    if (v.kind === 'bar' && v.band) {
+      // A slow swing in F, a bar every two seconds, scheduled a little ahead: soft chords and a walking bass.
+      if (v.nextBar < now) v.nextBar = now + 0.05;
+      while (v.nextBar < now + 0.5) {
+        this.jazzBar(v.band, v.nextBar, v.bar++);
+        v.nextBar += 2;
+      }
+    }
+  }
+
+  /** One bar of the bar's music at `t`: the chord, played twice with a swing, and four bass notes walking to the next. */
+  private jazzBar(out: AudioNode, t: number, n: number) {
+    const ctx = this.ctx!;
+    // Gm7, C7, Fmaj7, D7 (as frequencies), round and round.
+    const chords = [
+      [196, 233.1, 293.7, 349.2],
+      [261.6, 329.6, 392, 466.2],
+      [174.6, 220, 261.6, 329.6],
+      [293.7, 370, 440, 523.3],
+    ];
+    const bass = [
+      [98, 110, 116.5, 123.5],
+      [130.8, 116.5, 110, 98],
+      [87.3, 98, 110, 130.8],
+      [146.8, 130.8, 110, 103.8],
+    ];
+    const beat = 0.5;
+    const c = chords[n % 4];
+    for (const at of [0, beat * 1.66, beat * 2.66]) {
+      for (const f of c) {
+        const o = ctx.createOscillator();
+        o.type = 'triangle';
+        o.frequency.value = f;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t + at);
+        g.gain.exponentialRampToValueAtTime(0.022, t + at + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.9);
+        o.connect(g).connect(out);
+        o.start(t + at);
+        o.stop(t + at + 0.95);
+      }
+    }
+    bass[n % 4].forEach((f, i) => this.blip(out, t + i * beat, f, 0.995, 0.42, 0.09, 'sine'));
+    // Brushes on the snare, swung.
+    for (let i = 0; i < 4; i++) {
+      const at = t + i * beat + (i % 2 ? beat * 0.16 : 0);
+      const hit = this.noise(this.buf.white);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(i % 2 ? 0.02 : 0.012, at + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
+      hit.connect(biquad(ctx, 'bandpass', 5000, 0.6)).connect(g).connect(out);
+      hit.start(at);
+      hit.stop(at + 0.2);
+    }
   }
 
   /** A glass rings: a couple of high partials, gone in a moment. */

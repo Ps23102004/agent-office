@@ -5,6 +5,8 @@ export interface BarOptions {
   /** Had enough: nothing stronger than water or a mocktail. */
   cutOff: boolean;
   order(d: Drink): void;
+  /** Whose bar it is, on the menu: the roof's Sky Bar unless said. */
+  title?: string;
 }
 
 /** How hard a drink hits, for the menu. */
@@ -52,7 +54,7 @@ export function openBar(opts: BarOptions) {
   const el = h(
     'div.modal.jukebox',
     { role: 'dialog', 'aria-label': 'Bar' },
-    h('header', {}, h('h2', {}, '🍸 Sky Bar'), close),
+    h('header', {}, h('h2', {}, opts.title ?? '🍸 Sky Bar'), close),
     h(
       'div.body',
       {},

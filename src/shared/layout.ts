@@ -2,6 +2,8 @@
 // Units are meters; +y is up. The office floor spans FLOOR.minX..maxX / minZ..maxZ at y = 0,
 // upstairs over a garage whose floor is level with the street (STREET_Y).
 
+import { VENUE_SEATS } from './venues.js';
+
 export const FLOOR = { minX: -18, maxX: 18, minZ: -13, maxZ: 13 } as const;
 /** How high the ceiling is: a meter over the loft's roof (LOFT.y + LOFT.height), all the way across the room. */
 export const WALL_HEIGHT = 6.8;
@@ -444,6 +446,10 @@ export interface SeatDef {
   roof?: boolean;
   /** At the bar: E there, sitting down, orders a drink. */
   bar?: boolean;
+  /** At the café out in the city (shared/venues.ts): E there, sitting down, orders a coffee. */
+  cafe?: boolean;
+  /** Out in the city, `y` above the street: as far down as the street is from your floor (see shared/venues.ts). */
+  street?: boolean;
 }
 
 /**
@@ -471,6 +477,8 @@ export const SEATING: SeatDef[] = [
   { id: 'roof-sofa-3', label: '🛋️ Sofa', x: FIRE_PIT.x + 2.9, y: 0, z: FIRE_PIT.z + 0.4, rotY: -Math.PI / 2, places: [-0.6, 0.6], hips: 0.5, depth: -0.05, out: 0.8, roof: true },
   // …and sun loungers facing out over the city.
   ...LOUNGERS.map((x, i) => ({ id: `roof-lounger-${i + 1}`, label: '🏖️ Lounger', x, y: 0, z: FLOOR.maxZ - 1.5, rotY: 0, places: [0], hips: 0.42, depth: -0.2, out: -1, roof: true })),
+  // W6: the café's and the bar's, out in the city.
+  ...VENUE_SEATS,
 ];
 export const SEATING_BY_ID = new Map(SEATING.map((s) => [s.id, s]));
 

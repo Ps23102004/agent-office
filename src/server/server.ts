@@ -1402,8 +1402,8 @@ export async function startServer(cfg: Config) {
       }
       case 'act': {
         if (msg.drink !== undefined) {
-          // A drink from the rooftop bar, which stays up there.
-          const drink = isDrink(msg.drink) && c.peer.floor === ROOF ? msg.drink : undefined;
+          // A drink from the rooftop bar, or (W6) The Night Owl down in the city: it stays on the floor you got it on.
+          const drink = isDrink(msg.drink) ? msg.drink : undefined;
           if (drink === c.peer.drink) break;
           if (drink) c.peer.drink = drink;
           else delete c.peer.drink;
