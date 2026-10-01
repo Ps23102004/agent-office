@@ -4,17 +4,11 @@ import { isTyping } from '../player';
 import { h, modalOpen, openModal, toast, type Modal } from './dom';
 import { focusDialog } from './dialog-focus';
 import type { CircuitMap, RaceAdapter } from './race-adapter';
-import { checkpointHint, countdownLights, mapProjection, raceGap, raceOrder, raceTime, sectorDelta, sectorReadings, speedReading } from './race-view';
+import { checkpointHint, countdownLights, mapProjection, raceGap, raceOrder, raceTime, sectorDelta, sectorReadings } from './race-view';
+import { DriveHUD, type DrivingGauge } from './drivehud';
 import './social-race.css';
 
-export interface DrivingGauge {
-  name: string;
-  /** Signed forward speed and the vehicle's top speed, in m/s. */
-  speed: number;
-  top: number;
-  bicycle?: boolean;
-  passenger?: boolean;
-}
+export type { DrivingGauge } from './drivehud';
 
 const text = (el: HTMLElement, value: string) => { if (el.textContent !== value) el.textContent = value; };
 const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] => document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -64,13 +58,7 @@ export class RaceUI {
   private readonly lights = Array.from({ length: RACE.countdown }, () => h('i'));
   private readonly lightText = h('strong', { role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' });
   private readonly countdown = h('div.race-countdown.hidden', { 'aria-label': 'Start lights' }, h('div.race-lights', { 'aria-hidden': 'true' }, ...this.lights), this.lightText);
-  private readonly speed = h('strong');
-  private readonly mode = h('span.speed-mode');
-  private readonly vehicle = h('span.speed-vehicle');
-  private readonly speedFill = h('span');
-  private readonly gauge = h('section.panel.speed-gauge.hidden', { 'aria-label': 'Speedometer' },
-    this.vehicle, h('div.speed-reading', {}, this.mode, this.speed, h('span', {}, 'km/h')),
-    h('div.speed-track', { 'aria-hidden': 'true' }, this.speedFill));
+  private readonly driveHud = new DriveHUD();
   private modal: Modal | null = null;
   private refreshModal?: () => void;
   private lastUpdate = -Infinity;
@@ -86,7 +74,7 @@ export class RaceUI {
     this.svg.setAttribute('aria-label', 'Circuit outline and drivers. Your dot is larger and outlined.');
     this.path.setAttribute('class', 'race-map-track');
     this.svg.append(this.path);
-    root.append(this.hud, this.countdown, this.gauge);
+    root.append(this.hud, this.countdown, this.driveHud.el, this.driveHud.effect);
   }
 
   /** From the menu, palette or circuit gate. The same window becomes the finish leaderboard. */
@@ -224,15 +212,7 @@ export class RaceUI {
       text(this.lightText, lights.text);
       this.countdown.classList.toggle('go', lights.text === 'GO!');
     }
-    this.gauge.classList.toggle('hidden', !driving || modalOpen());
-    if (driving) {
-      const read = speedReading(driving.speed, driving.top, driving.bicycle);
-      text(this.speed, String(read.kmh));
-      text(this.mode, read.mode);
-      this.mode.setAttribute('aria-label', read.mode === 'R' ? 'Reverse' : read.mode === 'N' ? 'Neutral' : read.mode === 'PEDAL' ? 'Pedaling' : 'Drive');
-      text(this.vehicle, `${driving.name}${driving.passenger ? ' · Passenger' : ''}`);
-      this.speedFill.style.width = `${read.fill * 100}%`;
-    }
+    this.driveHud.update(driving);
   }
 
   private updateMap(map: CircuitMap | null) {
@@ -270,6 +250,7 @@ export class RaceUI {
     this.modal?.close();
     this.hud.remove();
     this.countdown.remove();
-    this.gauge.remove();
+    this.driveHud.el.remove();
+    this.driveHud.effect.remove();
   }
 }

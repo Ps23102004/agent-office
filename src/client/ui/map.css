@@ -1,0 +1,63 @@
+.city-minimap, .map-district, .drive-hud, .drive-rush {
+  position: fixed; z-index: 35; color: #eef2ef; font-family: system-ui, sans-serif;
+  font-variant-numeric: tabular-nums; pointer-events: none !important;
+}
+.city-minimap [hidden], .map-district[hidden], .city-minimap[hidden], .drive-hud[hidden], .drive-rush[hidden] { display: none !important; }
+.city-minimap { right: max(18px, env(safe-area-inset-right)); top: 100px; width: 180px; text-align: center; }
+.city-minimap canvas { display: block; width: 180px; height: 180px; border-radius: 50%; border: 2px solid #dde8df80; box-shadow: 0 3px 18px #0007; background: #142a38; }
+.map-chips { display: flex; justify-content: center; gap: 7px; margin: 7px 0; }
+.map-chips button { pointer-events: auto; background: #142029e8; color: #fff; border: 1px solid #dde8df80; padding: 4px 8px; border-radius: 5px; font: 700 11px system-ui; cursor: pointer; }
+.map-distance { display: block; font-size: 11px; line-height: 1.4; background: #142029dd; padding: 4px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.map-district { top: 100px; left: 50%; transform: translateX(-50%); padding: 10px 22px; border-top: 2px solid #f4cc54; background: #142029e8; font-size: 17px; font-weight: 700; }
+.worldmap-backdrop { z-index: 35; padding: 0; animation: none; background: #142a38; }
+#hud:has(:is(.city-minimap, .drive-hud):not([hidden])) :is(#toasts, #conn, .chat),
+body:has(.worldmap-backdrop) #hud :is(#toasts, #conn, .chat) { z-index: 36; }
+.worldmap { width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; border-radius: 0; background: #142029; color: #eef2ef; box-shadow: none; display: flex; flex-direction: column; animation: none; }
+.worldmap header { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; padding: 16px 22px; border-color: #dde8df30; background: #142029; }
+.worldmap header h2 { font-size: 23px; margin: 0; }
+.worldmap .map-location { margin: 3px 0 0; font-size: 12px; color: #b8cbc6; }
+.worldmap button, .map-controls button { font: inherit; cursor: pointer; }
+.worldmap button { border: 1px solid #dde8df55; border-radius: 4px; background: #263840; color: #fff; padding: 7px 10px; }
+.worldmap button:hover { background: #3c525a; }
+.worldmap button:focus-visible, .map-chips button:focus-visible, .worldmap canvas:focus-visible { outline: 3px solid #f4cc54; outline-offset: 3px; }
+.map-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; flex: 1; min-height: 0; }
+.map-viewport { position: relative; overflow: hidden; min-width: 0; min-height: 0; background: #142a38; }
+.map-viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.map-viewport canvas:active { cursor: grabbing; }
+.map-north { position: absolute; top: 18px; left: 20px; font: 700 17px system-ui; background: #142029dd; padding: 6px 10px; pointer-events: none; }
+.map-tools { display: flex; gap: 6px; position: absolute; bottom: 18px; left: 18px; }
+.map-body aside { padding: 16px; border-left: 1px solid #dde8df30; overflow-y: auto; font-size: 12px; }
+.map-body h3 { margin: 0 0 10px; font-size: 16px; }
+.map-destination { line-height: 1.5; color: #f4cc54; }
+.map-places { display: grid; gap: 7px; margin-top: 15px; }
+.map-places button { display: flex; align-items: center; gap: 10px; text-align: left; }
+.map-places button > span:first-child { width: 22px; text-align: center; font-size: 18px; flex-shrink: 0; }
+.map-places small { display: block; font-size: 10px; line-height: 1.4; color: #c0d0cd; margin-top: 3px; }
+.map-buildings { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; text-transform: capitalize; }
+.map-buildings span { display: flex; align-items: center; gap: 5px; }
+.map-buildings i { width: 10px; height: 10px; display: inline-block; }
+.worldmap footer { flex: 0 0 auto; padding: 10px 18px; color: #b8cbc6; background: #142029; font-size: 11px; border-color: #dde8df30; justify-content: flex-start; }
+.map-controls { width: min(720px, calc(100vw - 32px)); }
+.map-controls .body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
+.map-controls h3 { margin: 0 0 9px; }
+.map-controls dl { margin: 0; font-size: 12px; }
+.map-controls dl div { margin: 0 0 10px; }
+.map-controls dt { font-weight: 800; }.map-controls dd { margin: 2px 0; }
+.map-controls button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.drive-hud { right: max(18px, env(safe-area-inset-right)); bottom: max(96px, env(safe-area-inset-bottom)); width: 180px; padding: 10px 12px; background: #142029dd; border-top: 2px solid #f4cc54; text-align: center; }
+.drive-vehicle { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drive-dial { position: relative; height: 115px; margin-top: 4px; }
+.drive-dial svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.drive-reading { position: absolute; inset: 34px 0 0; display: flex; flex-direction: column; align-items: center; }
+.drive-reading strong { font: 800 45px/1 system-ui; }.drive-reading span { font-size: 11px; color: #baccc5; margin-top: 3px; }
+.drive-boost-label { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: 10px; }.drive-boost-label strong { font-size: 10px; letter-spacing: .06em; }
+.drive-boost-track { height: 4px; margin-top: 6px; background: #ffffff30; overflow: hidden; }
+.drive-boost-track i { display: block; height: 100%; width: 100%; background: #f4cc54; transform-origin: left; }
+.drive-hud.boosting { border-color: #fff; }.drive-hud.boosting .drive-boost-track i { background: #fff; }
+.drive-rush { inset: 0; z-index: 5; background: radial-gradient(ellipse at center, transparent 50%, #f4cc5428 100%); }
+.drive-rush::after { content: ''; position: absolute; inset: 0; background: repeating-conic-gradient(from 0deg at 50% 50%, #fff4 0deg .6deg, transparent .6deg 17deg); mask: radial-gradient(ellipse, transparent 58%, #000 100%); animation: drive-rush 700ms ease-out infinite; }
+@keyframes drive-rush { from { opacity: .2; transform: scale(.98); } to { opacity: .65; transform: scale(1.04); } }
+@media (max-width: 700px) { .map-body { grid-template-columns: minmax(0, 1fr) 210px; }.map-body aside { padding: 12px; }.city-minimap { top: 88px; right: 12px; }.map-controls .body { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .map-body { grid-template-columns: 1fr; grid-template-rows: minmax(180px, 1fr) 180px; }.map-body aside { border-left: 0; border-top: 1px solid #dde8df30; }.city-minimap { width: 150px; }.city-minimap canvas { width: 150px; height: 150px; }.drive-hud { width: 144px; right: 12px; }.drive-dial { height: 90px; }.drive-reading { top: 25px; }.drive-reading strong { font-size: 36px; }.worldmap header { padding: 12px; }.worldmap footer { font-size: 10px; }.map-district { font-size: 14px; } }
+@media (max-height: 560px) { .city-minimap { top: 80px; width: 150px; }.city-minimap canvas { width: 150px; height: 150px; }.drive-hud { bottom: 12px; }.drive-dial { height: 85px; }.drive-reading strong { font-size: 34px; }.drive-reading { top: 26px; } }
+@media (prefers-reduced-motion: reduce) { .drive-rush::after { animation: none; display: none; }.map-controls { animation: none; } }

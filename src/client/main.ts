@@ -104,6 +104,7 @@ import { EmoteWheel } from './ui/emotes';
 import { whereabouts } from './ui/whereabouts';
 // W4 UI + features: race screens and the shared hangout window.
 import { RaceUI } from './ui/race';
+import { WorldMap } from './ui/worldmap';
 import { raceAdapter, wireRaceUI } from './ui/race-adapter';
 import { openHangout } from './ui/hangout';
 import { wayTo } from './walkto';
@@ -4416,12 +4417,18 @@ function use(it: Interactable | null, key: DeskKey, note = aimedNote): boolean {
 
 // ---- Input ----------------------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
+  if (!e.metaKey && !e.ctrlKey && !e.altKey && !isTyping(e) && worldMap.key(e)) { e.preventDefault(); return; }
   if (telescope.active) {
     if (e.code === 'Escape' || e.code === 'KeyE' || e.code === 'KeyF') telescope.exit();
     e.preventDefault();
     return;
   }
   if (modalOpen() || isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if ((e.code === 'KeyM' && !e.shiftKey) || e.key === '?') {
+    e.preventDefault();
+    if (!e.repeat) e.key === '?' ? worldMap.controls() : worldMap.toggle();
+    return;
+  }
   if (relookOnKey && e.key !== 'Escape' && player.canLock) player.lock();
   if (hanger.active && hangingKey(e.code)) {
     e.preventDefault();
@@ -4817,6 +4824,11 @@ $('project').addEventListener('click', () => {
 // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu ----------------------------
 // W4 UI + features: W2 only needs to swap the race adapter for its live store/actions.
 const raceUI = new RaceUI($('hud'), raceAdapter);
+const worldMap = new WorldMap($('hud'), () => [...store.peers.values()].flatMap((p) => {
+  if (p.id === store.you || p.lite || !store.onMyFloor(p)) return [];
+  const at = whereIs(p);
+  return Math.abs(at.y - player.street) < 3 ? [{ x: at.x, z: at.z, name: p.name, color: p.color }] : [];
+}));
 // The race screens read the circuit's own store and actions (client/race.ts); the map is the track's line, thinned, and everyone's car there.
 const trackOutline = track().points.filter((_, i) => i % 6 === 0);
 wireRaceUI({
@@ -5084,9 +5096,15 @@ function frame(ts?: number) {
   const now = performance.now();
   if (slowFrames.frame(now, delta * 1000)) offer2d('slow');
   // W4 UI + features: screen-space UI, throttled inside to 10 Hz; signed speed comes from the real car.
-  const gaugeCar = driver.car === null ? null : CARS[driver.car];
+  const gaugeCar = driver.car === null ? null : carDefs()[driver.car];
+  const boostDriver = driver as Driver & { boost?: number; boosting?: boolean };
   raceUI.update(now, gaugeCar ? { name: gaugeCar.name, speed: driver.pose?.speed ?? 0,
-    top: SPECS[gaugeCar.kind].top, bicycle: gaugeCar.kind === 'bicycle', passenger: !driver.driving } : null);
+    top: SPECS[gaugeCar.kind].top, bicycle: gaugeCar.kind === 'bicycle', passenger: !driver.driving,
+    boost: boostDriver.boost, boosting: boostDriver.boosting } : null);
+  worldMap.setVisible(inOffice() && !upTop && !away() && !trip && Math.abs(player.pos.y - player.street) < 3);
+  const mapPose = driver.pose ?? player.pos;
+  worldMap.update(now, { x: mapPose.x, z: mapPose.z, heading: driver.pose?.rotY ?? player.facing,
+    cameraHeading: player.camYaw + Math.PI, speed: driver.pose?.speed ?? 0, onIsland: inOffice() && !upTop && !away() });
 
   // Coffee: quicker feet, higher jumps, a mug in hand, and maybe the jitters.
   const secs = now / 1000;
