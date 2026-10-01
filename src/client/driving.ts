@@ -39,10 +39,12 @@ const STEP = 0.25;
 
 /**
  * The boost meter (0 empty to 1 full): a full tank lasts `burn` seconds on Shift. It fills back slowly
- * by itself (`trickle` a second), faster drifting (by slip × speed), slipping past traffic close at
- * speed (`nearMiss` a second while you're alongside), and tucked in behind another car (`draft`).
+ * by itself (`trickle` a second), faster drifting (by slip × speed), slipping close past another moving
+ * car much faster or slower than it (`nearMiss` of a tank, now and then), and tucked in behind one (`draft`).
  */
-const TANK = { burn: 3.5, trickle: 0.02, drift: 0.002, nearMiss: 0.6, draft: 0.2 } as const;
+const TANK = { burn: 3.5, trickle: 0.02, drift: 0.002, nearMiss: 0.12, draft: 0.2 } as const;
+/** A near miss fills the tank once (by TANK.nearMiss), then not again for this long (seconds). */
+const NEAR_MISS_EVERY = 1.5;
 
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -61,6 +63,7 @@ export class Driver {
   private clock = 0;
   private sent = { at: -Infinity, x: 0, z: 0, rotY: 0, speed: 0, steer: 0, slip: 0, boosting: false };
   private bumpedAt = -Infinity;
+  private nearMissAt = -Infinity;
   /** The way the car pointed last frame, to turn a first-person view along with it. */
   private yaw = 0;
   private remainder = 0;
@@ -340,7 +343,9 @@ export class Driver {
   private move(from: CarPose, pedals: Pedals, dt: number, solids: Box[]): CarPose {
     const kind = this.fleet.cars[this.car!].def.kind;
     const ground = this.hooks.ground?.();
-    const n = Math.max(1, Math.ceil((Math.hypot(from.speed, from.slip ?? 0) * dt) / STEP));
+    // Spinning, its ends swing round further than its middle goes.
+    const reach = Math.hypot(SPECS[kind].length, SPECS[kind].width) / 2;
+    const n = Math.max(1, Math.ceil(((Math.hypot(from.speed, from.slip ?? 0) + Math.abs(from.yaw ?? 0) * reach) * dt) / STEP));
     const h = dt / n;
     let pose = from;
     for (let i = 0; i < n; i++) {
@@ -400,25 +405,33 @@ export class Driver {
     const spec = SPECS[kind];
     const v = Math.abs(p.speed);
     let rate = TANK.trickle;
+    let lump = 0;
     if (v > 6 && Math.abs(p.slip ?? 0) > 1) rate += TANK.drift * Math.abs(p.slip ?? 0) * v;
     if (v > 15) {
       const s = Math.sin(p.rotY), c = Math.cos(p.rotY);
       let near = false, draft = false;
       for (const b of solids) {
-        if (!b.mass) continue;
+        // Only what's moving: a parked car, or one stopped at the lights, is no near miss.
+        const ox = b.vx ?? 0, oz = b.vz ?? 0;
+        if (!b.mass || Math.hypot(ox, oz) < 2) continue;
         const dx = (b.minX + b.maxX) / 2 - p.x, dz = (b.minZ + b.maxZ) / 2 - p.z;
         // Where it is from you: across (+ left) and ahead.
         const across = Math.abs(dx * c - dz * s), ahead = dx * s + dz * c;
         const half = b.hx ?? (b.maxX - b.minX) / 2;
         const gap = across - spec.width / 2 - half;
-        if (gap > 0 && gap < 1.5 && Math.abs(ahead) < spec.length) near = true;
-        const going = (b.vx ?? 0) * s + (b.vz ?? 0) * c;
+        // Past it, not keeping it company.
+        const passing = Math.hypot(s * p.speed - ox, c * p.speed - oz) > 5;
+        if (passing && gap > 0 && gap < 1.5 && Math.abs(ahead) < spec.length) near = true;
+        const going = ox * s + oz * c;
         if (across < 1.5 && ahead > spec.length / 2 + 1 && ahead < 18 && going > 10) draft = true;
       }
-      if (near) rate += TANK.nearMiss;
+      if (near && this.clock - this.nearMissAt > NEAR_MISS_EVERY) {
+        this.nearMissAt = this.clock;
+        lump = TANK.nearMiss;
+      }
       if (draft) rate += TANK.draft;
     }
-    return rate * dt;
+    return rate * dt + lump;
   }
 
   /** Ran into something at `at`, losing `speed` m/s of the car's: a crunch, if it's enough to hear. */
@@ -477,12 +490,22 @@ function closing(p: CarPose, c: Contact, other: Pick<Box, 'vx' | 'vz'> = {}): nu
   return Math.max(0, -(vx * c.nx + vz * c.nz));
 }
 
-/** Where the car at `p` has gone over the edge of `where`, and back toward the middle of it: the barrier it hit. */
+/** Directions round a point, to feel for which way the edge of `where` runs. */
+const RING = Array.from({ length: 24 }, (_, i) => [Math.cos((i / 24) * Math.PI * 2), Math.sin((i / 24) * Math.PI * 2)]);
+
+/**
+ * Where the car at `p` has gone over the edge of `where`, and which way is back in, square to the
+ * barrier itself: felt for round the point that's over (the ones inside, on a ring about it, lie
+ * in toward the track), so a graze along it slides on rather than stopping dead.
+ */
 function edge(p: CarPose, kind: CarKind, where: (x: number, z: number) => boolean): Contact {
   const w = SPECS[kind].width / 2, l = SPECS[kind].length / 2;
   const off = [[w, l], [-w, l], [w, -l], [-w, -l], [w, 0], [-w, 0], [0, l], [0, -l]].map(([lx, lz]) => carPoint(p, lx, lz)).filter((q) => !where(q.x, q.z));
   const at = off.reduce((m, q) => ({ x: m.x + q.x / off.length, z: m.z + q.z / off.length }), { x: 0, z: 0 });
-  const dx = p.x - at.x, dz = p.z - at.z;
-  const d = Math.hypot(dx, dz) || 1;
-  return { nx: dx / d, nz: dz / d, depth: 0, x: at.x, z: at.z };
+  let nx = 0, nz = 0;
+  for (const r of [0.6, 1.5]) for (const [cx, cz] of RING) if (where(at.x + cx * r, at.z + cz * r)) { nx += cx; nz += cz; }
+  let d = Math.hypot(nx, nz);
+  // Nothing inside round it (or all of it): back toward the car's middle.
+  if (d < 1e-6) { nx = p.x - at.x; nz = p.z - at.z; d = Math.hypot(nx, nz) || 1; }
+  return { nx: nx / d, nz: nz / d, depth: 0, x: at.x, z: at.z };
 }

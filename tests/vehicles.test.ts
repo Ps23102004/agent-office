@@ -7,7 +7,7 @@ import { kitModel, setCarKit } from '../src/client/world/carkit.js';
 import { buildStreetLife } from '../src/client/world/streetlife.js';
 import { STREET_Z, citySolids, surfaceAt } from '../src/shared/city.js';
 import { CIRCUIT_CARS } from '../src/shared/circuit.js';
-import { BOOST, CARS, SPECS, DRIVE_STEP, collide, contact, drive, leanAngle, carFits, overlaps, type CarPose, type CarKind, type Pedals } from '../src/shared/garage.js';
+import { MAX_SPIN, boostTop, CARS, SPECS, DRIVE_STEP, collide, contact, drive, leanAngle, carFits, overlaps, type CarPose, type CarKind, type Pedals } from '../src/shared/garage.js';
 import { Garage } from '../src/server/garage.js';
 import { Fleet, supercar } from '../src/client/world/cars.js';
 import { STREET_Y } from '../src/shared/layout.js';
@@ -101,6 +101,8 @@ test('a turned car is a turned box: hit off-centre it spins, and the way out is 
   const after = collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0.9, z: 2.3 });
   assert.ok(after.speed > square.speed && after.speed < 10, `slowed (${after.speed.toFixed(1)} m/s)`);
   assert.ok(Math.abs(after.yaw ?? 0) > 0.5, `spun (${after.yaw?.toFixed(2)} rad/s)`);
+  // Flat out into a corner, no wilder a spin than the tires can soon catch.
+  assert.equal(Math.abs(collide({ ...p, speed: 100 }, 'race', { nx: 0, nz: -1, depth: 0.1, x: 0.8, z: 2.2 }).yaw ?? 0), MAX_SPIN);
   // Into a heavier car, less bounce: its mass takes less of the hit.
   assert.ok(collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0, z: 2.3 }, { mass: 3000 }).speed < collide(p, 'lambo', { nx: 0, nz: -1, depth: 0.1, x: 0, z: 2.3 }, { mass: 500 }).speed);
 });
@@ -119,7 +121,7 @@ test('the office accepts old poses, clamps each kind, rejects nonsense slip, and
     assert.ok(g.enter('driver', i, 'driver'));
     const p = { ...still, x: def.x, z: def.z, speed: 999, slip: 999 };
     const checked = g.drive('driver', i, p)!;
-    assert.equal(checked.speed, SPECS[def.kind].top * BOOST.top);
+    assert.equal(checked.speed, SPECS[def.kind].top * boostTop(def.kind), 'top speed, on the boost if it has one');
     assert.equal(checked.slip, SPECS[def.kind].width < 1 ? 0 : SPECS[def.kind].top * 0.75);
     assert.equal(g.drive('driver', i, { ...p, speed: -999 })?.speed, -SPECS[def.kind].reverse);
     assert.equal(g.drive('driver', i, { ...p, slip: NaN }), undefined);

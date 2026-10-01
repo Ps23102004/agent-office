@@ -419,6 +419,12 @@ export interface CarView extends CarModel {
   /** What you bump into and stand on: along its body (turned, it takes a few boxes), and its roof. */
   colliders: Collider[];
   interactable: Interactable;
+  /**
+   * Someone else's driving: how far it's drawn from where it should be by now (its driver's last word,
+   * carried on), which dies away; and when that word came (the office's `at`).
+   */
+  err: { x: number; z: number; rotY: number };
+  heard: number;
   /** On the boost (its driver's word, or your own): flames out of the exhausts. */
   boosting: boolean;
   flames: THREE.Object3D;
@@ -499,7 +505,7 @@ export class Fleet {
       for (const c of colliders) this.vehicleBoxes.set(c, index);
       const fire = flames(def.kind);
       model.body.add(fire);
-      const view: CarView = { ...model, index, def, pose: { x: def.x, z: def.z, rotY: def.rotY, speed: 0, steer: 0 }, occupied: false, lastSpeed: 0, spin: 0, pedalPhase: 0, colliders, interactable, boosting: false, flames: fire };
+      const view: CarView = { ...model, index, def, pose: { x: def.x, z: def.z, rotY: def.rotY, speed: 0, steer: 0 }, occupied: false, lastSpeed: 0, spin: 0, pedalPhase: 0, colliders, interactable, boosting: false, flames: fire, err: { x: 0, z: 0, rotY: 0 }, heard: -1 };
       this.show(view);
       return view;
     });
@@ -543,11 +549,22 @@ export class Fleet {
       const ahead = Math.min(0.25, Math.max(0, (now - (at[v.index] ?? now)) / 1000));
       const x = c.x + (Math.sin(c.rotY) * c.speed + Math.cos(c.rotY) * (c.slip ?? 0)) * ahead;
       const z = c.z + (Math.cos(c.rotY) * c.speed - Math.sin(c.rotY) * (c.slip ?? 0)) * ahead;
-      const far = Math.hypot(x - p.x, z - p.z) > 8;
-      const turn = Math.atan2(Math.sin(c.rotY - p.rotY), Math.cos(c.rotY - p.rotY));
-      p.x = far ? x : p.x + (x - p.x) * k;
-      p.z = far ? z : p.z + (z - p.z) * k;
-      p.rotY = far ? c.rotY : p.rotY + turn * k;
+      // Word of where it's got to: what we drew it off by from there is the error to smooth away (a long way off, it jumps there).
+      const e = v.err;
+      if ((at[v.index] ?? -1) !== v.heard) {
+        v.heard = at[v.index] ?? -1;
+        e.x = p.x - x;
+        e.z = p.z - z;
+        e.rotY = Math.atan2(Math.sin(p.rotY - c.rotY), Math.cos(p.rotY - c.rotY));
+        if (Math.hypot(e.x, e.z) > 8 + Math.abs(c.speed) * 0.25) e.x = e.z = e.rotY = 0;
+      }
+      const fade = 1 - k;
+      e.x *= fade;
+      e.z *= fade;
+      e.rotY *= fade;
+      p.x = x + e.x;
+      p.z = z + e.z;
+      p.rotY = c.rotY + e.rotY;
       p.speed = c.speed;
       p.slip = c.slip ?? 0;
       p.steer += (c.steer - p.steer) * k;
@@ -562,6 +579,7 @@ export class Fleet {
       const c = cars[v.index];
       if (!c) continue;
       Object.assign(v.pose, { x: c.x, z: c.z, rotY: c.rotY, speed: c.speed, steer: c.steer, slip: c.slip ?? 0, yaw: 0 });
+      Object.assign(v.err, { x: 0, z: 0, rotY: 0 });
       this.show(v);
     }
   }
@@ -571,6 +589,7 @@ export class Fleet {
     const v = this.cars[i];
     if (!v) return;
     Object.assign(v.pose, pose, { slip: pose.slip ?? 0, yaw: pose.yaw ?? 0 });
+    Object.assign(v.err, { x: 0, z: 0, rotY: 0 });
     this.show(v);
   }
 
@@ -598,7 +617,8 @@ export class Fleet {
     // Every other car as it's turned, with its mass and motion (where its driver last said: you keep clear of that).
     for (const v of this.cars) {
       if (v.index === except) continue;
-      const p = v.pose;
+      // Where it is by its driver's word (carried on), not the smoothed drawing of it.
+      const p = { ...v.pose, x: v.pose.x - v.err.x, z: v.pose.z - v.err.z, rotY: v.pose.rotY - v.err.rotY };
       const hx = v.half, hz = SPECS[v.def.kind].length / 2;
       const s = Math.abs(Math.sin(p.rotY)), c = Math.abs(Math.cos(p.rotY));
       const ex = c * hx + s * hz, ez = s * hx + c * hz;

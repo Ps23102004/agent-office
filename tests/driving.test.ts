@@ -14,7 +14,7 @@ const ROAD_Z = (ROAD.minZ + ROAD.maxZ) / 2;
 const BLUE = 8;
 
 /** The street to stand and drive on, whatever else is there, and a driver in a car on it heading east. */
-function street(t: TestContext, solids: Collider[] = []) {
+function street(t: TestContext, solids: Collider[] = [], ground?: (x: number, z: number) => boolean) {
   const win = new EventTarget();
   for (const [name, value] of [['window', win], ['document', new EventTarget()]] as const) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -30,7 +30,7 @@ function street(t: TestContext, solids: Collider[] = []) {
   player.view = 'third';
   const sent: CarPose[] = [];
   const bumps: number[] = [];
-  const driver = new Driver(player, fleet, { moved: (_car, p) => sent.push({ ...p }), bump: (_at, speed) => bumps.push(speed) });
+  const driver = new Driver(player, fleet, { moved: (_car, p) => sent.push({ ...p }), bump: (_at, speed) => bumps.push(speed), ground: ground && (() => ground) });
   fleet.place(BLUE, { x: 0, z: ROAD_Z, rotY: Math.PI / 2, speed: 0, steer: 0 });
   const keys = (...codes: string[]) => {
     player.clearKeys();
@@ -208,4 +208,19 @@ test('Shift boosts you past top speed until the meter runs dry, and it fills bac
   s.keys('KeyW');
   s.frames(10);
   assert.ok(s.driver.boost > dry + 0.01, `a slide fills it (${s.driver.boost.toFixed(3)})`);
+});
+
+test("grazing a circuit's edge at speed, the car slides along it: speed kept, no slide sideways", (t) => {
+  // A barrier along the north of a wide strip (the circuit's ground, whatever shape it is: only `where` is asked).
+  const barrier = ROAD_Z - 4;
+  const s = street(t, [], (_x, z) => z > barrier);
+  s.fleet.place(BLUE, { x: -100, z: barrier + 2, rotY: Math.PI / 2 + (5 * Math.PI) / 180, speed: 70, steer: 0 });
+  s.driver.enter(BLUE, 'driver');
+  s.keys('KeyW');
+  s.frames(30);
+  const car = s.car();
+  assert.ok(s.bumps.length >= 1, 'it touched');
+  assert.ok(car.speed > 60, `speed mostly kept (${car.speed.toFixed(1)} m/s)`);
+  assert.ok(Math.abs(car.slip ?? 0) < 6, `not sliding sideways (${car.slip?.toFixed(1)} m/s)`);
+  assert.ok(car.x > -70, `on along it (x ${car.x.toFixed(1)})`);
 });

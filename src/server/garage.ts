@@ -1,4 +1,4 @@
-import { BOOST, CARS, SPECS, DRIVE, carFits, parked, paved, type CarDef, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
+import { boostTop, CARS, SPECS, DRIVE, carFits, parked, paved, type CarDef, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
 import { seaRespawnsFrom, vehicleSolids } from '../shared/city.js';
 import { vehicleBarred } from '../shared/venues.js';
 import { CITY_GATE } from '../shared/circuit.js';
@@ -20,6 +20,8 @@ export class Garage {
   private honked = new Map<string, number>();
   /** When each car's pose was last accepted (ms), to tell a drive from a jump. */
   private movedAt: number[] = [];
+  /** How far each car can still go (m) on top of its pace since: up to a second flat out banked, so reports bunched up by the network still pass. */
+  private credit: (number | undefined)[] = [];
   /** Rides offered: by who they're offered to, the driver offering and their car, until when. One each. */
   private offers = new Map<string, { from: string; car: number; until: number }>();
   /** When each driver last offered a ride, and who said no to whom, until when (`from>to`). */
@@ -57,7 +59,10 @@ export class Garage {
     if (seat === 'passenger' && c.driver && !invited) return false;
     this.leave(id);
     c[seat] = id;
-    if (seat === 'driver') this.movedAt[car] = this.now();
+    if (seat === 'driver') {
+      this.movedAt[car] = this.now();
+      this.credit[car] = undefined;
+    }
     return true;
   }
 
@@ -132,7 +137,7 @@ export class Garage {
       x,
       z,
       rotY: Math.atan2(Math.sin(rotY), Math.cos(rotY)),
-      speed: Math.min(spec.top * BOOST.top, Math.max(-spec.reverse, speed)),
+      speed: Math.min(spec.top * boostTop(this.defs[car].kind), Math.max(-spec.reverse, speed)),
       slip: spec.width < 1 ? 0 : Math.min(spec.top * 0.75, Math.max(-spec.top * 0.75, slip)),
       steer: Math.min(DRIVE.steer, Math.max(-DRIVE.steer, steer)),
     });
@@ -150,10 +155,18 @@ export class Garage {
     // (W6: nor inside the café or the bar, whose doors a bike would fit through.)
     if (vehicleBarred(to.x, to.z) || !carFits(to, vehicleSolids(to.x, to.z, 6), kind)) return false;
     const c = this.cars[car];
-    const seconds = Math.min(1, Math.max(0, (this.now() - (this.movedAt[car] ?? this.now())) / 1000));
-    if (Math.hypot(to.x - c.x, to.z - c.z) <= SPECS[kind].top * BOOST.top * 1.3 * seconds + 3) return true;
+    const seconds = Math.max(0, (this.now() - (this.movedAt[car] ?? this.now())) / 1000);
+    const pace = SPECS[kind].top * boostTop(kind) * 1.3;
+    const credit = Math.min(pace, (this.credit[car] ?? pace) + pace * seconds);
+    const far = Math.hypot(to.x - c.x, to.z - c.z);
+    if (far <= credit + 3) {
+      this.credit[car] = credit - far;
+      return true;
+    }
     const at = (p: { x: number; z: number }) => Math.hypot(p.x - to.x, p.z - to.z) < 0.5;
-    return at(CITY_GATE.out) || seaRespawnsFrom(c.x, c.z).some(at);
+    const jumped = at(CITY_GATE.out) || seaRespawnsFrom(c.x, c.z).some(at);
+    if (jumped) this.credit[car] = undefined;
+    return jumped;
   }
 
   /** `id` leans on the horn: the car they're in, unless they only just did. */

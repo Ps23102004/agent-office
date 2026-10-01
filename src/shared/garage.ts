@@ -162,6 +162,8 @@ export interface Pedals {
 
 /** Boost: how far past top speed it takes you, and the extra shove (m/s²) on top of the engine's. */
 export const BOOST = { top: 1.35, accel: 9 } as const;
+/** How much faster than top speed `kind` can go: on the boost, but a bicycle has none. */
+export const boostTop = (kind: CarKind) => (kind === 'bicycle' ? 1 : BOOST.top);
 
 export const DRIVE = {
   /** Flat out, forward and in reverse (m/s): a Lambo's. */
@@ -288,7 +290,7 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
     yaw += axle * (front - rear) / inertia * dt;
     slip += ((front + rear) / spec.mass - v * yaw) * dt;
   }
-  v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top * BOOST.top);
+  v = clamp(v + yaw * slip * dt, -spec.reverse, spec.top * boostTop(kind));
   slip = clamp(slip, -spec.top * 0.75, spec.top * 0.75);
   if (Math.abs(v) < 1e-3 && Math.abs(slip) < 0.01) { v = 0; slip = 0; yaw = 0; }
   const mid = p.rotY + yaw * dt / 2;
@@ -409,6 +411,9 @@ export function overlaps(p: { x: number; z: number; rotY: number }, b: Box, kind
   return contact(p, b, kind) !== null;
 }
 
+/** The fastest a hit sets a car spinning (rad/s). */
+export const MAX_SPIN = 6;
+
 /** How hard the car's turned about its middle by a shove off-centre: its mass spread over its footprint. */
 export const inertia = (kind: CarKind) => SPECS[kind].mass * (SPECS[kind].length ** 2 + SPECS[kind].width ** 2) / 12 * TIRES.inertia;
 
@@ -434,7 +439,8 @@ export function collide(p: CarPose, kind: CarKind, c: Contact, other: Pick<Box, 
   vz += (j * c.nz) / m;
   yaw += (j * arm) / I;
   const bike = SPECS[kind].width < 1;
-  return { ...p, speed: vx * s + vz * co, slip: bike ? 0 : vx * co - vz * s, yaw: bike ? 0 : yaw };
+  // However hard the hit, no more than a spin the tires can soon catch.
+  return { ...p, speed: vx * s + vz * co, slip: bike ? 0 : vx * co - vz * s, yaw: bike ? 0 : clamp(yaw, -MAX_SPIN, MAX_SPIN) };
 }
 
 /**
