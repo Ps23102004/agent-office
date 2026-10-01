@@ -94,6 +94,8 @@ export interface CarModel {
   open: THREE.Object3D;
   /** Both axles spin; the front wheels also turn to steer. */
   wheels: THREE.Object3D[];
+  /** Half its width at the widest, wheels and all (m): an open-wheeler's stick out past its body. */
+  half: number;
 }
 
 /**
@@ -119,10 +121,12 @@ export function supercar(kind: CarKind, color: string): CarModel {
   const dark = toon('#2b2d42');
   const { body, cabin, axle, screen } = profiles(kind === 'lambo' ? 'lambo' : 'ferrari');
   g.add(mesh(extrude(body, WIDTH, 0.05), paint));
+  // A stretched Ferrari's wheels grow with its body, so they still fill its arches.
+  const size = fit?.y ?? 1;
   const wheel = (x: number, z: number) => {
     const w = new THREE.Group();
     w.position.set(x, WHEEL_Y, z);
-    w.add(mesh(new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.28, 18).rotateZ(Math.PI / 2), tire));
+    w.add(mesh(new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.26, 18).rotateZ(Math.PI / 2), tire));
     w.add(mesh(new THREE.TorusGeometry(WHEEL_R * 0.65, 0.035, 5, 16).rotateY(Math.PI / 2), rim));
     // Open rims with five spokes, so you can see them turn.
     for (let i = 0; i < 5; i++) {
@@ -132,14 +136,16 @@ export function supercar(kind: CarKind, color: string): CarModel {
     }
     const spin = packed(w);
     const pivot = new THREE.Group();
-    pivot.position.copy(w.position);
-    pivot.userData.radius = WHEEL_R;
+    pivot.position.set(x, WHEEL_Y * size, z);
+    pivot.scale.setScalar(size);
+    pivot.userData.radius = WHEEL_R * size;
     pivot.add(spin);
     return pivot;
   };
   const wheels: THREE.Object3D[] = [];
   for (const sx of [-1, 1]) {
-    const x = sx * (WIDTH / 2 - 0.16) * (fit?.x ?? 1);
+    // Tucked in under the arches, so the front ones stay inside the body as they steer.
+    const x = sx * (WIDTH / 2 - 0.2) * (fit?.x ?? 1);
     const rear = wheel(x, -axle * (fit?.z ?? 1)), front = wheel(x, axle * (fit?.z ?? 1));
     rear.userData.front = false;
     front.userData.front = true;
@@ -217,7 +223,7 @@ export function supercar(kind: CarKind, color: string): CarModel {
   // A car's springs move its body, not its wheels: the tires stay on the road (only a bike's wheels lean with it).
   bodyGroup.add(shell, lit, top, inside);
   root.add(bodyGroup, ...wheels);
-  return { root, body: bodyGroup, top, open: inside, wheels };
+  return { root, body: bodyGroup, top, open: inside, wheels, half: spec.width / 2 };
 }
 
 const unlit = new THREE.MeshBasicMaterial({ vertexColors: true });
@@ -324,7 +330,9 @@ function kitCar(kind: CarKind, m: KitModel, color: string): CarModel {
   body.add(mesh(low, mat), lights, top, open);
   const root = new THREE.Group();
   root.add(body, ...wheels);
-  return { root, body, top, open, wheels };
+  m.wheel.computeBoundingBox();
+  const tread = m.wheel.boundingBox ? Math.max(-m.wheel.boundingBox.min.x, m.wheel.boundingBox.max.x) : 0;
+  return { root, body, top, open, wheels, half: Math.max(spec.width / 2, ...m.hubs.map((h) => Math.abs(h.x) + tread)) };
 }
 
 /** Plain colors share one mesh, even on the moving wheels; lights keep their emissive materials. */
@@ -394,7 +402,7 @@ function bike(kind: 'motorbike' | 'bicycle', color: string): CarModel {
   // Wheels and cranks are in the body group too, so the whole bike leans as one about the ground line.
   body.add(packed(parts, true), mergeByMaterial(lights), ...wheels, pedals);
   root.add(body);
-  return { root, body, top: new THREE.Group(), open: new THREE.Group(), wheels, pedals };
+  return { root, body, top: new THREE.Group(), open: new THREE.Group(), wheels, pedals, half: spec.width / 2 };
 }
 
 /** One of the floor's cars, as it's drawn here. */
@@ -411,6 +419,37 @@ export interface CarView extends CarModel {
   /** What you bump into and stand on: along its body (turned, it takes a few boxes), and its roof. */
   colliders: Collider[];
   interactable: Interactable;
+  /**
+   * Someone else's driving: how far it's drawn from where it should be by now (its driver's last word,
+   * carried on), which dies away; and when that word came (the office's `at`).
+   */
+  err: { x: number; z: number; rotY: number };
+  heard: number;
+  /** On the boost (its driver's word, or your own): flames out of the exhausts. */
+  boosting: boolean;
+  flames: THREE.Object3D;
+}
+
+/** Boost flames, flickering out the back: a hot core in a longer orange glow, one per exhaust (a bike's one). */
+const FLAME = {
+  core: new THREE.MeshBasicMaterial({ color: '#fff1a8', transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
+  glow: new THREE.MeshBasicMaterial({ color: '#ff6a1a', transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }),
+};
+for (const m of Object.values(FLAME)) m.userData.outlineParameters = { visible: false };
+const coneBack = (r: number, len: number) => new THREE.ConeGeometry(r, len, 10, 1, true).translate(0, -len / 2, 0).rotateX(Math.PI / 2);
+
+function flames(kind: CarKind): THREE.Object3D {
+  const spec = SPECS[kind];
+  const out = new THREE.Group();
+  const bike = spec.width < 1;
+  for (const x of bike ? [-0.25] : [-0.4, 0.4]) {
+    const f = new THREE.Group();
+    f.position.set(x, bike ? 0.32 : 0.3, -spec.length / 2 - 0.02);
+    f.add(new THREE.Mesh(coneBack(0.13, 0.9), FLAME.glow), new THREE.Mesh(coneBack(0.07, 0.5), FLAME.core));
+    out.add(f);
+  }
+  out.visible = false;
+  return out;
 }
 
 /** Whether the whole car is in under the building (the office's floor over it), rather than out on the lot or the street. */
@@ -426,6 +465,10 @@ function underneath(p: CarPose, kind: CarKind): boolean {
     return c.x > FLOOR.minX - WALL_T && c.x < FLOOR.maxX + WALL_T && c.z > FLOOR.minZ - WALL_T && c.z < FLOOR.maxZ + WALL_T;
   });
 }
+
+/** How far the front wheels are drawn turned: no further than keeps them in under the arches. */
+const shownSteer = (steer: number) => THREE.MathUtils.clamp(steer, -0.42, 0.42);
+const pivot = new THREE.Vector3();
 
 /** Boxes along the car's body, for colliders: a car turned off square takes more than one. */
 const SLICES = 3;
@@ -460,7 +503,9 @@ export class Fleet {
       for (let i = 0; i <= SLICES; i++) colliders.push({ minX: 0, maxX: 0, minZ: 0, maxZ: 0, top: 0, bottom: 0 });
       all.push(...colliders);
       for (const c of colliders) this.vehicleBoxes.set(c, index);
-      const view: CarView = { ...model, index, def, pose: { x: def.x, z: def.z, rotY: def.rotY, speed: 0, steer: 0 }, occupied: false, lastSpeed: 0, spin: 0, pedalPhase: 0, colliders, interactable };
+      const fire = flames(def.kind);
+      model.body.add(fire);
+      const view: CarView = { ...model, index, def, pose: { x: def.x, z: def.z, rotY: def.rotY, speed: 0, steer: 0 }, occupied: false, lastSpeed: 0, spin: 0, pedalPhase: 0, colliders, interactable, boosting: false, flames: fire, err: { x: 0, z: 0, rotY: 0 }, heard: -1 };
       this.show(view);
       return view;
     });
@@ -504,14 +549,26 @@ export class Fleet {
       const ahead = Math.min(0.25, Math.max(0, (now - (at[v.index] ?? now)) / 1000));
       const x = c.x + (Math.sin(c.rotY) * c.speed + Math.cos(c.rotY) * (c.slip ?? 0)) * ahead;
       const z = c.z + (Math.cos(c.rotY) * c.speed - Math.sin(c.rotY) * (c.slip ?? 0)) * ahead;
-      const far = Math.hypot(x - p.x, z - p.z) > 8;
-      const turn = Math.atan2(Math.sin(c.rotY - p.rotY), Math.cos(c.rotY - p.rotY));
-      p.x = far ? x : p.x + (x - p.x) * k;
-      p.z = far ? z : p.z + (z - p.z) * k;
-      p.rotY = far ? c.rotY : p.rotY + turn * k;
+      // Word of where it's got to: what we drew it off by from there is the error to smooth away (a long way off, it jumps there).
+      const e = v.err;
+      if ((at[v.index] ?? -1) !== v.heard) {
+        v.heard = at[v.index] ?? -1;
+        e.x = p.x - x;
+        e.z = p.z - z;
+        e.rotY = Math.atan2(Math.sin(p.rotY - c.rotY), Math.cos(p.rotY - c.rotY));
+        if (Math.hypot(e.x, e.z) > 8 + Math.abs(c.speed) * 0.25) e.x = e.z = e.rotY = 0;
+      }
+      const fade = 1 - k;
+      e.x *= fade;
+      e.z *= fade;
+      e.rotY *= fade;
+      p.x = x + e.x;
+      p.z = z + e.z;
+      p.rotY = c.rotY + e.rotY;
       p.speed = c.speed;
       p.slip = c.slip ?? 0;
       p.steer += (c.steer - p.steer) * k;
+      v.boosting = !!c.boost && !!c.driver;
       this.show(v);
     }
   }
@@ -522,6 +579,7 @@ export class Fleet {
       const c = cars[v.index];
       if (!c) continue;
       Object.assign(v.pose, { x: c.x, z: c.z, rotY: c.rotY, speed: c.speed, steer: c.steer, slip: c.slip ?? 0, yaw: 0 });
+      Object.assign(v.err, { x: 0, z: 0, rotY: 0 });
       this.show(v);
     }
   }
@@ -531,6 +589,7 @@ export class Fleet {
     const v = this.cars[i];
     if (!v) return;
     Object.assign(v.pose, pose, { slip: pose.slip ?? 0, yaw: pose.yaw ?? 0 });
+    Object.assign(v.err, { x: 0, z: 0, rotY: 0 });
     this.show(v);
   }
 
@@ -549,17 +608,23 @@ export class Fleet {
    * `except`'s own boxes.
    */
   solids(except: number): Box[] {
-    const own = this.cars[except]?.colliders;
     const out: Box[] = [];
     for (const c of this.all) {
-      // Not the ground itself (the lawn, the lots), nor anything overhead.
-      if (own?.includes(c) || (c.bottom ?? 0) > this.street + 1 || c.top < this.street + 0.3) continue;
-      const index = this.vehicleBoxes.get(c);
-      const vehicle = index === undefined ? undefined : this.cars[index];
-      const p = vehicle?.pose;
-      out.push(p && vehicle ? { ...c, mass: SPECS[vehicle.def.kind].mass,
+      // Not the ground itself (the lawn, the lots), nor anything overhead; the cars come next, whole.
+      if (this.vehicleBoxes.has(c) || (c.bottom ?? 0) > this.street + 1 || c.top < this.street + 0.3) continue;
+      out.push(c);
+    }
+    // Every other car as it's turned, with its mass and motion (where its driver last said: you keep clear of that).
+    for (const v of this.cars) {
+      if (v.index === except) continue;
+      // Where it is by its driver's word (carried on), not the smoothed drawing of it.
+      const p = { ...v.pose, x: v.pose.x - v.err.x, z: v.pose.z - v.err.z, rotY: v.pose.rotY - v.err.rotY };
+      const hx = v.half, hz = SPECS[v.def.kind].length / 2;
+      const s = Math.abs(Math.sin(p.rotY)), c = Math.abs(Math.cos(p.rotY));
+      const ex = c * hx + s * hz, ez = s * hx + c * hz;
+      out.push({ minX: p.x - ex, maxX: p.x + ex, minZ: p.z - ez, maxZ: p.z + ez, rotY: p.rotY, hx, hz, mass: SPECS[v.def.kind].mass,
         vx: Math.sin(p.rotY) * p.speed + Math.cos(p.rotY) * (p.slip ?? 0),
-        vz: Math.cos(p.rotY) * p.speed - Math.sin(p.rotY) * (p.slip ?? 0) } : c);
+        vz: Math.cos(p.rotY) * p.speed - Math.sin(p.rotY) * (p.slip ?? 0) });
     }
     const p = this.cars[except]?.pose;
     if (p) out.push(...this.near(p.x, p.z, 10 + Math.hypot(p.speed, p.slip ?? 0) * 0.1));
@@ -583,16 +648,25 @@ export class Fleet {
     v.spin += p.speed * dt;
     v.pedalPhase += p.speed * dt / 1.8;
     for (const w of v.wheels) {
-      w.rotation.y = w.userData.front ? p.steer : 0;
+      w.rotation.y = w.userData.front ? shownSteer(p.steer) : 0;
       w.children[0].rotation.x = v.spin / w.userData.radius;
     }
     const bike = spec.width < 1;
     const lateral = p.speed * p.speed * Math.tan(p.steer) / spec.wheelbase;
-    const roll = bike ? -leanAngle(p, v.def.kind) : THREE.MathUtils.clamp(lateral * 0.006, -0.08, 0.08);
+    const roll = bike ? -leanAngle(p, v.def.kind) : THREE.MathUtils.clamp(lateral * 0.004, -0.05, 0.05);
     v.body.rotation.z += (roll - v.body.rotation.z) * k;
-    v.body.rotation.x += ((bike ? 0 : -acceleration * 0.003) - v.body.rotation.x) * k;
-    v.body.position.y = bike ? 0 : Math.sin((p.x + p.z) * 3) * 0.015 * Math.min(1, Math.abs(p.speed) / 4);
+    v.body.rotation.x += ((bike ? 0 : THREE.MathUtils.clamp(-acceleration * 0.0025, -0.04, 0.04)) - v.body.rotation.x) * k;
+    const bob = bike ? 0 : Math.sin((p.x + p.z) * 3) * 0.015 * Math.min(1, Math.abs(p.speed) / 4);
+    if (bike) v.body.position.set(0, 0, 0);
+    else {
+      // A car's body pitches and rolls about its axles' height, not the road: it leans over its wheels, never down onto them.
+      const hub = v.wheels[0]?.position.y ?? 0;
+      v.body.position.set(0, hub, 0).sub(pivot.set(0, hub, 0).applyEuler(v.body.rotation));
+      v.body.position.y += bob;
+    }
     if (v.pedals) v.pedals.rotation.x = v.pedalPhase;
+    v.flames.visible = v.boosting;
+    if (v.boosting) for (const f of v.flames.children) f.scale.set(1, 1, 0.75 + Math.random() * 0.5);
   }
 
   /**
@@ -635,10 +709,11 @@ export class Fleet {
     const spec = SPECS[v.def.kind];
     v.root.position.set(p.x, this.street, p.z);
     v.root.rotation.y = p.rotY;
-    for (const w of v.wheels) w.rotation.y = w.userData.front ? p.steer : 0;
+    for (const w of v.wheels) w.rotation.y = w.userData.front ? shownSteer(p.steer) : 0;
     const s = Math.abs(Math.sin(p.rotY));
     const c = Math.abs(Math.cos(p.rotY));
-    const hx = spec.width / 2 - 0.08;
+    // Wheels and all: an open-wheeler's tires are as solid as its body.
+    const hx = v.half;
     const len = (spec.length - 0.16) / SLICES;
     // Along the body a slice at a time, each slice's box round it as turned.
     for (let i = 0; i < SLICES; i++) {

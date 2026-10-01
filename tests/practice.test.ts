@@ -4,6 +4,7 @@ import { CHECKPOINTS, gridPose, pointAt, surfaceAt, track } from '../src/shared/
 import { RACE, SECTORS, sectorOf } from '../src/shared/race.js';
 import { MEET_SPOTS } from '../src/shared/meet.js';
 import { RaceControl } from '../src/server/race.js';
+import { BOOST, SPECS } from '../src/shared/garage.js';
 
 const L = track().length;
 /** On the orange motorbike (the quickest), signed in. */
@@ -161,10 +162,10 @@ test('the checkpoint coach: the next line, and the one you missed going through 
 
 test('practice laps go no quicker than the car can: a spoofed fast lap takes nothing', () => {
   const lambo = { name: 'Cheat', car: 0, account: 'acct-cheat' };
-  // About 47 s a lap in a Lambo (top 20 m/s: nearer 75 s flat out), reports bunched 70 ms apart.
+  // Half as fast again as a Lambo goes flat out on the boost.
   const race = new RaceControl();
   let t = 1_000_000;
-  const dt = 47_000 / (L / 2.2);
+  const dt = (2.2 / (SPECS.lambo.top * BOOST.top * 1.5)) * 1000;
   for (let s = -30; s < 2.1 * L; s += 2.2) race.drove('x', pointAt(s).x, pointAt(s).z, (t += dt), lambo);
   assert.equal(practicer(race, 'x')!.laps, 0);
   assert.equal(race.state().practiceRecord, undefined);

@@ -5,7 +5,7 @@ import { PlayerController } from '../src/client/player.js';
 import { Driver } from '../src/client/driving.js';
 import { Fleet } from '../src/client/world/cars.js';
 import type { Collider, Interactable } from '../src/client/world/office.js';
-import { CAR, SEATS, carPoint, type CarPose } from '../src/shared/garage.js';
+import { CAR, SEATS, SPECS, carPoint, contact, type CarPose } from '../src/shared/garage.js';
 import { ROAD, STREET_Y } from '../src/shared/layout.js';
 
 const G = STREET_Y;
@@ -14,7 +14,7 @@ const ROAD_Z = (ROAD.minZ + ROAD.maxZ) / 2;
 const BLUE = 8;
 
 /** The street to stand and drive on, whatever else is there, and a driver in a car on it heading east. */
-function street(t: TestContext, solids: Collider[] = []) {
+function street(t: TestContext, solids: Collider[] = [], ground?: (x: number, z: number) => boolean) {
   const win = new EventTarget();
   for (const [name, value] of [['window', win], ['document', new EventTarget()]] as const) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -30,7 +30,7 @@ function street(t: TestContext, solids: Collider[] = []) {
   player.view = 'third';
   const sent: CarPose[] = [];
   const bumps: number[] = [];
-  const driver = new Driver(player, fleet, { moved: (_car, p) => sent.push({ ...p }), bump: (_at, speed) => bumps.push(speed) });
+  const driver = new Driver(player, fleet, { moved: (_car, p) => sent.push({ ...p }), bump: (_at, speed) => bumps.push(speed), ground: ground && (() => ground) });
   fleet.place(BLUE, { x: 0, z: ROAD_Z, rotY: Math.PI / 2, speed: 0, steer: 0 });
   const keys = (...codes: string[]) => {
     player.clearKeys();
@@ -157,4 +157,70 @@ test('a bicycle rides and gets out beside its saddle, with no passenger seat', (
   assert.equal(s.sent.at(-1)?.speed, 0);
   assert.equal(s.sent.at(-1)?.slip, 0);
   assert.ok(s.player.pos.z < s.fleet.cars[bicycle].pose.z - 0.8);
+});
+
+test('flat out into a parked car, yours never ends up inside it: it stops and bounces back off', (t) => {
+  const s = street(t);
+  const lime = 0;
+  s.fleet.place(lime, { x: 40, z: ROAD_Z, rotY: Math.PI / 2 + 0.3, speed: 0, steer: 0 });
+  s.fleet.place(BLUE, { x: 0, z: ROAD_Z, rotY: Math.PI / 2, speed: 60, steer: 0 });
+  s.driver.enter(BLUE, 'driver');
+  s.keys('KeyW');
+  const other = () => s.fleet.solids(BLUE).find((b) => b.rotY !== undefined && Math.abs((b.minX + b.maxX) / 2 - 40) < 0.01)!;
+  for (let f = 0; f < 120; f++) {
+    s.frames(1);
+    assert.equal(contact(s.car(), other()), null, `frame ${f}: inside it at x ${s.car().x.toFixed(2)}`);
+  }
+  assert.ok(s.car().x < 40, 'still this side of it');
+  assert.ok(s.bumps[0] > 30, `a big crunch (${s.bumps[0]?.toFixed(1)} m/s)`);
+});
+
+test('a car left on top of yours is pushed off it, not driven through', (t) => {
+  const s = street(t);
+  const lime = 0;
+  s.fleet.place(lime, { x: 3.5, z: ROAD_Z + 0.4, rotY: Math.PI / 2, speed: 0, steer: 0 });
+  s.driver.enter(BLUE, 'driver');
+  s.keys('KeyW');
+  const other = () => s.fleet.solids(BLUE).find((b) => b.rotY !== undefined && Math.abs((b.minX + b.maxX) / 2 - 3.5) < 0.01)!;
+  assert.ok(contact(s.car(), other()), 'overlapping to start with');
+  s.frames(1);
+  assert.equal(contact(s.car(), other()), null, 'out of it after one frame');
+  for (let f = 0; f < 60; f++) {
+    s.frames(1);
+    assert.equal(contact(s.car(), other()), null);
+  }
+});
+
+test('Shift boosts you past top speed until the meter runs dry, and it fills back drifting', (t) => {
+  const s = street(t);
+  s.fleet.place(BLUE, { x: -80, z: ROAD_Z, rotY: Math.PI / 2, speed: SPECS.lambo.top, steer: 0 });
+  s.driver.enter(BLUE, 'driver');
+  s.keys('KeyW', 'ShiftLeft');
+  s.frames(60);
+  assert.ok(s.driver.boosting && s.car().speed > SPECS.lambo.top + 3, `boosting at ${s.car().speed.toFixed(1)} m/s`);
+  assert.ok(Math.abs(s.driver.boost - (1 - 1 / 3.5)) < 0.02, `a second's worth gone (${s.driver.boost.toFixed(2)})`);
+  assert.ok(s.sent.at(-1) && s.fleet.cars[BLUE].boosting, 'flames out the back');
+  s.frames(180);
+  assert.ok(s.driver.boost < 0.02, 'run dry (and only trickling back)');
+  assert.equal(s.driver.boosting, false);
+  const dry = s.driver.boost;
+  s.fleet.place(BLUE, { ...s.car(), speed: 20, slip: 6 });
+  s.keys('KeyW');
+  s.frames(10);
+  assert.ok(s.driver.boost > dry + 0.01, `a slide fills it (${s.driver.boost.toFixed(3)})`);
+});
+
+test("grazing a circuit's edge at speed, the car slides along it: speed kept, no slide sideways", (t) => {
+  // A barrier along the north of a wide strip (the circuit's ground, whatever shape it is: only `where` is asked).
+  const barrier = ROAD_Z - 4;
+  const s = street(t, [], (_x, z) => z > barrier);
+  s.fleet.place(BLUE, { x: -100, z: barrier + 2, rotY: Math.PI / 2 + (5 * Math.PI) / 180, speed: 70, steer: 0 });
+  s.driver.enter(BLUE, 'driver');
+  s.keys('KeyW');
+  s.frames(30);
+  const car = s.car();
+  assert.ok(s.bumps.length >= 1, 'it touched');
+  assert.ok(car.speed > 60, `speed mostly kept (${car.speed.toFixed(1)} m/s)`);
+  assert.ok(Math.abs(car.slip ?? 0) < 6, `not sliding sideways (${car.slip?.toFixed(1)} m/s)`);
+  assert.ok(car.x > -70, `on along it (x ${car.x.toFixed(1)})`);
 });

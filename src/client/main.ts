@@ -463,13 +463,16 @@ const settings = loadSettings();
 const player = new PlayerController(camera, canvas, office.colliders);
 // Behind the wheel of one of the garage's cars (see "The cars in the garage" below). Up here, since placing you anywhere gets you out first.
 const driver = new Driver(player, office.cars, {
-  moved: (car, p) => {
-    net.send({ t: 'car.drive', car, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0 });
+  moved: (car, p, boost) => {
+    net.send({ t: 'car.drive', car, x: p.x, z: p.z, rotY: p.rotY, speed: p.speed, steer: p.steer, slip: p.slip ?? 0, ...(boost ? { boost } : {}) });
     coachMoved(p);
   },
-  bump: (at, speed) => {
+  bump: (at, speed, vehicle) => {
     sound.crash({ x: at.x, y: player.street + 0.5, z: at.z }, speed);
-    if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 15));
+    // The view jolts with how hard you hit (not at all with reduced motion).
+    if (!reduceMotion.matches) thud = Math.max(thud, Math.min(0.8, speed / 25));
+    // A car of the street's you've hit stops there.
+    if (vehicle && !upTop && !away()) office.life.hit(at, speed);
   },
   traffic: (x, z, reach) => (upTop || away() ? [] : office.life.obstacles(x, z, reach).map((o) => ({ ...o.box, vx: o.vx, vz: o.vz, mass: 1600 }))),
   // W1 island: driven into the sea.
@@ -1291,7 +1294,7 @@ function renderDriveHint(el: HTMLElement) {
     const other = name(c?.passenger);
     hint = {
       k: `drive|${kmh}|${other}`,
-      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), key('E', 'Get out')],
+      parts: [h('span.title', {}, `🏎️ ${carDefs()[i].name}`), aside(`${kmh} km/h${other ? ` · with ${clip(other, 20)}` : ''}`), key('W A S D', 'Drive'), key('Space', SPECS[carDefs()[i].kind].width < 1 ? 'Brake' : 'Handbrake'), ...(carDefs()[i].kind === 'bicycle' ? [] : [key('Shift', 'Boost')]), key('Z', 'Camera'), key('H', 'Honk'), ...(raceKey() ? [key('R', raceKey()!)] : []), key('E', 'Get out')],
     };
     hint.k += `|${raceKey() ?? ''}`;
   } else {
@@ -4466,7 +4469,16 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyE') thrower.stop();
     return;
   }
-  // In a car, E gets you out and H honks (W A S D and Space drive, see Driver); nothing else is in reach.
+  // Z: first person or third (a chase camera, in a car), kept in your settings. The arena keeps you in first; the tee and the oche have their own.
+  if (e.code === 'KeyZ' && !atArena && !golf.active && !thrower.active) {
+    if (!e.repeat) {
+      settings.view = player.view === 'first' ? 'third' : 'first';
+      driver.setView(settings.view);
+      saveSettings(settings);
+    }
+    return;
+  }
+  // In a car, E gets you out and H honks (W A S D and Space drive, Shift boosts, X looks back, see Driver); nothing else is in reach.
   if (driver.active && (e.code === 'KeyE' || e.code === 'KeyH' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
     if (e.repeat) return;
     if (e.code === 'KeyE') getOut();
@@ -5133,7 +5145,14 @@ function frame(ts?: number) {
   player.city = inOffice() && !upTop && !away(); // W3: the city's solids are for the office's street world only
   if (inOffice() && !upTop && !away()) {
     const pose = driver.driving ? driver.pose : null;
-    const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed }] : undefined;
+    // Your car as big as it is and the way it's turned; and the garage's other cars about (parked, or someone's driving them).
+    const kindOf = (i: number) => SPECS[carDefs()[i].kind];
+    const avoid = pose ? [{ x: pose.x, z: pose.z, vx: Math.sin(pose.rotY) * pose.speed, vz: Math.cos(pose.rotY) * pose.speed, yaw: pose.rotY, len: kindOf(driver.car!).length, wid: kindOf(driver.car!).width }] : [{ x: player.pos.x, z: player.pos.z, vx: 0, vz: 0 }];
+    for (const v of office.cars.cars) {
+      const p = v.pose;
+      if ((driver.driving && v.index === driver.car) || Math.abs(p.x - player.pos.x) > 60 || Math.abs(p.z - player.pos.z) > 60) continue;
+      avoid.push({ x: p.x, z: p.z, vx: Math.sin(p.rotY) * p.speed, vz: Math.cos(p.rotY) * p.speed, yaw: p.rotY, len: kindOf(v.index).length, wid: kindOf(v.index).width });
+    }
     const dark = Math.min(1, (office.night.windows[0]?.emissiveIntensity ?? 0) / 1.1);
     dressingFocus.x = pose ? pose.x : player.pos.x; dressingFocus.z = pose ? pose.z : player.pos.z; dressingFocus.on = true; // the birds fly off from you
     office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid, sky.clockHour()); // W3: people and traffic keep the office's hours
@@ -5210,7 +5229,8 @@ function frame(ts?: number) {
   // Down a pole: the view widens and the edges streak past.
   const rush = reduceMotion.matches ? 0 : climber.rush;
   // At the oche or the line, the view narrows onto the target.
-  const fov = arenaPlay.fov(thrower.fov) + rush * 16;
+  // Driving, it widens with your speed and more on the boost.
+  const fov = arenaPlay.fov(thrower.fov) + rush * 16 + (reduceMotion.matches ? 0 : driver.fov);
   if (Math.abs(camera.fov - fov) > 0.05) {
     camera.fov += (fov - camera.fov) * Math.min(1, dt * 8);
     camera.updateProjectionMatrix();
@@ -5300,7 +5320,7 @@ function frame(ts?: number) {
       const mine = driver.car === i && driver.driving;
       if (!c.driver && !mine) continue;
       const pose = fleet().cars[i]?.pose ?? c;
-      engines.push({ car: i, at: { x: pose.x, y: streetY() + 0.5, z: pose.z }, speed: pose.speed, gas: mine ? driver.gas : Math.min(1, Math.abs(pose.speed) / 10), kind: carDefs()[i]?.kind });
+      engines.push({ car: i, at: { x: pose.x, y: streetY() + 0.5, z: pose.z }, speed: pose.speed, gas: mine ? driver.gas : Math.min(1, Math.abs(pose.speed) / 10), kind: carDefs()[i]?.kind, boost: fleet().cars[i]?.boosting });
     }
   }
   sound.setEngines(engines);

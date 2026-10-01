@@ -1268,7 +1268,7 @@ export type ClientMsg =
   /** Get out of the car you're in; driving, it stays parked where you left it. */
   | { t: 'car.leave' }
   /** Where the car you're driving has got to, and how it's going; everyone else on the floor sees it there. */
-  | { t: 'car.drive'; car: number; x: number; z: number; rotY: number; speed: number; steer: number; slip?: number }
+  | { t: 'car.drive'; car: number; x: number; z: number; rotY: number; speed: number; steer: number; slip?: number; boost?: boolean }
   /** Honk the horn of the car you're in. */
   | { t: 'car.honk' }
   /** At the race circuit, behind the wheel of one of its cars: line up on the grid (see shared/race.ts). */
@@ -1384,7 +1384,7 @@ export type ServerMsg =
   /** Someone got into one of your floor's cars, or out of one; `answer` to each car.enter and car.leave of yours, whether you got in or not. */
   | { t: 'cars'; cars: CarState[]; answer?: boolean }
   /** A car on your floor is being driven (see car.drive). */
-  | { t: 'car.move'; car: number; x: number; z: number; rotY: number; speed: number; steer: number; slip?: number }
+  | { t: 'car.move'; car: number; x: number; z: number; rotY: number; speed: number; steer: number; slip?: number; boost?: boolean }
   /** Someone in a car on your floor honked its horn. */
   | { t: 'car.honk'; car: number }
   /** The race at the circuit, whenever it changes (and as you come in): to everyone, wherever they are. */

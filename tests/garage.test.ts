@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CAR, CARS, SPECS, DRIVE, PAVEMENT, carFits, carPoint, drive, onPavement, overlaps, parked, paved, steerLimit, type CarPose, type Pedals } from '../src/shared/garage.js';
+import { BOOST, CAR, CARS, SPECS, DRIVE, PAVEMENT, carFits, carPoint, drive, onPavement, overlaps, parked, paved, steerLimit, type CarPose, type Pedals } from '../src/shared/garage.js';
 import { ELEVATOR, ELEVATOR_FRONT, FLOOR, ROAD } from '../src/shared/layout.js';
 import { Garage } from '../src/server/garage.js';
 
@@ -45,7 +45,7 @@ test('a car on the gas gets up to top speed and no faster, and rolls to a dead s
 
 test('the handbrake stops it, and S brakes before it reverses', () => {
   const fast = { ...still(), speed: DRIVE.top };
-  assert.equal(run(fast, { ...GAS, brake: true }, 2.1).speed, 0, 'the handbrake beats the gas');
+  assert.equal(run(fast, { ...GAS, brake: true }, DRIVE.top / (DRIVE.brake / 2) + 0.1).speed, 0, 'the handbrake beats the gas');
   const back = { gas: -1, turn: 0, brake: false };
   const braking = run(fast, back, 0.5);
   assert.ok(braking.speed > 0 && braking.speed < fast.speed, 'still going forward, slower');
@@ -69,7 +69,8 @@ test('it turns tighter slowly than flat out, so it never spins at speed', () => 
   // The wheel takes a moment to turn all the way, and then holds there.
   const p = run({ ...still(), speed: 10 }, { gas: 0, turn: 1, brake: false }, 0.05);
   assert.ok(p.steer > 0 && p.steer < steerLimit(10));
-  assert.ok(Math.abs(run(p, { gas: 1, turn: 1, brake: false }, 1).steer - steerLimit(DRIVE.top)) < 0.05);
+  const on = run(p, { gas: 1, turn: 1, brake: false }, 1);
+  assert.ok(Math.abs(on.steer - steerLimit(on.speed)) < 0.05);
 });
 
 test('you can drive out of the garage, across the lot, down the street and off-road, but not out to sea', () => {
@@ -124,7 +125,7 @@ test('the garage: one driver and one passenger a car, and only the driver moves 
   g.drive('ann', 1, { ...pose, x: -22 });
   g.drive('ann', 1, pose);
   assert.ok(!g.drive('ann', 1, { ...pose, speed: Number.NaN }), 'nor any nonsense');
-  assert.equal(g.drive('ann', 1, { ...pose, speed: 999 })?.speed, DRIVE.top, 'no faster than a car goes');
+  assert.equal(g.drive('ann', 1, { ...pose, speed: 999 })?.speed, DRIVE.top * BOOST.top, 'no faster than a car goes (on the boost)');
   assert.ok(!g.enter('ann', 1, 'bogus' as never));
   // Ann gets out: it stops where she left it, with Bob still in it.
   assert.ok(g.leave('ann'));

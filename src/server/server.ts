@@ -1699,7 +1699,7 @@ export async function startServer(cfg: Config) {
         // Counting down on the grid, a car stays on its slot (no creeping, no starting from anywhere else).
         if (garage === circuitCars && race.offGrid(c.id, num(msg.x), num(msg.z))) break;
         const now = garage?.drive(c.id, car, { x: num(msg.x), z: num(msg.z), rotY: num(msg.rotY), speed: num(msg.speed), steer: num(msg.steer), slip: msg.slip === undefined ? 0 : num(msg.slip) });
-        if (now) toNeighbors(c, { t: 'car.move', car, ...now }, true);
+        if (now) toNeighbors(c, { t: 'car.move', car, ...now, ...(msg.boost === true ? { boost: true } : {}) }, true);
         if (now && garage === circuitCars && race.drove(c.id, now.x, now.z, Date.now(), { name: c.peer.name, car, ...(c.accountId ? { account: c.accountId } : {}) })) raceChanged();
         break;
       }
