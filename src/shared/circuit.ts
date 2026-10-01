@@ -1,5 +1,5 @@
 import type { Area } from './city.js';
-import type { CarDef } from './garage.js';
+import type { CarDef, CarPose, Course } from './garage.js';
 
 // The race circuit: a place of its own, like the rooftop bar, reached through the gate on the plaza
 // in the city (CITY_GATE). Everything here is plain numbers, no three.js: the track's shape, where a
@@ -253,6 +253,24 @@ export const RESET_PAST = 3;
 
 /** As fast as a car goes on the circuit's grass (m/s): slower than round any of its corners. */
 export const GRASS_TOP = 12;
+
+/** Off the track, the grass (slippery already: shared/garage.ts GROUND, and no boost there) bogs a car down to a crawl, slower than any corner. */
+export function onGrass(p: CarPose, dt: number): CarPose {
+  if (surfaceAt(p.x, p.z) !== 'grass') return p;
+  const drag = Math.exp(-dt * 0.8);
+  const speed = Math.abs(p.speed) > GRASS_TOP ? p.speed - Math.sign(p.speed) * Math.min(Math.abs(p.speed) - GRASS_TOP, 16 * dt) : p.speed;
+  return { ...p, speed, slip: (p.slip ?? 0) * drag };
+}
+
+/**
+ * How a car drives here (shared/garage.ts advance): the tyre walls round the grass are a barrier, and
+ * the grass is slippery and slow. A person's page and the office's bots both drive on this.
+ */
+export const CIRCUIT_COURSE: Omit<Course, 'solids' | 'bumped'> = {
+  ground: circuitGround,
+  surfaceAt: (x, z) => (surfaceAt(x, z) === 'grass' ? 'grass' : 'road'),
+  surface: onGrass,
+};
 
 /**
  * How far round the lap (x, z) is past the line of checkpoint `last` (m; - is short of it, and so

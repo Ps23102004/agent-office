@@ -30,7 +30,7 @@ function street(t: TestContext, solids: Collider[] = [], ground?: (x: number, z:
   player.view = 'third';
   const sent: CarPose[] = [];
   const bumps: number[] = [];
-  const driver = new Driver(player, fleet, { moved: (_car, p) => sent.push({ ...p }), bump: (_at, speed) => bumps.push(speed), ground: ground && (() => ground) });
+  const driver = new Driver(player, fleet, { moved: (_car, p) => sent.push({ ...p }), bump: (_at, speed) => bumps.push(speed), course: ground && (() => ({ ground })) });
   fleet.place(BLUE, { x: 0, z: ROAD_Z, rotY: Math.PI / 2, speed: 0, steer: 0 });
   const keys = (...codes: string[]) => {
     player.clearKeys();

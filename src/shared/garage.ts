@@ -454,3 +454,153 @@ export function carFits(p: { x: number; z: number; rotY: number }, solids: Itera
   for (const b of solids) if (overlaps(p, b, kind)) return false;
   return true;
 }
+
+/** What a car drives through: what's in the way, and the ground under it. */
+export interface Course {
+  /** What it bumps into: walls, lamps, trees, and the other cars with their mass and motion. */
+  solids: Box[];
+  /** Where a car can be, if the place has an edge (the race circuit's tyre walls): over it is a barrier. */
+  ground?: (x: number, z: number) => boolean;
+  /** What's under the tires at (x, z): the city's surface, unless said. */
+  surfaceAt?: (x: number, z: number) => Surface;
+  /** What the ground does to the car after a step of `dt` (the circuit's grass bogs it down): the car as it is then. */
+  surface?: (p: CarPose, dt: number) => CarPose;
+  /** It ran into something at `at`, going into it at `speed` m/s (`vehicle`: another car). */
+  bumped?: (at: { x: number; z: number }, speed: number, vehicle: boolean) => void;
+}
+
+/** The longest step a car takes in one go (m), so it never jumps a lamp post between two frames. */
+const REACH_STEP = 0.25;
+
+/**
+ * The car `dt` on from `from` through `course`: in short steps, bouncing off whatever's in the way.
+ * It's pushed back out of anything it's got into (the way out that's shortest), and the hit takes the
+ * motion into it: off-centre, it spins the car round; into another car, its mass counts. A step that
+ * would leave it further into something than it was doesn't happen. Where the ground has an edge, the
+ * edge is a barrier too. The driver's page runs this for its own car, and the office for a bot's.
+ */
+export function advance(from: CarPose, pedals: Pedals, dt: number, kind: CarKind, course: Course): CarPose {
+  const { solids, ground } = course;
+  const under = course.surfaceAt ?? surfaceAt;
+  // Spinning, its ends swing round further than its middle goes.
+  const reach = Math.hypot(SPECS[kind].length, SPECS[kind].width) / 2;
+  const n = Math.max(1, Math.ceil(((Math.hypot(from.speed, from.slip ?? 0) + Math.abs(from.yaw ?? 0) * reach) * dt) / REACH_STEP));
+  const h = dt / n;
+  const on = (q: CarPose) => !ground || onPavement(q, kind, ground);
+  let pose = from;
+  for (let i = 0; i < n; i++) {
+    const driven = drive(pose, pedals, h, kind, under(pose.x, pose.z));
+    let next = course.surface ? course.surface(driven, h) : driven;
+    // Over the edge (from on it: one that's off can drive back on): back where it was, off the barrier.
+    if (!on(next) && on(pose)) {
+      const c = edge(next, kind, ground!);
+      next = collide({ ...next, x: pose.x, z: pose.z, rotY: pose.rotY }, kind, c);
+      course.bumped?.(c, closing(driven, c), false);
+      pose = next;
+      continue;
+    }
+    const out = unstick(next, kind, solids, course.bumped);
+    next = out.p;
+    // Wedged in deeper than before (two things at once, or the edge): it stays where it was, as the hits left it going.
+    if (!on(next) || (!out.clear && depth(next, kind, solids) > depth(pose, kind, solids) + 1e-6)) next = { ...next, x: pose.x, z: pose.z, rotY: pose.rotY };
+    pose = next;
+  }
+  return pose;
+}
+
+/** The car at `p` pushed out of `solids`, deepest first, bouncing off each it was going into; `clear` if it's out of them all. */
+function unstick(p: CarPose, kind: CarKind, solids: Box[], bumped: Course['bumped']): { p: CarPose; clear: boolean } {
+  for (let k = 0; k < 5; k++) {
+    let hit: { c: Contact; b: Box } | null = null;
+    for (const b of solids) {
+      const c = contact(p, b, kind);
+      if (c && (!hit || c.depth > hit.c.depth)) hit = { c, b };
+    }
+    if (!hit) return { p, clear: true };
+    // Out of goes (four pushes): still in something.
+    if (k === 4) break;
+    const { c, b } = hit;
+    bumped?.(c, closing(p, c, b), !!b.mass);
+    p = collide(p, kind, c, b);
+    p = { ...p, x: p.x + c.nx * (c.depth + 1e-4), z: p.z + c.nz * (c.depth + 1e-4) };
+  }
+  return { p, clear: false };
+}
+
+/** How far into `solids` the car at `p` is, all told (m); 0 clear of them all. */
+function depth(p: CarPose, kind: CarKind, solids: Box[]): number {
+  let d = 0;
+  for (const b of solids) d += contact(p, b, kind)?.depth ?? 0;
+  return d;
+}
+
+/** How fast the car at `p` is going into what's at `c` (m/s; less what that's doing itself). */
+function closing(p: CarPose, c: Contact, other: Pick<Box, 'vx' | 'vz'> = {}): number {
+  const s = Math.sin(p.rotY), co = Math.cos(p.rotY);
+  const vx = s * p.speed + co * (p.slip ?? 0) - (other.vx ?? 0);
+  const vz = co * p.speed - s * (p.slip ?? 0) - (other.vz ?? 0);
+  return Math.max(0, -(vx * c.nx + vz * c.nz));
+}
+
+/** Directions round a point, to feel for which way the edge of `where` runs. */
+const RING = Array.from({ length: 24 }, (_, i) => [Math.cos((i / 24) * Math.PI * 2), Math.sin((i / 24) * Math.PI * 2)]);
+
+/**
+ * Where the car at `p` has gone over the edge of `where`, and which way is back in, square to the
+ * barrier itself: felt for round the point that's over (the ones inside, on a ring about it, lie
+ * in toward the track), so a graze along it slides on rather than stopping dead.
+ */
+function edge(p: CarPose, kind: CarKind, where: (x: number, z: number) => boolean): Contact {
+  const w = SPECS[kind].width / 2, l = SPECS[kind].length / 2;
+  const off = [[w, l], [-w, l], [w, -l], [-w, -l], [w, 0], [-w, 0], [0, l], [0, -l]].map(([lx, lz]) => carPoint(p, lx, lz)).filter((q) => !where(q.x, q.z));
+  const at = off.reduce((m, q) => ({ x: m.x + q.x / off.length, z: m.z + q.z / off.length }), { x: 0, z: 0 });
+  let nx = 0, nz = 0;
+  for (const r of [0.6, 1.5]) for (const [cx, cz] of RING) if (where(at.x + cx * r, at.z + cz * r)) { nx += cx; nz += cz; }
+  let d = Math.hypot(nx, nz);
+  // Nothing inside round it (or all of it): back toward the car's middle.
+  if (d < 1e-6) { nx = p.x - at.x; nz = p.z - at.z; d = Math.hypot(nx, nz) || 1; }
+  return { nx: nx / d, nz: nz / d, depth: 0, x: at.x, z: at.z };
+}
+
+/**
+ * The boost meter (0 empty to 1 full): a full tank lasts `burn` seconds on Shift. It fills back slowly
+ * by itself (`trickle` a second), faster drifting (by slip × speed), slipping close past another moving
+ * car much faster or slower than it (`nearMiss` of a tank, now and then), and tucked in behind one (`draft`).
+ */
+export const TANK = { burn: 3.5, trickle: 0.02, drift: 0.002, nearMiss: 0.12, draft: 0.2 } as const;
+/** A near miss fills the tank once (by TANK.nearMiss), then not again for this long (seconds). */
+export const NEAR_MISS_EVERY = 1.5;
+
+/**
+ * How fast the boost meter fills (of a tank a second) for the car at `p` among `solids`: a trickle,
+ * more sliding sideways at speed and tucked in behind another car; and whether it's slipping close
+ * past one (`nearMiss`: worth TANK.nearMiss once in a while, which the caller times).
+ */
+export function tankFill(p: CarPose, kind: CarKind, solids: Box[]): { rate: number; nearMiss: boolean } {
+  const spec = SPECS[kind];
+  const v = Math.abs(p.speed);
+  let rate = TANK.trickle;
+  let near = false;
+  if (v > 6 && Math.abs(p.slip ?? 0) > 1) rate += TANK.drift * Math.abs(p.slip ?? 0) * v;
+  if (v > 15) {
+    const s = Math.sin(p.rotY), c = Math.cos(p.rotY);
+    let draft = false;
+    for (const b of solids) {
+      // Only what's moving: a parked car, or one stopped at the lights, is no near miss.
+      const ox = b.vx ?? 0, oz = b.vz ?? 0;
+      if (!b.mass || Math.hypot(ox, oz) < 2) continue;
+      const dx = (b.minX + b.maxX) / 2 - p.x, dz = (b.minZ + b.maxZ) / 2 - p.z;
+      // Where it is from you: across (+ left) and ahead.
+      const across = Math.abs(dx * c - dz * s), ahead = dx * s + dz * c;
+      const half = b.hx ?? (b.maxX - b.minX) / 2;
+      const gap = across - spec.width / 2 - half;
+      // Past it, not keeping it company.
+      const passing = Math.hypot(s * p.speed - ox, c * p.speed - oz) > 5;
+      if (passing && gap > 0 && gap < 1.5 && Math.abs(ahead) < spec.length) near = true;
+      const going = ox * s + oz * c;
+      if (across < 1.5 && ahead > spec.length / 2 + 1 && ahead < 18 && going > 10) draft = true;
+    }
+    if (draft) rate += TANK.draft;
+  }
+  return { rate, nearMiss: near };
+}
