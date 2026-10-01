@@ -1151,6 +1151,7 @@ export async function startServer(cfg: Config) {
     sendTo(client, { t: 'race', state: race.state() });
     if (inArena) {
       arena.join(id, name, Date.now());
+      spawnIn(client);
       arenaChanged();
     }
     screensOf(client, floor);
@@ -1291,6 +1292,13 @@ export async function startServer(cfg: Config) {
     floorsChanged();
   };
 
+  /** Into the arena at the spawn furthest from anyone, not on top of whoever came in by the gate before. */
+  const spawnIn = (c: Client) => {
+    const s = arena.spawnFor(c.id);
+    Object.assign(c.peer, { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
+    sendTo(c, { t: 'arena.spawn', ...s });
+  };
+
   /** Through the arena's gate in the city: in by its gate home, and into the match. */
   const goToArena = (c: Client) => {
     if (c.peer.floor === ARENA) return;
@@ -1298,6 +1306,7 @@ export async function startServer(cfg: Config) {
     c.peer.floor = ARENA;
     sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...arenaView() });
     arena.join(c.id, c.peer.name, Date.now());
+    spawnIn(c);
     sendTo(c, { t: 'arena', state: arena.state() });
     arenaChanged();
     arrived(c, left);
