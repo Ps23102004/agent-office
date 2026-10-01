@@ -113,6 +113,8 @@ import { issueMeeting, openMeeting, type MeetingPreset } from './ui/meeting';
 import { TelescopeView } from './telescope';
 import { onModelsProgress, preloadModels } from './world/models';
 import { loadingScreen } from './ui/loading';
+import { TitleScreen, skipTitle, titleLook } from './ui/title';
+import './ui/title.css';
 import { SlowFrames } from './framerate';
 import { offerLite, touchOnly } from './ui/litesuggest';
 import { decorTicker, pixelRatioFor, quality, setGraphics, tooSoon } from './quality';
@@ -120,6 +122,23 @@ import { openDeskLabel, openExpand } from './ui/floorplan';
 
 // The loading screen stays up until there's an office to see (see boot and whoami at the end).
 const loading = loadingScreen(onModelsProgress);
+/**
+ * The title screen, once per page load, under the loading screen until that comes down; it has the
+ * camera until you choose Play and it's flown back to you (see the frame loop). `entered` settles then,
+ * or at once without it.
+ */
+let enter = () => {};
+const entered = new Promise<void>((resolve) => (enter = resolve));
+const title = skipTitle(location.search, sessionStorageOrNull())
+  ? (enter(), null)
+  : new TitleScreen({ settings: () => showSettings(), entered: () => enter(), fade: (on) => fade(on) }, titleLook(undefined), $('app'));
+function sessionStorageOrNull(): Storage | null {
+  try {
+    return sessionStorage;
+  } catch {
+    return null;
+  }
+}
 // Came here from the 2D view's 🏢 3D button: it isn't offered straight back.
 const chose3d = new URLSearchParams(location.search).has('3d');
 if (chose3d) history.replaceState(null, '', location.pathname);
@@ -2604,6 +2623,7 @@ function dressUp() {
   world.herald?.person.setCostume(theme);
 }
 store.on('theme', dressUp);
+store.on('theme', () => title?.setLook(titleLook(store.theme.active)));
 store.on('usage', renderUsage);
 store.on('limits', renderLimits);
 // The reset countdowns tick down between reads.
@@ -3109,7 +3129,7 @@ function paletteEntries(): PaletteEntry[] {
 window.addEventListener('keydown', (e) => {
   if (!isPaletteKey(e, IS_MAC)) return;
   const inPalette = paletteOpen() && !!(e.target as HTMLElement | null)?.closest?.('.modal.palette');
-  if (!inPalette && (isTyping(e) || telescope.active)) return;
+  if (!inPalette && (isTyping(e) || telescope.active || title?.active)) return;
   e.preventDefault();
   if (!e.repeat) togglePalette(paletteEntries);
 });
@@ -4416,6 +4436,8 @@ function use(it: Interactable | null, key: DeskKey, note = aimedNote): boolean {
 
 // ---- Input ----------------------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
+  // The title has the keys, and none for the office until the camera's back with you after Play.
+  if (title?.active) return;
   if (telescope.active) {
     if (e.code === 'Escape' || e.code === 'KeyE' || e.code === 'KeyF') telescope.exit();
     e.preventDefault();
@@ -4620,7 +4642,8 @@ onModalChange((open) => {
 
 /** Once the last window is closed, the game has the keyboard again and, in first person, the mouse. */
 function backToGame() {
-  if (modalOpen()) return;
+  // The title has the keys and the mouse until you choose Play.
+  if (modalOpen() || title?.active) return;
   if (!isTyping()) canvas.focus({ preventScroll: true });
   if (!player.canLock || player.hasMouse) return;
   // The browser lets a page re-capture the mouse it let go of itself (see yieldMouse), even on Esc
@@ -5116,7 +5139,10 @@ function frame(ts?: number) {
     office.life.update(Date.now() / 1000, dt, dark, { x: player.pos.x, z: player.pos.z }, avoid, sky.clockHour()); // W3: people and traffic keep the office's hours
     if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[carDefs()[driver.car!].kind].length) / 2), Math.abs(pose.speed));
   }
+  if (title?.active) player.enabled = false;
   player.update(dt);
+  // Where the player's camera goes, all at once: the title blends to it, not to a step toward it from the flight.
+  if (title?.active) player.updateCamera(true);
   // A car coming at you where you stand: out of its way, with a thump if it was going.
   if ((inOffice() || atCircuit) && !driver.active && !upTop && !trip) {
     const hit = fleet().shove(player.pos, null);
@@ -5144,12 +5170,14 @@ function frame(ts?: number) {
   }
   // W1 island: down on the street the camera sees out past the haze to the sea's horizon (world/ocean.ts fades the sea out before it).
   if (!upTop && !away()) {
-    const far = inOffice() && Math.abs(player.pos.y - player.street) < 3 ? SHORE_FAR : FAR;
+    const far = title?.active || (inOffice() && Math.abs(player.pos.y - player.street) < 3) ? SHORE_FAR : FAR;
     if (camera.far !== far) {
       camera.far = far;
       camera.updateProjectionMatrix();
     }
   }
+  // The title's flight round the island, or its way back to you after Play.
+  title?.pose(camera, dt, player.street);
   // Walked into a pole's hole: you grab the pole on your way down it.
   const hole = inOffice() && office.stack.polesGoDown() ? office.stack.poles().find((s) => Math.hypot(player.pos.x - s.x, player.pos.z - s.z) < POLE.hole - 0.15) : undefined;
   if (hole && !climber.active && !trip && !player.seat && player.enabled && player.pos.y > -1.35 && player.pos.y < 0.6) climber.slide(hole);
@@ -5372,7 +5400,7 @@ function frame(ts?: number) {
   effect.render(scene, camera);
   pointToWaiting(now);
   // Not while the camera's up at the boss's monitor or the arcade, where they'd cover the screen.
-  if (firstPerson && !telescope.active && !arcade.zoomed && !cabinet.zoomed && !golf.active && !thrower.active && !driver.active) {
+  if (firstPerson && !title?.active && !telescope.active && !arcade.zoomed && !cabinet.zoomed && !golf.active && !thrower.active && !driver.active) {
     // Hands go on top of everything, so they never clip into a desk you walk up to. They have
     // lights of their own, turned down to match wherever you're standing.
     renderer.clearDepth();
@@ -5474,6 +5502,12 @@ async function whoami() {
   }
 }
 
+// Play on the title, and the camera's back with you: the keys are yours again.
+void entered.then(() => {
+  player.enabled = !modalOpen();
+  if (!modalOpen()) canvas.focus({ preventScroll: true });
+});
+
 void whoami().then(() => {
   const saved = loadProfile();
   if (saved && store.me.account) saved.name = store.me.account.name;
@@ -5497,12 +5531,14 @@ void whoami().then(() => {
   } else {
     // Pick a character first (people from before there was a choice keep their name and color).
     if (saved) Object.assign(store.profile, { name: saved.name, color: saved.color });
-    // Render the office behind the character select screen.
+    // Render the office behind the character select screen (and the title before it).
     requestAnimationFrame(frame);
-    openCharacter(true, (p) => {
-      showMyProfile(p);
-      net.connect();
-    });
+    void entered.then(() =>
+      openCharacter(true, (p) => {
+        showMyProfile(p);
+        net.connect();
+      }),
+    );
     // No floor comes before you pick, so only the office behind the character select is waited for.
     loading.until([]);
   }

@@ -3,6 +3,7 @@ import type { Net } from '../net';
 import { isAsleep } from '../../shared/status';
 import { store } from '../state';
 import { closeAllModals, h, openModal, timeAgo, type Modal } from './dom';
+import { reloadPastTitle } from './title';
 
 const version = (v: VersionInfo) => h('span.version', {}, h('code', {}, v.sha), ' ', v.subject, h('small', {}, ` · ${timeAgo(v.date)}`));
 
@@ -114,7 +115,7 @@ export function showRestarting(u: UpgradeState, net: Net) {
   slowTimer = setTimeout(
     () =>
       restartBody?.append(
-        h('p.note', {}, 'This is taking longer than usual. ', h('button.btn', { type: 'button', onclick: () => location.reload() }, 'Try reloading')),
+        h('p.note', {}, 'This is taking longer than usual. ', h('button.btn', { type: 'button', onclick: reloadPastTitle }, 'Try reloading')),
       ),
     3 * 60_000,
   );
@@ -130,5 +131,5 @@ export function showUpgraded(u: UpgradeState) {
     v ? h('p', {}, 'Now running ', h('code', {}, v.sha), `: “${v.subject}”`) : h('p', {}, 'A new version is running.'),
     h('p.upgrade-status.ok', {}, h('span.spinner'), 'Loading the new version…'),
   );
-  setTimeout(() => location.reload(), 2500);
+  setTimeout(reloadPastTitle, 2500);
 }
