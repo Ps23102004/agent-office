@@ -3,6 +3,7 @@ import { CARS, SPECS } from '../shared/garage';
 import { MEET_SPOTS, isMeetSpot, type MeetPin, type MeetSpotId } from '../shared/meet';
 import type { ClientMsg, PeerInfo } from '../shared/protocol';
 import { store } from './state';
+import { toast } from './ui/dom';
 
 // Doing things together, for the Hang out window, the chat and the palette to call: posting a meeting
 // spot to the chat and going to one (shared/meet.ts), and offering a friend the seat beside you or
@@ -72,7 +73,11 @@ export function answerRide(accept: boolean) {
   const o = rideOffer();
   store.rideOffer = null;
   store.emit('ride');
-  if (!o || !wiring) return;
+  if (!o) {
+    toast('This ride offer has expired or is no longer available', 'warn');
+    return;
+  }
+  if (!wiring) return;
   // Can't get in after all (hands full, say): that's a no, so the driver isn't left waiting.
   wiring.send({ t: 'car.invite.answer', from: o.from, accept: accept && wiring.readyToRide() });
 }

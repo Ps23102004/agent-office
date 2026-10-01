@@ -1318,10 +1318,11 @@ a.when:hover { text-decoration: underline; }
 .race-table tbody th { max-width: 200px; overflow-wrap: anywhere; }
 .race-table small { display: block; font-weight: 600; margin-top: 2px; }
 .race-table .race-you { background: var(--paper-2); }
-.race-hud { position: absolute; top: var(--race-hud-top, 84px); left: 12px; width: 272px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 220px); overflow: auto; padding: 10px; font-size: 12px; }
+.race-hud { position: absolute; top: var(--race-hud-top, 84px); left: 12px; width: 272px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 220px); display: flex; flex-direction: column; padding: 10px; font-size: 12px; }
 #hud > .race-hud { pointer-events: none; }
+.race-hud-details { min-height: 0; overflow: auto; pointer-events: auto; }
 .race-hud button { pointer-events: auto; min-height: 44px; font-size: 13px; }
-.race-hud-head { display: flex; align-items: center; gap: 8px; }
+.race-hud-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }
 .race-hud-head > span { font-weight: 800; }
 .race-metrics { margin: 12px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; font-variant-numeric: tabular-nums; }
 .race-metrics > div:last-child { grid-column: 1 / -1; }
@@ -1369,4 +1370,13 @@ a.when:hover { text-decoration: underline; }
   .hangout-people .btn { margin-left: auto; }
   .race-table th, .race-table td { padding: 8px 4px; }
   .race-table { font-size: 12px; }
+}
+@media (max-width: 520px) {
+  /* Leave the right-hand 250px side panel its own lane, including on a 375px phone. */
+  .race-hud { width: min(144px, calc(100vw - 286px)); padding: 4px; }
+  .race-hud-details, .race-hud-head > span { display: none; }
+  .race-hud button { width: 100%; min-width: 0; padding: 4px; white-space: normal; }
+  .speed-gauge { left: 12px; right: auto; width: min(144px, calc(100vw - 286px)); padding: 6px; }
+  .speed-reading { gap: 3px; }
+  .speed-reading > strong { font-size: 22px; }
 }

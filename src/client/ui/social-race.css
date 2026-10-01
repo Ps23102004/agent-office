@@ -10,7 +10,6 @@
 .race-coach { font-weight: 800; margin: 10px 0 6px; }
 .race-sectors { list-style: none; padding: 0; margin: 8px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .race-sectors li { padding: 4px 0; }
-#hud > .race-hud { pointer-events: auto; }
 .race-hud .race-sectors { font-size: 11px; }
 .race-hud .race-coach, .race-hud .race-split { font-size: 12px; }
 .race-split { font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

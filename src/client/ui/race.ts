@@ -1,6 +1,7 @@
 import { RACE, SECTORS, type Timing } from '../../shared/race';
 import { store } from '../state';
-import { h, modalOpen, openModal, type Modal } from './dom';
+import { isTyping } from '../player';
+import { h, modalOpen, openModal, toast, type Modal } from './dom';
 import { focusDialog } from './dialog-focus';
 import type { CircuitMap, RaceAdapter } from './race-adapter';
 import { checkpointHint, countdownLights, mapProjection, raceGap, raceOrder, raceTime, sectorDelta, sectorReadings, speedReading } from './race-view';
@@ -59,7 +60,7 @@ export class RaceUI {
   private readonly marks = new Map<string, SVGCircleElement>();
   private readonly mapNote = h('span.race-map-note', {}, 'Map unavailable');
   private readonly map = h('figure.race-map', {}, this.svg, h('figcaption', {}, 'Circuit · ', this.mapNote));
-  private readonly hud = h('section.panel.race-hud.hidden', { 'aria-label': 'Race and practice' }, h('div.race-hud-head', {}, this.open, this.status), this.live, this.practice, this.timing, this.map);
+  private readonly hud = h('section.panel.race-hud.hidden', { 'aria-label': 'Race and practice' }, h('div.race-hud-head', {}, this.open, this.status), h('div.race-hud-details', {}, this.live, this.practice, this.timing, this.map));
   private readonly lights = Array.from({ length: RACE.countdown }, () => h('i'));
   private readonly lightText = h('strong', { role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' });
   private readonly countdown = h('div.race-countdown.hidden', { 'aria-label': 'Start lights' }, h('div.race-lights', { 'aria-hidden': 'true' }, ...this.lights), this.lightText);
@@ -76,6 +77,8 @@ export class RaceUI {
   private previousPhase = '';
   private goUntil = 0;
   private measuredAt = -Infinity;
+  private mapOutline?: CircuitMap['outline'];
+  private project: ReturnType<typeof mapProjection> = null;
 
   constructor(private readonly root: HTMLElement, private readonly source: RaceAdapter) {
     this.svg.setAttribute('viewBox', '0 0 160 160');
@@ -158,53 +161,60 @@ export class RaceUI {
   update(frameMs: number, driving: DrivingGauge | null = null) {
     if (frameMs - this.lastUpdate < 100) return;
     this.lastUpdate = frameMs;
-    if (frameMs - this.measuredAt >= 1000) {
-      this.measuredAt = frameMs;
-      const bar = this.root.querySelector('.topbar')?.getBoundingClientRect();
-      const coffee = this.root.querySelector('.caffeine:not(.hidden)')?.getBoundingClientRect();
-      this.hud.style.setProperty('--race-hud-top', `${Math.max(72, bar?.bottom ?? 0, coffee?.bottom ?? 0) + 12}px`);
-    }
     const s = this.source.store.race;
     const now = this.source.now();
     const here = this.source.available() && this.source.atCircuit();
-    const mine = s.racers.find((r) => r.id === store.you);
-    const p = !mine ? s.practice.find((p) => p.id === store.you) : undefined;
-    const activeTiming = mine ? s.phase === 'racing' && mine.finishedAt === undefined ? mine : undefined : p;
     if (s.phase !== this.previousPhase) {
       if (s.phase === 'countdown' && here) this.modal?.close();
       if (s.phase === 'racing' && this.previousPhase === 'countdown') this.goUntil = now + 900;
-      if (s.phase === 'finished' && here && !modalOpen()) this.openLobby();
+      if (s.phase === 'finished' && here && !modalOpen()) {
+        if (isTyping()) toast('🏁 Results are in — open the race lobby');
+        else this.openLobby();
+      }
       this.previousPhase = s.phase;
     }
     this.refreshModal?.();
-    this.hud.classList.toggle('hidden', !here || modalOpen());
-    this.live.classList.toggle('hidden', !mine || s.phase === 'idle' || s.phase === 'lobby');
-    text(this.open, s.phase === 'finished' ? '🏁 Results' : '🏁 Race lobby');
-    text(this.status, mine ? s.phase === 'finished' ? mine.finishedAt === undefined ? 'Did not finish' : 'Finished' : s.phase === 'racing' ? mine.finishedAt === undefined ? 'Racing' : 'Finished' : 'On the grid' : p ? 'Practice' : s.phase === 'racing' ? 'Watching' : 'Circuit');
-    if (mine) {
-      text(this.position, `${mine.position || '—'} / ${s.racers.length}`);
-      text(this.lap, `${Math.min(s.laps, mine.lap + 1)} / ${s.laps}`);
-      const stop = mine.finishedAt ?? now;
-      text(this.clock, s.phase !== 'racing' || mine.finishedAt !== undefined || mine.lapStartedAt === undefined ? '—' : raceTime(Math.max(0, stop - mine.lapStartedAt)));
-      text(this.best, raceTime(mine.bestLap));
-      text(this.gap, raceGap(s, mine));
+    const showHud = here && !modalOpen();
+    this.hud.classList.toggle('hidden', !showHud);
+    if (!showHud) this.measuredAt = -Infinity;
+    if (showHud) {
+      if (frameMs - this.measuredAt >= 1000) {
+        this.measuredAt = frameMs;
+        const bar = this.root.querySelector('.topbar')?.getBoundingClientRect();
+        const coffee = this.root.querySelector('.caffeine:not(.hidden)')?.getBoundingClientRect();
+        this.hud.style.setProperty('--race-hud-top', `${Math.max(72, bar?.bottom ?? 0, coffee?.bottom ?? 0) + 12}px`);
+      }
+      const mine = s.racers.find((r) => r.id === store.you);
+      const p = !mine ? s.practice.find((p) => p.id === store.you) : undefined;
+      const activeTiming = mine ? s.phase === 'racing' && mine.finishedAt === undefined ? mine : undefined : p;
+      this.live.classList.toggle('hidden', !mine || s.phase === 'idle' || s.phase === 'lobby');
+      text(this.open, s.phase === 'finished' ? '🏁 Results' : '🏁 Race lobby');
+      text(this.status, mine ? s.phase === 'finished' ? mine.finishedAt === undefined ? 'Did not finish' : 'Finished' : s.phase === 'racing' ? mine.finishedAt === undefined ? 'Racing' : 'Finished' : 'On the grid' : p ? 'Practice' : s.phase === 'racing' ? 'Watching' : 'Circuit');
+      if (mine) {
+        text(this.position, `${mine.position || '—'} / ${s.racers.length}`);
+        text(this.lap, `${Math.min(s.laps, mine.lap + 1)} / ${s.laps}`);
+        const stop = mine.finishedAt ?? now;
+        text(this.clock, s.phase !== 'racing' || mine.finishedAt !== undefined || mine.lapStartedAt === undefined ? '—' : raceTime(Math.max(0, stop - mine.lapStartedAt)));
+        text(this.best, raceTime(mine.bestLap));
+        text(this.gap, raceGap(s, mine));
+      }
+      this.practice.classList.toggle('hidden', !p);
+      if (p) {
+        text(this.practiceLaps, String(p.laps));
+        text(this.practiceClock, p.lapStartedAt === undefined ? '—' : raceTime(Math.max(0, now - p.lapStartedAt)));
+        text(this.practiceLast, raceTime(p.lastLap));
+        text(this.practiceBest, raceTime(p.bestLap));
+        text(this.practiceBestLabel, store.me.account ? 'Account practice best' : 'Session practice best');
+      }
+      text(this.coach, activeTiming ? checkpointHint(activeTiming) : mine ? 'Checkpoints count in order when the race starts' : checkpointHint());
+      this.coach.classList.toggle('hidden', !!mine && !activeTiming);
+      renderSplit(this.split, mine ?? p);
+      this.split.classList.toggle('hidden', !mine && !p);
+      this.sectors.classList.toggle('hidden', !mine && !p);
+      const readings = sectorReadings(mine ?? p);
+      this.sectorTimes.forEach((el, i) => text(el, readings[i]));
+      this.updateMap(this.source.map());
     }
-    this.practice.classList.toggle('hidden', !p);
-    if (p) {
-      text(this.practiceLaps, String(p.laps));
-      text(this.practiceClock, p.lapStartedAt === undefined ? '—' : raceTime(Math.max(0, now - p.lapStartedAt)));
-      text(this.practiceLast, raceTime(p.lastLap));
-      text(this.practiceBest, raceTime(p.bestLap));
-      text(this.practiceBestLabel, store.me.account ? 'Account practice best' : 'Session practice best');
-    }
-    text(this.coach, activeTiming ? checkpointHint(activeTiming) : mine ? 'Checkpoints count in order when the race starts' : checkpointHint());
-    this.coach.classList.toggle('hidden', !!mine && !activeTiming);
-    renderSplit(this.split, mine ?? p);
-    this.split.classList.toggle('hidden', !mine && !p);
-    this.sectors.classList.toggle('hidden', !mine && !p);
-    const readings = sectorReadings(mine ?? p);
-    this.sectorTimes.forEach((el, i) => text(el, readings[i]));
-    if (here) this.updateMap(this.source.map());
     const counting = s.phase === 'countdown';
     const go = s.phase === 'racing' && now < this.goUntil;
     this.countdown.classList.toggle('hidden', !here || modalOpen() || (!counting && !go));
@@ -226,12 +236,19 @@ export class RaceUI {
   }
 
   private updateMap(map: CircuitMap | null) {
-    const project = map && mapProjection(map.outline);
+    if (map?.outline !== this.mapOutline) {
+      this.mapOutline = map?.outline;
+      this.project = map ? mapProjection(map.outline) : null;
+      if (map && this.project) {
+        const project = this.project;
+        const d = `${map.outline.map((p, i) => { const q = project(p); return `${i ? 'L' : 'M'}${q.x.toFixed(1)},${q.y.toFixed(1)}`; }).join(' ')} Z`;
+        this.path.setAttribute('d', d);
+      }
+    }
+    const project = this.project;
     this.svg.classList.toggle('hidden', !project);
     text(this.mapNote, project ? '◎ you · ● drivers' : 'Map unavailable');
     if (!project || !map) return;
-    const d = `${map.outline.map((p, i) => { const q = project(p); return `${i ? 'L' : 'M'}${q.x.toFixed(1)},${q.y.toFixed(1)}`; }).join(' ')} Z`;
-    if (this.path.getAttribute('d') !== d) this.path.setAttribute('d', d);
     const seen = new Set<string>();
     for (const dot of map.dots) {
       if (!Number.isFinite(dot.x) || !Number.isFinite(dot.z)) continue;
@@ -243,7 +260,8 @@ export class RaceUI {
       mark.setAttribute('cy', String(q.y));
       mark.setAttribute('class', dot.id === store.you ? 'race-map-dot you' : 'race-map-dot');
       mark.setAttribute('r', dot.id === store.you ? '6' : '4');
-      mark.firstChild!.textContent = `${dot.name}${dot.id === store.you ? ' (you)' : ''}`;
+      const title = `${dot.name}${dot.id === store.you ? ' (you)' : ''}`;
+      if (mark.firstChild!.textContent !== title) mark.firstChild!.textContent = title;
     }
     for (const [id, mark] of this.marks) if (!seen.has(id)) { mark.remove(); this.marks.delete(id); }
   }
