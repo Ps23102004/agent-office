@@ -1064,11 +1064,14 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const parts = {} as Record<CrowdPart, number>;
   const geos = (Object.keys(CROWD) as CrowdPart[]).map((k) => [k, CROWD[k]()] as const);
   const verts = geos.reduce((n, [, g]) => n + g.attributes.position.count, 0);
+  const indices = geos.reduce((n, [, g]) => n + g.index!.count, 0);
   const [crowd, hull] = [crowdMaterial(mat.gradientMap), outlineMaterial()].map((m) => {
-    const b = new THREE.BatchedMesh(MAX_PEOPLE * SLOTS, verts, 0, m);
+    const b = new THREE.BatchedMesh(MAX_PEOPLE * SLOTS, verts, indices, m);
     for (const [k, g] of geos) parts[k] = b.addGeometry(g);
     for (let n = 0; n < MAX_PEOPLE * SLOTS; n++) b.setVisibleAt(b.addInstance(parts.head), false);
-    b.frustumCulled = b.perObjectFrustumCulled = b.sortObjects = false;
+    // Culled person by person (not as a whole: the crowd's all round you), never sorted.
+    b.frustumCulled = b.sortObjects = false;
+    b.perObjectFrustumCulled = true;
     b.castShadow = false;
     group.add(b);
     return b;
@@ -1630,7 +1633,7 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     // On their back the body's laid along the ground, a little up off it.
     // An elder stoops a little.
     q.setFromAxisAngle(UP, p.yaw).multiply(qt.setFromAxisAngle(RIGHT, p.tilt + (jog && moving ? 0.12 : 0) + sit * -0.05 + (L.build === 'elder' ? 0.12 : 0))).multiply(new THREE.Quaternion().setFromAxisAngle(FWD, sway));
-    P.compose(pos.set(p.x + p.dx, (flail ? p.hop : Math.sin((Math.PI * p.hop) / 0.5) * 0.45) + Math.abs(p.tilt) * 0.12 + bob - sit * (0.82 * p.h - 0.42), p.z + p.dz), q, sc.set(p.h, p.h * fade, p.h));
+    P.compose(pos.set(p.x + p.dx, (flail ? p.hop : Math.sin((Math.PI * p.hop) / 0.5) * 0.45) + Math.abs(p.tilt) * 0.12 + bob - sit * (0.82 * p.h - 0.54), p.z + p.dz), q, sc.set(p.h, p.h * fade, p.h));
     pose(SLOT.top, P);
     pose(SLOT.carry, P, !!L.carry);
     // Their head turns to look (at you, at a window) about the neck; a kid's head is big for their size.

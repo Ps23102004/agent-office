@@ -304,7 +304,7 @@ const ZOMBIE = new THREE.Color('#7fa36b');
 function workerFace(frown: boolean): THREE.BufferGeometry {
   const mouth = new THREE.TorusGeometry(0.045, 0.012, 5, 12, Math.PI).rotateZ(frown ? 0 : Math.PI);
   return painted([
-    [mouth.rotateX(-0.12), '#1d1d1d', 0, frown ? 0.555 : 0.6, 0.268],
+    [mouth.rotateX(-0.12), '#1d1d1d', 0, frown ? 0.555 : 0.6, frown ? 0.288 : 0.284],
     ...[-1, 1].map((sx): Piece => [new THREE.SphereGeometry(0.04, 10, 8).scale(1, 0.75, 0.5), '#ff9f9f', sx * 0.17, 0.6, 0.22]),
   ]);
 }
@@ -472,12 +472,13 @@ export function legGeometry(): THREE.BufferGeometry {
   ]);
 }
 
-/** A cartoon mitten of a hand at the end of an arm (the wrist at 0,0,0), its thumb forward and in toward the body (`inward`: +1 toward +x). */
-export function handGeometry(inward: 1 | -1): THREE.BufferGeometry {
-  return mergeGeometries([
-    new THREE.SphereGeometry(0.085, 12, 10).scale(0.82, 1.08, 0.95).translate(0, -0.385, 0),
-    placed(new THREE.CapsuleGeometry(0.028, 0.05, 3, 6), inward * 0.04, -0.36, 0.06, 1.1, -inward * 0.45),
-  ])!;
+/**
+ * A cartoon mitten of a hand at the end of an arm (the wrist at 0,0,0), its thumb forward and in toward
+ * the body (`inward`: +1 toward +x), or without it (`thumb` false: it's up, see Person.emote).
+ */
+export function handGeometry(inward: 1 | -1, thumb = true): THREE.BufferGeometry {
+  const palm = new THREE.SphereGeometry(0.085, 12, 10).scale(0.82, 1.08, 0.95).translate(0, -0.385, 0);
+  return thumb ? mergeGeometries([palm, placed(new THREE.CapsuleGeometry(0.028, 0.05, 3, 6), inward * 0.04, -0.36, 0.06, 1.1, -inward * 0.45)])! : palm;
 }
 
 export class Person {
@@ -546,6 +547,9 @@ export class Person {
   /** A thumb up and a pointing finger on the right hand, out only for those emotes. */
   private thumb: THREE.Mesh;
   private finger: THREE.Mesh;
+  /** The right hand (on -x), with its thumb in or (for a thumbs up) without it. */
+  private handL!: THREE.Mesh;
+  private mitten = { thumb: handGeometry(1), palm: handGeometry(1, false) };
   /** How much higher (meters) an emote's emoji pops up, to clear a chat bubble over their head. */
   emojiLift = 0;
   /** Hips this high above the feet while sitting (on the seat), or null on their feet. */
@@ -605,9 +609,9 @@ export class Person {
           [new THREE.CapsuleGeometry(0.26, 0.28, 6, 12), '#ffffff'],
           // A collar round the neck with its points turned down on the chest, a button placket, a breast pocket and a hem.
           [new THREE.TorusGeometry(0.19, 0.035, 5, 20).rotateX(Math.PI / 2), shade(1.7), 0, 0.33, 0],
-          ...[-1, 1].map((sx): Piece => [placed(new THREE.ConeGeometry(0.06, 0.11, 3).rotateY(Math.PI / 6).rotateZ(Math.PI).scale(1, 1, 0.3), 0, 0, 0, -0.6, sx * 0.5), shade(1.7), sx * 0.06, 0.28, 0.19]),
-          [new THREE.BoxGeometry(0.04, 0.4, 0.012), shade(0.9), 0, 0.02, 0.255],
-          ...[0.14, 0.02, -0.1].map((y): Piece => [new THREE.SphereGeometry(0.016, 6, 5).scale(1, 1, 0.5), shade(1.6), 0, y, 0.262]),
+          ...[-1, 1].map((sx): Piece => [placed(new THREE.ConeGeometry(0.06, 0.11, 3).rotateY(Math.PI / 6).rotateZ(Math.PI).scale(1, 1, 0.3), 0, 0, 0, -0.6, sx * 0.5), shade(1.7), sx * 0.06, 0.28, 0.235]),
+          [new THREE.BoxGeometry(0.04, 0.4, 0.012), shade(0.9), 0, 0.02, 0.268],
+          ...[0.14, 0.02, -0.1].map((y): Piece => [new THREE.SphereGeometry(0.016, 6, 5).scale(1, 1, 0.5), shade(1.6), 0, y, 0.275]),
           [new THREE.BoxGeometry(0.1, 0.11, 0.025), shade(0.93), 0.11, 0.12, 0.257],
           [new THREE.BoxGeometry(0.1, 0.016, 0.03), shade(1.3), 0.11, 0.18, 0.257],
           [new THREE.TorusGeometry(0.255, 0.022, 5, 24).rotateX(Math.PI / 2), shade(0.82), 0, -0.13, 0],
@@ -659,7 +663,7 @@ export class Person {
     this.armL = limb(arm(), this.shirt, -0.33, 0.9);
     this.armR = limb(arm(), this.shirt, 0.33, 0.9);
     // The left arm (-x) is the character's right, so its thumb points in toward +x.
-    this.armL.add(mesh(handGeometry(1), skin));
+    this.armL.add((this.handL = mesh(this.mitten.thumb, skin)));
     this.armR.add(mesh(handGeometry(-1), skin));
     // Forward is +z, so the character's left arm is the one on +x. The handle faces the hand.
     const cup = (this.cup = coffeeMug(1.4));
@@ -888,6 +892,8 @@ export class Person {
     this.root.add(pop);
     this.emoting = { emote, t: 0, pop, size };
     this.thumb.visible = id === 'thumbs';
+    // The thumb that's up is the mitten's own.
+    this.handL.geometry = id === 'thumbs' ? this.mitten.palm : this.mitten.thumb;
     this.finger.visible = id === 'point';
   }
 
@@ -903,6 +909,7 @@ export class Person {
     disposeSprite(e.pop);
     this.emoting = null;
     this.thumb.visible = this.finger.visible = false;
+    this.handL.geometry = this.mitten.thumb;
   }
 
   /**
