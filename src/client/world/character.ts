@@ -300,6 +300,15 @@ const DOING_LIFT = 0.25;
 /** What a zombie worker's skin is mixed toward. */
 const ZOMBIE = new THREE.Color('#7fa36b');
 
+/** A worker's mouth (a smile, or a frown once it's sent home) and its rosy cheeks, on the front of the bean. */
+function workerFace(frown: boolean): THREE.BufferGeometry {
+  const mouth = new THREE.TorusGeometry(0.045, 0.012, 5, 12, Math.PI).rotateZ(frown ? 0 : Math.PI);
+  return painted([
+    [mouth.rotateX(-0.12), '#1d1d1d', 0, frown ? 0.555 : 0.6, 0.268],
+    ...[-1, 1].map((sx): Piece => [new THREE.SphereGeometry(0.04, 10, 8).scale(1, 0.75, 0.5), '#ff9f9f', sx * 0.17, 0.6, 0.22]),
+  ]);
+}
+
 /** Takes a costume off whatever wore it, and frees what it was made of (its materials are shared). */
 function undress(parts: THREE.Object3D[]) {
   for (const o of parts) {
@@ -334,6 +343,143 @@ const PANTS = new THREE.Color('#3d405b');
 let legMat: THREE.MeshToonMaterial | null = null;
 const legs = () => (legMat ??= new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }));
 
+/** A shade of the material's own color (see painted): darker under 1, lighter over. */
+const shade = (k: number) => new THREE.Color(k, k, k);
+/** `geo` turned like an Object3D with rotation (rx, 0, rz), then moved to (x, y, z). */
+const placed = (geo: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, rz = 0) => geo.rotateZ(rz).rotateX(rx).translate(x, y, z);
+
+/** The head: a ball with ears and a button nose, all skin (its center is 0,0,0; the face looks down +z). */
+export function headGeometry(): THREE.BufferGeometry {
+  return mergeGeometries([
+    new THREE.SphereGeometry(0.34, 20, 16),
+    ...[-1, 1].map((sx) => new THREE.SphereGeometry(0.075, 10, 8).scale(0.45, 0.85, 0.7).translate(sx * 0.335, -0.01, -0.01)),
+    new THREE.SphereGeometry(0.036, 10, 8).scale(1.15, 0.8, 0.7).translate(0, -0.025, 0.336),
+  ])!;
+}
+
+/**
+ * Hair, one geometry for the whole style (so it's one draw call however curly): shapes on the head,
+ * painted in shades of the hair's color (see painted), or null for none. A fringe sweeps over the
+ * forehead and a tie holds a bun or a ponytail.
+ */
+export function hairGeometry(style: string): THREE.BufferGeometry | null {
+  const parts: Piece[] = [];
+  const add = (geo: THREE.BufferGeometry, k = 1) => parts.push([geo, shade(k)]);
+  const cap = () => add(placed(new THREE.SphereGeometry(0.355, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.45), 0, 0.02, -0.02, -0.25));
+  // A fringe swept to one side (or parted in the middle), over the brows' line.
+  const fringe = (parted = false) => {
+    for (const sx of parted ? [-1, 1] : [-1, 0.9]) {
+      const big = parted || sx < 0;
+      add(placed(new THREE.SphereGeometry(big ? 0.12 : 0.09, 10, 8).scale(1.4, 0.42, 0.6), sx * (big ? 0.09 : 0.13), 0.215, 0.255, -0.35, sx * (parted ? -0.32 : 0.28)), 1.1);
+    }
+  };
+  const sideburns = () => {
+    for (const sx of [-1, 1]) add(new THREE.CapsuleGeometry(0.028, 0.08, 3, 6).translate(sx * 0.318, 0.05, 0.07), 0.88);
+  };
+  const tie = (x: number, y: number, z: number, rx: number) => add(placed(new THREE.TorusGeometry(0.06, 0.022, 6, 12), x, y, z, rx), 0.55);
+  switch (style) {
+    case 'Short':
+      cap();
+      fringe();
+      sideburns();
+      break;
+    case 'Long':
+      cap();
+      fringe(true);
+      // A curtain down the back, open at the front so the face shows (phi = π/2 is the face).
+      add(new THREE.SphereGeometry(0.37, 20, 14, Math.PI * 0.93, Math.PI * 1.14, Math.PI * 0.3, Math.PI * 0.5).scale(1.02, 1.35, 1).translate(0, -0.06, -0.03), 0.92);
+      // And a lock either side of the face, down over the shoulders.
+      for (const sx of [-1, 1]) add(placed(new THREE.CapsuleGeometry(0.07, 0.26, 4, 8).scale(1, 1, 0.7), sx * 0.29, -0.2, 0.06, 0, sx * 0.12), 0.97);
+      break;
+    case 'Bun':
+      cap();
+      fringe();
+      add(new THREE.SphereGeometry(0.14, 14, 12).translate(0, 0.3, -0.2), 1.05);
+      tie(0, 0.24, -0.15, 0.9);
+      break;
+    case 'Spiky':
+      cap();
+      // Two rows of spikes fanned out over the crown, the back row a shade darker.
+      for (const [row, n, z, tilt] of [
+        [0, 5, 0.08, 0.35],
+        [1, 4, -0.12, -0.3],
+      ] as const) {
+        for (let i = 0; i < n; i++) {
+          const a = -0.85 + (i / (n - 1)) * 1.7;
+          add(placed(new THREE.ConeGeometry(0.1, 0.3, 8), Math.sin(a) * 0.24, 0.33 - Math.abs(a) * 0.08 - row * 0.02, z, tilt, -a * 0.9), row ? 0.86 : 1.06);
+        }
+      }
+      sideburns();
+      break;
+    case 'Curly': {
+      // Little puffs spread over the top and back of the head, leaving the face clear, in three shades.
+      const n = 70;
+      for (let i = 0; i < n; i++) {
+        const y = 1 - (i / (n - 1)) * 2;
+        const r = Math.sqrt(1 - y * y);
+        const th = i * 2.39996;
+        const px = Math.cos(th) * r;
+        const pz = Math.sin(th) * r;
+        if (y < -0.15 || (pz > 0.35 && y < 0.55)) continue;
+        add(new THREE.SphereGeometry(0.1, 8, 6).translate(px * 0.36, y * 0.36 + 0.04, pz * 0.36 - 0.02), [1, 0.86, 1.12][i % 3]);
+      }
+      break;
+    }
+    case 'Ponytail':
+      cap();
+      fringe();
+      add(new THREE.SphereGeometry(0.075, 10, 8).translate(0, 0.12, -0.34));
+      tie(0, 0.09, -0.37, 1.2);
+      add(placed(new THREE.CapsuleGeometry(0.085, 0.3, 6, 10).scale(1, 1, 0.8), 0, -0.1, -0.42, 0.35), 0.94);
+      break;
+    default:
+      return null;
+  }
+  return painted(parts);
+}
+
+/** The face that blinks: eyes, a little taller than round, each with a big glint and a small one. */
+function eyesGeometry(): THREE.BufferGeometry {
+  const eyes: Piece[] = [];
+  for (const sx of [-1, 1])
+    eyes.push(
+      [new THREE.SphereGeometry(0.055, 10, 8).scale(1, 1.15, 1), '#1d1d1d', sx * 0.12, 0, 0],
+      [new THREE.SphereGeometry(0.018, 6, 5), '#ffffff', sx * 0.12 + 0.018, 0.026, 0.05],
+      [new THREE.SphereGeometry(0.009, 5, 4), '#ffffff', sx * 0.12 - 0.02, -0.022, 0.05],
+    );
+  return painted(eyes);
+}
+
+/** The face that stays put: brows (a darker shade of the hair) and rosy cheeks. */
+function faceGeometry(hair: string): THREE.BufferGeometry {
+  const brow = new THREE.Color(hair).multiplyScalar(0.72);
+  const face: Piece[] = [];
+  for (const sx of [-1, 1])
+    face.push([new THREE.CapsuleGeometry(0.014, 0.06, 3, 5).rotateZ(Math.PI / 2 - sx * 0.18).rotateX(-0.25), brow, sx * 0.12, 0.12, 0.315], [new THREE.SphereGeometry(0.05, 10, 8).scale(1, 0.8, 1), '#ff9f9f', sx * 0.2, -0.08, 0.27]);
+  return painted(face);
+}
+
+/** A leg: trousers with a turned-up hem, and a shoe with a toe cap, laces and a pale sole (its hip at 0,0,0). */
+export function legGeometry(): THREE.BufferGeometry {
+  const pants = PANTS.clone();
+  return painted([
+    [new THREE.CapsuleGeometry(0.1, 0.22, 4, 8), pants, 0, -0.16, 0],
+    [new THREE.TorusGeometry(0.1, 0.02, 5, 14).rotateX(Math.PI / 2), pants.clone().multiplyScalar(0.8), 0, -0.285, 0],
+    [new THREE.SphereGeometry(0.1, 8, 6).scale(1.05, 0.55, 1.5), '#2b2d42', 0, -0.36, 0.04],
+    [new THREE.SphereGeometry(0.07, 8, 6).scale(1.2, 0.6, 1), '#3d405b', 0, -0.37, 0.13],
+    ...[0.06, 0.1].map((z): Piece => [new THREE.BoxGeometry(0.08, 0.012, 0.018).rotateX(-0.45), '#f1ece2', 0, -0.315, z]),
+    [new THREE.SphereGeometry(0.1, 8, 4).scale(1.1, 0.2, 1.55), '#f1ece2', 0, -0.405, 0.04],
+  ]);
+}
+
+/** A cartoon mitten of a hand at the end of an arm (the wrist at 0,0,0), its thumb forward and in toward the body (`inward`: +1 toward +x). */
+export function handGeometry(inward: 1 | -1): THREE.BufferGeometry {
+  return mergeGeometries([
+    new THREE.SphereGeometry(0.085, 12, 10).scale(0.82, 1.08, 0.95).translate(0, -0.385, 0),
+    placed(new THREE.CapsuleGeometry(0.028, 0.05, 3, 6), inward * 0.04, -0.36, 0.06, 1.1, -inward * 0.45),
+  ])!;
+}
+
 export class Person {
   readonly root = new THREE.Group();
   private body = new THREE.Group();
@@ -357,6 +503,8 @@ export class Person {
   private mouth: THREE.Mesh;
   /** The eyes with their glints, squashed shut on a blink. */
   private lids!: THREE.Mesh;
+  /** Brows (the hair's color) and cheeks. */
+  private face: THREE.Mesh;
   private shadow!: THREE.Mesh;
   /** Seconds until the next stretch, and how far into one (-1: not stretching). */
   private stretch = { next: 8 + Math.random() * 14, t: -1 };
@@ -446,6 +594,7 @@ export class Person {
     const skin = (this.skin = toonUnique(SKIN_TONES[look.skin]));
     this.hairMat = toonUnique(HAIR_COLORS[look.hair]);
     this.hairMat.side = THREE.DoubleSide;
+    this.hairMat.vertexColors = true;
     const ink = toon('#1d1d1d');
 
     this.root.add(this.body, (this.shadow = followShadow(1)));
@@ -454,10 +603,14 @@ export class Person {
       mesh(
         painted([
           [new THREE.CapsuleGeometry(0.26, 0.28, 6, 12), '#ffffff'],
-          // A collar round the neck, and a breast pocket.
-          [new THREE.TorusGeometry(0.19, 0.035, 5, 20).rotateX(Math.PI / 2), new THREE.Color(1.7, 1.7, 1.7), 0, 0.33, 0],
-          [new THREE.BoxGeometry(0.1, 0.11, 0.025), new THREE.Color(0.93, 0.93, 0.93), 0.11, 0.12, 0.257],
-          [new THREE.BoxGeometry(0.1, 0.016, 0.03), new THREE.Color(1.3, 1.3, 1.3), 0.11, 0.18, 0.257],
+          // A collar round the neck with its points turned down on the chest, a button placket, a breast pocket and a hem.
+          [new THREE.TorusGeometry(0.19, 0.035, 5, 20).rotateX(Math.PI / 2), shade(1.7), 0, 0.33, 0],
+          ...[-1, 1].map((sx): Piece => [placed(new THREE.ConeGeometry(0.06, 0.11, 3).rotateY(Math.PI / 6).rotateZ(Math.PI).scale(1, 1, 0.3), 0, 0, 0, -0.6, sx * 0.5), shade(1.7), sx * 0.06, 0.28, 0.19]),
+          [new THREE.BoxGeometry(0.04, 0.4, 0.012), shade(0.9), 0, 0.02, 0.255],
+          ...[0.14, 0.02, -0.1].map((y): Piece => [new THREE.SphereGeometry(0.016, 6, 5).scale(1, 1, 0.5), shade(1.6), 0, y, 0.262]),
+          [new THREE.BoxGeometry(0.1, 0.11, 0.025), shade(0.93), 0.11, 0.12, 0.257],
+          [new THREE.BoxGeometry(0.1, 0.016, 0.03), shade(1.3), 0.11, 0.18, 0.257],
+          [new THREE.TorusGeometry(0.255, 0.022, 5, 24).rotateX(Math.PI / 2), shade(0.82), 0, -0.13, 0],
         ]),
         this.shirt,
         0,
@@ -468,18 +621,13 @@ export class Person {
     // Head
     const head = (this.head = new THREE.Group());
     head.position.y = 1.32;
-    head.add(mesh(new THREE.SphereGeometry(0.34, 20, 16), skin));
+    head.add(mesh(headGeometry(), skin));
     head.add(this.hair);
     this.buildHair();
-    // Eyes with a glint each, which blink together; and the brows and cheeks, which stay put.
-    const eyes: Piece[] = [];
-    const face: Piece[] = [];
-    for (const sx of [-1, 1]) {
-      eyes.push([new THREE.SphereGeometry(0.055, 10, 8), '#1d1d1d', sx * 0.12, 0, 0], [new THREE.SphereGeometry(0.017, 6, 5), '#ffffff', sx * 0.12 + 0.018, 0.025, 0.05]);
-      face.push([new THREE.CapsuleGeometry(0.012, 0.06, 3, 5).rotateZ(Math.PI / 2 - sx * 0.18).rotateX(-0.25), '#1d1d1d', sx * 0.12, 0.115, 0.315], [new THREE.SphereGeometry(0.05, 10, 8), '#ff9f9f', sx * 0.2, -0.08, 0.27]);
-    }
-    this.lids = mesh(painted(eyes), toonVertex(), 0, 0.02, 0.3, false);
-    head.add(this.lids, mesh(painted(face), toonVertex(), 0, 0, 0, false));
+    // Eyes with their glints, which blink together; and the brows and cheeks, which stay put.
+    this.lids = mesh(eyesGeometry(), toonVertex(), 0, 0.02, 0.3, false);
+    this.face = mesh(faceGeometry(HAIR_COLORS[look.hair]), toonVertex(), 0, 0, 0, false);
+    head.add(this.lids, this.face);
     const smile = (this.smile = mesh(new THREE.TorusGeometry(0.06, 0.015, 6, 12, Math.PI), ink, 0, -0.08, 0.32, false));
     smile.rotation.z = Math.PI;
     head.add(smile);
@@ -499,25 +647,20 @@ export class Person {
       this.body.add(pivot);
       return pivot;
     };
-    // A leg is its trousers, a shoe and the sole under it.
-    const leg = () =>
-      painted([
-        [new THREE.CapsuleGeometry(0.1, 0.22, 4, 8), PANTS, 0, -0.16, 0],
-        [new THREE.SphereGeometry(0.1, 8, 6).scale(1.05, 0.55, 1.5), '#2b2d42', 0, -0.36, 0.04],
-        [new THREE.SphereGeometry(0.1, 8, 4).scale(1.1, 0.2, 1.55), '#f1ece2', 0, -0.405, 0.04],
-      ]);
     // An arm is its sleeve, rolled at the elbow, and a pale cuff at the wrist.
     const arm = () =>
       painted([
         [new THREE.CapsuleGeometry(0.08, 0.24, 4, 8), '#ffffff', 0, -0.18, 0],
-        [new THREE.TorusGeometry(0.084, 0.016, 5, 12).rotateX(Math.PI / 2), new THREE.Color(1.15, 1.15, 1.15), 0, -0.13, 0],
-        [new THREE.TorusGeometry(0.082, 0.016, 5, 12).rotateX(Math.PI / 2), new THREE.Color(1.7, 1.7, 1.7), 0, -0.3, 0],
+        [new THREE.TorusGeometry(0.084, 0.016, 5, 12).rotateX(Math.PI / 2), shade(1.15), 0, -0.13, 0],
+        [new THREE.TorusGeometry(0.082, 0.016, 5, 12).rotateX(Math.PI / 2), shade(1.7), 0, -0.3, 0],
       ]);
-    this.legL = limb(leg(), legs(), -0.12, HIPS);
-    this.legR = limb(leg(), legs(), 0.12, HIPS);
+    this.legL = limb(legGeometry(), legs(), -0.12, HIPS);
+    this.legR = limb(legGeometry(), legs(), 0.12, HIPS);
     this.armL = limb(arm(), this.shirt, -0.33, 0.9);
     this.armR = limb(arm(), this.shirt, 0.33, 0.9);
-    for (const arm of [this.armL, this.armR]) arm.add(mesh(new THREE.SphereGeometry(0.085, 12, 10), skin, 0, -0.38, 0));
+    // The left arm (-x) is the character's right, so its thumb points in toward +x.
+    this.armL.add(mesh(handGeometry(1), skin));
+    this.armR.add(mesh(handGeometry(-1), skin));
     // Forward is +z, so the character's left arm is the one on +x. The handle faces the hand.
     const cup = (this.cup = coffeeMug(1.4));
     cup.position.set(0.02, -0.08, 0.1);
@@ -578,6 +721,8 @@ export class Person {
     this.look = { ...look };
     this.hairMat.color.set(HAIR_COLORS[look.hair]);
     if (restyle) this.buildHair();
+    this.face.geometry.dispose();
+    this.face.geometry = faceGeometry(HAIR_COLORS[look.hair]);
     this.dress();
   }
 
@@ -603,73 +748,12 @@ export class Person {
     this.hair.visible = !this.costume || !(style === 'Spiky' || style === 'Bun' || style === 'Curly');
   }
 
-  /** Hair is a set of shapes on the head (whose center is 0,0,0; the face looks down +z). */
+  /** Hair is one mesh on the head (see hairGeometry). */
   private buildHair() {
     for (const o of this.hair.children) (o as THREE.Mesh).geometry.dispose();
     this.hair.clear();
-    const m = this.hairMat;
-    const add = (geo: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, rz = 0) => {
-      const part = mesh(geo, m, x, y, z);
-      part.rotation.set(rx, 0, rz);
-      this.hair.add(part);
-      return part;
-    };
-    const cap = () => add(new THREE.SphereGeometry(0.355, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.45), 0, 0.02, -0.02, -0.25);
-    switch (HAIR_STYLES[this.look.style]) {
-      case 'Short':
-        cap();
-        break;
-      case 'Long': {
-        cap();
-        // A curtain down the back, open at the front so the face shows.
-        // Around the head from ear to ear the back way, leaving the face open (phi = π/2 is the face).
-        const back = add(new THREE.SphereGeometry(0.37, 20, 14, Math.PI * 0.93, Math.PI * 1.14, Math.PI * 0.3, Math.PI * 0.5), 0, -0.06, -0.03);
-        back.scale.set(1.02, 1.35, 1);
-        break;
-      }
-      case 'Bun':
-        cap();
-        add(new THREE.SphereGeometry(0.14, 14, 12), 0, 0.3, -0.2);
-        break;
-      case 'Spiky':
-        cap();
-        // Two rows of spikes fanned out over the crown.
-        for (const [row, n, z, tilt] of [
-          [0, 5, 0.08, 0.35],
-          [1, 4, -0.12, -0.3],
-        ] as const) {
-          for (let i = 0; i < n; i++) {
-            const a = -0.85 + (i / (n - 1)) * 1.7;
-            const spike = add(new THREE.ConeGeometry(0.1, 0.3, 8), Math.sin(a) * 0.24, 0.33 - Math.abs(a) * 0.08 - row * 0.02, z);
-            spike.rotation.set(tilt, 0, -a * 0.9);
-          }
-        }
-        break;
-      case 'Curly': {
-        // Little puffs spread over the top and back of the head, leaving the face clear.
-        const n = 70;
-        for (let i = 0; i < n; i++) {
-          const y = 1 - (i / (n - 1)) * 2;
-          const r = Math.sqrt(1 - y * y);
-          const th = i * 2.39996;
-          const px = Math.cos(th) * r;
-          const pz = Math.sin(th) * r;
-          if (y < -0.15 || (pz > 0.35 && y < 0.55)) continue;
-          add(new THREE.SphereGeometry(0.1, 8, 6), px * 0.36, y * 0.36 + 0.04, pz * 0.36 - 0.02);
-        }
-        break;
-      }
-      case 'Ponytail': {
-        cap();
-        add(new THREE.SphereGeometry(0.075, 10, 8), 0, 0.12, -0.34);
-        const tail = add(new THREE.CapsuleGeometry(0.085, 0.3, 6, 10), 0, -0.1, -0.42, 0.35);
-        tail.scale.set(1, 1, 0.8);
-        break;
-      }
-      case 'Bald':
-        break;
-    }
-    this.hair.traverse((o) => ((o as THREE.Mesh).castShadow = true));
+    const geo = hairGeometry(HAIR_STYLES[this.look.style]);
+    if (geo) this.hair.add(mesh(geo, this.hairMat));
   }
 
   setLabel(name: string, muted: boolean | null) {
@@ -882,6 +966,8 @@ export class Person {
         this.head.rotation.y = Math.sin(u * 5) * 0.15 * k;
         break;
     }
+    // A big grin for the happy ones, lips pressed together for a facepalm.
+    this.smile.scale.setScalar(THREE.MathUtils.lerp(1, id === 'facepalm' ? 0.6 : 1.3, k));
     // The emoji pops in over their head, rises a little, wobbles, and fades at the end.
     const pop = popCurve(u / 0.3);
     e.pop.scale.set(e.size.x * pop, e.size.y * pop, 1);
@@ -1304,6 +1390,7 @@ export class Person {
         st.next = 10 + Math.random() * 20;
       }
     }
+    this.smile.scale.setScalar(1);
     if (this.emoting) this.emoteStep(dt, moving || airborne ? 0 : 1 - sit);
     if (this.golf && !sit && !airborne) this.golfStep(dt);
     if (this.oche && !sit) this.ocheStep(dt);
@@ -1563,6 +1650,8 @@ export class Worker {
   /** Up on its desk dancing (a pull request merged): where, and how many seconds in. */
   private dancing: { stage: Stage; t: number } | null = null;
   private pupils: THREE.Mesh[] = [];
+  /** Its mouth and cheeks. */
+  private face: THREE.Mesh;
   private feet: THREE.Mesh[] = [];
   /** Sent home: the box of its things in its arms, and how far into its waddle it is. */
   private leaving: { box: THREE.Group; boxT: number; stride: number } | null = null;
@@ -1622,11 +1711,14 @@ export class Worker {
       const eye = mesh(new THREE.SphereGeometry(0.09, 12, 10), white, sx * 0.11, 0.7, 0.23, false);
       eye.scale.z = 0.6;
       this.body.add(eye);
-      const pupil = mesh(new THREE.SphereGeometry(0.045, 10, 8), ink, sx * 0.11, 0.7, 0.29, false);
+      // A pupil with a glint in it, up and to the side.
+      const pupil = mesh(painted([[new THREE.SphereGeometry(0.045, 10, 8), '#1d1d1d'], [new THREE.SphereGeometry(0.014, 6, 5), '#ffffff', 0.016, 0.018, 0.038]]), toonVertex(), sx * 0.11, 0.7, 0.29, false);
       this.body.add(pupil);
       this.eyes.push(eye, pupil);
       this.pupils.push(pupil);
     }
+    this.face = mesh(workerFace(false), toonVertex(), 0, 0, 0, false);
+    this.body.add(this.face);
     // Headset: band + mic
     const band = mesh(new THREE.TorusGeometry(0.29, 0.025, 6, 20, Math.PI), toon('#2b2d42'), 0, 0.72, 0, false);
     band.rotation.y = Math.PI / 2;
@@ -1857,8 +1949,10 @@ export class Worker {
     this.bubbleIsCard = false;
     this.bubble = textSprite(farewell, { bg: '#e9ecef', size: 34 });
     this.root.add(this.bubble);
-    // Looking down, brows up in the middle.
+    // Looking down, brows up in the middle, and the smile turned upside down.
     for (const p of this.pupils) p.position.y -= 0.035;
+    this.face.geometry.dispose();
+    this.face.geometry = workerFace(true);
     for (const sx of [-1, 1]) {
       const brow = mesh(new THREE.CapsuleGeometry(0.014, 0.08, 4, 6), toon('#1d1d1d'), sx * 0.11, 0.83, 0.228, false);
       brow.rotation.z = Math.PI / 2 - sx * 0.4;
