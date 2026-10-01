@@ -34,8 +34,9 @@ import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState, SignInKind } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, GH_LABEL_MAX, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
-import { DESK_BY_ID, elevatorSpot, streetBelow } from '../shared/layout.js';
+import { DESK_BY_ID, SEATING_BY_ID, elevatorSpot, streetBelow } from '../shared/layout.js';
 import { OFFICE_MAP, seatHereOn } from '../shared/maps/index.js';
+import { mayHoldDrink, streetSeatNear } from '../shared/venues.js';
 import { EMPTY_PLAN } from '../shared/floorplan.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
@@ -1415,8 +1416,10 @@ export async function startServer(cfg: Config) {
       }
       case 'act': {
         if (msg.drink !== undefined) {
-          // A drink from the rooftop bar, or (W6) The Night Owl down in the city: it stays on the floor you got it on.
-          const drink = isDrink(msg.drink) ? msg.drink : undefined;
+          // A drink from the rooftop bar, or (W6) The Night Owl down in the city: only where there's one to be had.
+          const p = c.peer;
+          const can = mayHoldDrink({ roof: p.floor === ROOF, officeMap: maps.plan().style === 'office', circuit: p.floor === CIRCUIT, x: p.x, y: p.y, z: p.z });
+          const drink = isDrink(msg.drink) && can ? msg.drink : undefined;
           if (drink === c.peer.drink) break;
           if (drink) c.peer.drink = drink;
           else delete c.peer.drink;
@@ -1477,7 +1480,10 @@ export async function startServer(cfg: Config) {
         // Everyone sees them sit down (or get up), and anyone who comes in later finds them sitting.
         // Only on a seat where they are: the roof's up on the roof, the office's on a floor.
         const key = str(msg.seat, 40);
-        const seat = seatHereOn(maps.plan(), key, c.peer.floor === ROOF) ? key : undefined;
+        const place = seatHereOn(maps.plan(), key, c.peer.floor === ROOF);
+        // W6: a seat out in the city (the café's, the bar's) only from down on the street beside it.
+        const street = !!place && maps.plan().style === 'office' && !!SEATING_BY_ID.get(place.seatId)?.street;
+        const seat = place && (!street || streetSeatNear(place, c.peer, c.peer.floor === CIRCUIT)) ? key : undefined;
         if (seat === c.peer.seat) break;
         // Somebody on the floor got there first (two people arriving at an empty throne at once).
         // (Not yourself, on a connection that hasn't timed out yet after a reconnect.)

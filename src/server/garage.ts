@@ -1,5 +1,6 @@
 import { CARS, SPECS, DRIVE, carFits, parked, paved, type CarDef, type CarPose, type CarSeat, type CarState } from '../shared/garage.js';
-import { citySolids, seaRespawnsFrom } from '../shared/city.js';
+import { seaRespawnsFrom, vehicleSolids } from '../shared/city.js';
+import { vehicleBarred } from '../shared/venues.js';
 import { CITY_GATE } from '../shared/circuit.js';
 
 /** How often one person can honk, at most (ms). */
@@ -146,7 +147,8 @@ export class Garage {
    */
   private plausible(car: number, to: { x: number; z: number; rotY: number }): boolean {
     const kind = this.defs[car].kind;
-    if (!carFits(to, citySolids(to.x, to.z, 6), kind)) return false;
+    // (W6: nor inside the café or the bar, whose doors a bike would fit through.)
+    if (vehicleBarred(to.x, to.z) || !carFits(to, vehicleSolids(to.x, to.z, 6), kind)) return false;
     const c = this.cars[car];
     const seconds = Math.min(1, Math.max(0, (this.now() - (this.movedAt[car] ?? this.now())) / 1000));
     if (Math.hypot(to.x - c.x, to.z - c.z) <= SPECS[kind].top * 1.3 * seconds + 3) return true;

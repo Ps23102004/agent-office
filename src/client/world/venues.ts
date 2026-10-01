@@ -59,6 +59,8 @@ export interface Venues {
 const E = Math.PI / 2;
 /** How close you have to be to see in. */
 const NEAR = 34;
+/** And to see its terrace's chairs: the furniture loads the first time you're this close. */
+const FURNISH = 140;
 /**
  * And how close (from its walls) for the people in there to be about: a couple of dozen draw calls
  * each, so only once you're on its terrace, at its windows or inside.
@@ -849,9 +851,8 @@ export function buildVenues(night: NightParts): Venues {
         [70.6, 11.9],
       ])
         lampAt(x, z, 2.55);
-      // Warm pools of light at night, over the counter and the tables (sky.ts).
-      night.lamps.push({ x: 70, y: STREET_Y + 2.6, z: 9.5, reach: 7, color: '#ffcf8a', power: 2.4, ground: true });
-      night.lamps.push({ x: 64.5, y: STREET_Y + 2.6, z: 13.5, reach: 5.5, color: '#ffcf8a', power: 1.8, ground: true });
+      // A warm pool of light at night (sky.ts), short enough to stay inside the walls.
+      night.lamps.push({ x: 68, y: STREET_Y + 2.4, z: 11, reach: 5.2, color: '#ffcf8a', power: 2.4, ground: true });
       // The people: the barista behind the counter, a couple at the far table (one with a book), someone at the window.
       staff = person('Barista', '#6f4e37', 'barista-mo');
       staff.root.position.set(69, 0, 6.7);
@@ -949,8 +950,7 @@ export function buildVenues(night: NightParts): Venues {
       for (const z of [40.6, 44, 47.4]) lampAt(72.6, z, 2.4);
       lampAt(66, 41.8, 2.6);
       lampAt(66, 46.6, 2.6);
-      night.lamps.push({ x: 72, y: STREET_Y + 2.6, z: 44, reach: 7, color: '#ffb86b', power: 2.4, ground: true });
-      night.lamps.push({ x: 62, y: STREET_Y + 2.6, z: 44, reach: 6, color: '#ffb86b', power: 1.6, ground: true });
+      night.lamps.push({ x: 68, y: STREET_Y + 2.6, z: 44, reach: 6.5, color: '#ffb86b', power: 2.4, ground: true });
       // The people: the bartender, someone at the end of the bar, a couple in the far booth, one standing at a table.
       staff = person('Bartender', '#2b2d42', 'bartender-jo');
       staff.root.position.set(75.2, 0, 44);
@@ -1025,8 +1025,6 @@ export function buildVenues(night: NightParts): Venues {
       }
     });
   };
-  // The terraces' chairs are out on the street for everyone to see: load them straight away, a little after the office is up.
-  setTimeout(() => built.forEach(furnishOnce), 4000);
 
   const glassNear = new THREE.Color('#bfe3ff');
   const glassFar = new THREE.Color('#40566b');
@@ -1064,11 +1062,14 @@ export function buildVenues(night: NightParts): Venues {
         const { v } = b;
         const cx = (v.box.minX + v.box.maxX) / 2;
         const cz = (v.box.minZ + v.box.maxZ) / 2;
-        const near = onStreet && Math.hypot(you.x - cx, you.z - cz) < NEAR;
+        const far = onStreet ? Math.hypot(you.x - cx, you.z - cz) : Infinity;
+        const near = far < NEAR;
+        // Kenney's furniture is sent for the first time you're down on the street within sight of it
+        // (the terrace's chairs show from the street), never from the roof or another map.
+        if (far < FURNISH) furnishOnce(b);
         if (near !== b.near) {
           b.near = near;
           b.room.visible = near;
-          if (near) furnishOnce(b);
         }
         // Clear glass while you can see in; from further off it shows the sky, or the room lit up at night.
         b.glass.color.copy(near ? glassNear : glassFar).lerp(glassLit, near ? 0 : dark * 0.85);

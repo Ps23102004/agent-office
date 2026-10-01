@@ -8,7 +8,7 @@
 
 import { GOLF_HOLE } from './layout.js';
 import { placeDressing, type Dressing } from './dressing.js';
-import { VENUES, venueWalls } from './venues.js';
+import { VENUES, VENUE_DOORS, venueWalls } from './venues.js';
 
 /** A block and the street beside it (m). */
 export const PERIOD = 56;
@@ -817,5 +817,15 @@ export function citySolids(x: number, z: number, reach: number): Area[] {
       }
     }
   }
+  return out;
+}
+
+/**
+ * What a vehicle bumps into near (x, z): citySolids, and the café's and the bar's doorways too
+ * (shared/venues.ts VENUE_DOORS), which people walk through but nothing on wheels does.
+ */
+export function vehicleSolids(x: number, z: number, reach: number): Area[] {
+  const out = citySolids(x, z, reach);
+  for (const d of VENUE_DOORS) if (d.maxX >= x - reach && d.minX <= x + reach && d.maxZ >= z - reach && d.minZ <= z + reach) out.push(d);
   return out;
 }

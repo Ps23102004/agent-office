@@ -1,5 +1,5 @@
 import { SPECS, DRIVE_STEP, seatOffset, carFits, carPoint, drive, impact, onPavement, overlaps, type Box, type CarPose, type CarSeat, type Pedals } from '../shared/garage';
-import { citySolids, shoreRespawns, surfaceAt } from '../shared/city';
+import { shoreRespawns, surfaceAt, vehicleSolids } from '../shared/city';
 import type { PlayerController } from './player';
 import type { Fleet } from './world/cars';
 
@@ -271,7 +271,7 @@ export class Driver {
     const kind = this.fleet.cars[car].def.kind;
     const spots = shoreRespawns(from.x, from.z);
     const cars = this.fleet.solids(car);
-    return spots.find((at) => carFits(at, [...cars, ...citySolids(at.x, at.z, 8), ...(this.hooks.traffic?.(at.x, at.z, 12) ?? [])], kind)) ?? spots[0];
+    return spots.find((at) => carFits(at, [...cars, ...vehicleSolids(at.x, at.z, 8), ...(this.hooks.traffic?.(at.x, at.z, 12) ?? [])], kind)) ?? spots[0];
   }
 
   /**
