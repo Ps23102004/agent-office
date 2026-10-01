@@ -28,6 +28,18 @@ interface Shown {
   update?: (dt: number, t: number) => void;
 }
 
+function kitRow(occupied: boolean): Shown {
+  const row = new THREE.Group();
+  (['sedan-sports', 'suv', 'police', 'taxi', 'race', 'race-future'] as const).forEach((kind, i) => {
+    const car = supercar(kind, ['#ef233c', '#2a9d8f', '#ffffff', '#ffc044', '#e63946', '#3a86ff'][i]);
+    car.top.visible = !occupied;
+    car.open.visible = occupied;
+    car.root.position.x = (i - 2.5) * 2.8;
+    row.add(car.root);
+  });
+  return { object: row };
+}
+
 /** Every prop, built the way the office builds it. Add yours here. */
 const SHOW: Record<string, () => Shown> = {
   jukebox: () => {
@@ -78,6 +90,9 @@ const SHOW: Record<string, () => Shown> = {
   },
   lambo: () => ({ object: supercar('lambo', '#ffd166').root }),
   ferrari: () => ({ object: supercar('ferrari', '#ef476f').root }),
+  // Kenney's drivable cars (cars.glb), side by side; `occupied` has their cabins off.
+  kitcars: () => kitRow(false),
+  occupied: () => kitRow(true),
 };
 
 const q = new URLSearchParams(location.search);

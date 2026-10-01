@@ -56,7 +56,7 @@ test('the crowd: every part paints, feet reach the ground, and a kid only ever w
 
 test('the whole crowd is one BatchedMesh (and its outline), only showing the people who are out', () => {
   const life = buildStreetLife();
-  const batched = life.group.children.filter((o) => (o as THREE.BatchedMesh).isBatchedMesh) as THREE.BatchedMesh[];
+  const batched = life.group.children.filter((o) => (o as THREE.BatchedMesh).isBatchedMesh && o.name.startsWith('crowd')) as THREE.BatchedMesh[];
   assert.equal(batched.length, 2);
   for (let i = 0; i < 30; i++) life.update(1000 + i / 30, 1 / 30, 0, { x: 0, z: STREET_Z }, [], 12);
   const out = life.people.filter((p) => p.on).length;

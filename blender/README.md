@@ -9,6 +9,7 @@ changing its script and running it again.
 | --- | --- |
 | `scripts/aokit.py` | The kit every script uses: shapes, one smooth skin, painted patches, rigs and clips, export, review renders |
 | `scripts/build_<name>.py` | One model (or a small set), exported as `src/client/models/<name>.glb` |
+| `scripts/build_cars.py` | Not Blender: plain Python (numpy, Pillow) turning Kenney's Car Kit into `src/client/models/cars.glb` (`python3 blender/scripts/build_cars.py <kenney_car-kit>`), read by `client/world/carkit.ts` |
 | `scripts/build_dog.py`, `scripts/dog_breeds.py` | The office dog in every breed (the presets are in `dog_breeds.py`), each exported as `src/client/models/dog-<breed>.glb` with the same bones, sockets, materials and clips |
 
 A helper only one model needs lives in that model's script. One that several need can join the kit, as a new

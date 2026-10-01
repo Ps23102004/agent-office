@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { tinyForShadow } from './toon';
+import carsUrl from '../models/cars.glb?url';
 import deskPropsUrl from '../models/desk_props.glb?url';
 import dogCorgiUrl from '../models/dog-corgi.glb?url';
 import dogDachshundUrl from '../models/dog-dachshund.glb?url';
@@ -22,6 +23,7 @@ import race_bannerTowerGreenUrl from '../models/race/bannerTowerGreen.glb?url';
 import race_lightPostLargeUrl from '../models/race/lightPostLarge.glb?url';
 import race_tentLongUrl from '../models/race/tentLong.glb?url';
 import { toon } from './toon';
+import { setCarKit } from './carkit';
 
 // The things in the world modelled in Blender rather than built in code. Each .glb is exported by a
 // script in blender/scripts/ (blender/README.md has the conventions they keep); add it here by name.
@@ -48,6 +50,8 @@ const MODELS = {
   'race/bannerTowerGreen': { url: race_bannerTowerGreenUrl, preload: false },
   'race/lightPostLarge': { url: race_lightPostLargeUrl, preload: false },
   'race/tentLong': { url: race_tentLongUrl, preload: false },
+  // The street's traffic and the garage's Kenney cars: Kenney's Car Kit (CC0), built by blender/scripts/build_cars.py.
+  cars: { url: carsUrl, preload: true },
 } satisfies Record<string, { url: string; preload: boolean }>;
 
 export type ModelName = keyof typeof MODELS;
@@ -127,6 +131,8 @@ export async function loadModel(name: ModelName): Promise<Model> {
 export async function preloadModels(): Promise<void> {
   const names = (Object.keys(MODELS) as ModelName[]).filter((name) => MODELS[name].preload);
   await Promise.all(names.map((name) => fetchModel(name).catch((err: unknown) => console.error(`${name}.glb didn't load`, err))));
+  const cars = loaded.get('cars');
+  if (cars) setCarKit(cars.scene);
 }
 
 /** A copy of a `preload` model (see preloadModels()), or null if it couldn't be loaded. */

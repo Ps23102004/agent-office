@@ -266,5 +266,8 @@ export const CIRCUIT_CARS: readonly CarDef[] = (
     ['lambo', '#06d6a0', 'Mint Lambo'],
     ['ferrari', '#8338ec', 'Violet Ferrari'],
     ['motorbike', '#118ab2', 'Teal Motorbike'],
+    ['race', '#e63946', 'Red Race Car'],
+    ['race-future', '#3a86ff', 'Blue Race Car'],
+    ['sedan-sports', '#ffbe0b', 'Yellow Sports Car'],
   ] as const
 ).map(([kind, color, name], i) => ({ kind, color, name, x: CENTER.x - 70 + i * 16, z: PADDOCK.minZ + 8, rotY: 0 }));

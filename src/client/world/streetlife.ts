@@ -7,12 +7,13 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { toonVertex } from './toon';
 import { CROWD, crowdMaterial, outlineMaterial, pickLook, type CrowdPart, type PedLook } from './crowd';
+import { kitMaterial, kitModel, type KitName } from './carkit';
 
 // The city's street life, down at ground level: traffic that keeps to its lane, turns at the corners and
 // waits at red lights, and people on the sidewalks who cross when the walk sign says so, stop to look in a
-// window or chat, and jump out of the way of a car. Everything is instanced (a mesh per kind of vehicle, a
-// draw call each; everyone on foot and their dogs one BatchedMesh, see crowd.ts) and moves by matrices, so
-// 40 vehicles and 80 people cost a dozen draw calls. Only what's near you (SPAWN_R) exists: what you drive away from is put down somewhere
+// window or chat, and jump out of the way of a car. Everything is batched (all the vehicles one BatchedMesh,
+// everyone on foot and their dogs another, see crowd.ts, each with its outline) and moves by matrices, so
+// 40 vehicles and 80 people cost a handful of draw calls. Only what's near you (SPAWN_R) exists: what you drive away from is put down somewhere
 // ahead of you. Everything is in city coordinates, the ones the streets of shared/city.ts are laid out in,
 // with the street at y = 0.
 
@@ -237,12 +238,12 @@ const TRIM = '#3a3d45';
 const box = (w: number, h: number, d: number, x: number, y: number, z: number, c = W): Part => [new THREE.BoxGeometry(w, h, d).translate(x, y, z), c];
 const ball = (r: number, x: number, y: number, z: number, c: string, sy = 1): Part => [new THREE.SphereGeometry(r, 10, 8).scale(1, sy, 1).translate(x, y, z), c];
 const tyre = (x: number, y: number, z: number, r: number, w: number): Part => [new THREE.CylinderGeometry(r, r, w, 10).rotateZ(Math.PI / 2).translate(x, y, z), TYRE];
-/** Four wheels (or the pairs given), the nose is +z. */
-const wheels = (halfW: number, zs: number[], r: number): Part[] => zs.flatMap((z) => [tyre(halfW, r, z, r, 0.26), tyre(-halfW, r, z, r, 0.26)]);
 /** A person in the saddle: shirt, skin, and a helmet or hat. */
 const rider = (y: number, z: number, shirt: string, hat: string): Part[] => [box(0.34, 0.5, 0.24, 0, y + 0.3, z, shirt), ball(0.16, 0, y + 0.78, z, '#f1c27d'), ball(0.18, 0, y + 0.84, z, hat, 0.7)];
 
-export type VKind = 'sedan' | 'taxi' | 'van' | 'bus' | 'truck' | 'moto' | 'bike';
+export type VKind =
+  | 'sedan' | 'hatch' | 'sports' | 'suv' | 'suvlux' | 'taxi' | 'police' | 'van' | 'truck' | 'tow' | 'pickup'
+  | 'bus' | 'garbage' | 'ambulance' | 'firetruck' | 'moto' | 'bike';
 
 interface Spec {
   len: number;
@@ -250,15 +251,21 @@ interface Spec {
   vmax: number;
   /** How many of the MAX_VEHICLES are this kind. */
   count: number;
-  /** Where its lights sit: height, and width of the strip. */
-  lamp: [y: number, w: number];
+  /** The colors it comes in (its paint is tinted to one); for a Kenney model with none given, the paint it came in. */
   paints: string[];
+  /** Its Kenney model (client/world/carkit.ts), if it has one. */
+  model?: KitName;
+  /** Built in code: the bus and the bikes, and any car while (or if) its model isn't in. No wheels, but a bike's. */
   parts: () => Part[];
+  /** A bus's wheels (built in code, it has no model): where, and how big. */
+  hubs?: [x: number, y: number, z: number][];
 }
 
-const CAR_PAINTS = ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#f4f1de', '#3d405b', '#e07a5f', '#8ecae6', '#9d4edd', '#ff8fab'];
+const CAR_PAINTS = ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#f4f1de', '#3d405b', '#e07a5f', '#8ecae6', '#9d4edd', '#ff8fab', '#d62828', '#8d99ae'];
 const PALE = ['#ffffff', '#f4f1de', '#ffd9a8', '#cfe8ff'];
+const SMART = ['#2b2d42', '#f4f1de', '#3d405b', '#8d99ae', '#6c757d', '#1d3557'];
 
+/** A car in code, in case its model never comes: a body and a cabin, nose to +z. */
 function sedan(taxi: boolean): Part[] {
   return [
     box(1.85, 0.62, 4.4, 0, 0.62, 0),
@@ -268,44 +275,122 @@ function sedan(taxi: boolean): Part[] {
     box(1.8, 0.2, 0.1, 0, 0.36, 2.2, TRIM),
     box(1.8, 0.2, 0.1, 0, 0.36, -2.2, TRIM),
     ...(taxi ? [box(0.6, 0.16, 0.3, 0, 1.62, -0.2, '#fff3a0')] : []),
-    ...wheels(0.92, [1.4, -1.4], 0.34),
   ];
 }
+const van = (): Part[] => [box(2, 1.55, 5, 0, 1.2, 0), box(2.04, 0.5, 1.3, 0, 1.65, 1.6, GLASS), box(2.04, 0.34, 3.2, 0, 1.75, -0.9, TRIM), box(1.9, 0.2, 0.1, 0, 0.42, 2.5, TRIM)];
+const lorry = (): Part[] => [box(2.2, 1.5, 1.9, 0, 1.15, 2.4, '#ff8a65'), box(2.24, 0.55, 0.8, 0, 1.65, 2.9, GLASS), box(2.3, 2.4, 4.6, 0, 1.85, -1.1), box(2.2, 0.2, 6.6, 0, 0.55, 0, TRIM)];
 
+// The street's mix: everyday cars mostly, a few vans and trucks, buses, bikes, and now and then a police
+// car, an ambulance or a fire engine (their lights flash).
 const SPECS: Record<VKind, Spec> = {
-  sedan: { len: 4.4, wid: 1.85, vmax: 13, count: 14, lamp: [0.65, 1.4], paints: CAR_PAINTS, parts: () => sedan(false) },
-  taxi: { len: 4.4, wid: 1.85, vmax: 14, count: 5, lamp: [0.65, 1.4], paints: ['#ffcf1f'], parts: () => sedan(true) },
-  van: {
-    len: 5,
-    wid: 2,
-    vmax: 11,
-    count: 5,
-    lamp: [0.8, 1.6],
-    paints: CAR_PAINTS,
-    parts: () => [box(2, 1.55, 5, 0, 1.2, 0), box(2.04, 0.5, 1.3, 0, 1.65, 1.6, GLASS), box(2.04, 0.34, 3.2, 0, 1.75, -0.9, TRIM), box(1.9, 0.2, 0.1, 0, 0.42, 2.5, TRIM), ...wheels(0.95, [1.6, -1.6], 0.38)],
-  },
+  sedan: { len: 4.35, wid: 2.03, vmax: 13, count: 7, paints: CAR_PAINTS, model: 'sedan', parts: () => sedan(false) },
+  hatch: { len: 4.85, wid: 1.76, vmax: 13, count: 3, paints: CAR_PAINTS, model: 'hatchback-sports', parts: () => sedan(false) },
+  sports: { len: 4.35, wid: 1.76, vmax: 15, count: 3, paints: ['#d62828', '#ffd166', '#06d6a0', '#118ab2', '#ff8fab', '#f4f1de'], model: 'sedan-sports', parts: () => sedan(false) },
+  suv: { len: 4.6, wid: 2.03, vmax: 13, count: 5, paints: CAR_PAINTS, model: 'suv', parts: () => sedan(false) },
+  suvlux: { len: 4.85, wid: 2.03, vmax: 13, count: 2, paints: SMART, model: 'suv-luxury', parts: () => sedan(false) },
+  taxi: { len: 4.7, wid: 2.03, vmax: 14, count: 4, paints: [], model: 'taxi', parts: () => sedan(true) },
+  police: { len: 5.3, wid: 2.03, vmax: 14, count: 1, paints: ['#ffffff'], model: 'police', parts: () => sedan(false) },
+  van: { len: 4.7, wid: 2.03, vmax: 11, count: 3, paints: CAR_PAINTS, model: 'van', parts: van },
+  truck: { len: 5.55, wid: 2.03, vmax: 10, count: 2, paints: PALE.concat(['#61cb8b', '#6794d9']), model: 'delivery', parts: lorry },
+  tow: { len: 5.55, wid: 2.03, vmax: 10, count: 1, paints: [], model: 'delivery-flat', parts: lorry },
+  pickup: { len: 5.05, wid: 2.03, vmax: 12, count: 2, paints: CAR_PAINTS, model: 'truck', parts: van },
   bus: {
     len: 10,
     wid: 2.5,
     vmax: 10,
-    count: 3,
-    lamp: [0.9, 2],
+    count: 2,
     paints: ['#ffb703', '#e63946', '#2a9d8f', '#4361ee'],
-    parts: () => [box(2.5, 2.6, 10, 0, 1.7, 0), box(2.54, 0.9, 9.4, 0, 2.15, 0, GLASS), box(2.3, 0.3, 9.6, 0, 3.05, 0, W), box(1.6, 0.25, 3, 0, 3.15, -1, TRIM), box(2.6, 0.3, 0.1, 0, 0.55, 5, TRIM), ...wheels(1.15, [3.4, -3], 0.5)],
+    parts: () => [box(2.5, 2.6, 10, 0, 1.7, 0), box(2.54, 0.9, 9.4, 0, 2.15, 0, GLASS), box(2.3, 0.3, 9.6, 0, 3.05, 0, W), box(1.6, 0.25, 3, 0, 3.15, -1, TRIM), box(2.6, 0.3, 0.1, 0, 0.55, 5, TRIM), box(2.2, 0.5, 0.06, 0, 2.95, 5.01, '#1b1b1f')],
+    hubs: [[1.0, 0.5, 3.4], [-1.0, 0.5, 3.4], [1.0, 0.5, -3], [-1.0, 0.5, -3]],
   },
-  truck: {
-    len: 6.8,
-    wid: 2.3,
-    vmax: 10,
-    count: 3,
-    lamp: [0.8, 1.8],
-    paints: PALE,
-    parts: () => [box(2.2, 1.5, 1.9, 0, 1.15, 2.4, '#ff8a65'), box(2.24, 0.55, 0.8, 0, 1.65, 2.9, GLASS), box(2.3, 2.4, 4.6, 0, 1.85, -1.1), box(2.2, 0.2, 6.6, 0, 0.55, 0, TRIM), ...wheels(1.05, [2.5, -0.9, -2.3], 0.45)],
-  },
-  moto: { len: 2, wid: 0.7, vmax: 14, count: 4, lamp: [0.75, 0.3], paints: ['#ffffff', '#ffe9c9', '#d9f0ff', '#ffd6e0'], parts: () => [box(0.28, 0.36, 1.1, 0, 0.7, 0.1), tyre(0, 0.32, 0.7, 0.32, 0.12), tyre(0, 0.32, -0.7, 0.32, 0.12), box(0.1, 0.5, 0.1, 0, 0.75, 0.75, TRIM), ...rider(0.7, -0.1, '#e9c46a', '#e63946')] },
-  bike: { len: 1.8, wid: 0.6, vmax: 5, count: 6, lamp: [0.8, 0.2], paints: ['#ffffff', '#ffe9c9', '#d9f0ff', '#ffd6e0'], parts: () => [box(0.06, 0.06, 0.9, 0, 0.62, 0), tyre(0, 0.34, 0.55, 0.34, 0.05), tyre(0, 0.34, -0.55, 0.34, 0.05), box(0.4, 0.05, 0.05, 0, 1.0, 0.45, TRIM), ...rider(0.55, -0.15, '#4361ee', '#ffd166')] },
+  garbage: { len: 5.9, wid: 2.16, vmax: 9, count: 1, paints: [], model: 'garbage-truck', parts: lorry },
+  ambulance: { len: 5.55, wid: 2.03, vmax: 14, count: 1, paints: [], model: 'ambulance', parts: van },
+  firetruck: { len: 5.8, wid: 2.03, vmax: 12, count: 1, paints: [], model: 'firetruck', parts: lorry },
+  moto: { len: 2, wid: 0.7, vmax: 14, count: 3, paints: ['#ffffff', '#ffe9c9', '#d9f0ff', '#ffd6e0'], parts: () => [box(0.28, 0.36, 1.1, 0, 0.7, 0.1), tyre(0, 0.32, 0.7, 0.32, 0.12), tyre(0, 0.32, -0.7, 0.32, 0.12), box(0.1, 0.5, 0.1, 0, 0.75, 0.75, TRIM), ...rider(0.7, -0.1, '#e9c46a', '#e63946')] },
+  bike: { len: 1.8, wid: 0.6, vmax: 5, count: 3, paints: ['#ffffff', '#ffe9c9', '#d9f0ff', '#ffd6e0'], parts: () => [box(0.06, 0.06, 0.9, 0, 0.62, 0), tyre(0, 0.34, 0.55, 0.34, 0.05), tyre(0, 0.34, -0.55, 0.34, 0.05), box(0.4, 0.05, 0.05, 0, 1.0, 0.45, TRIM), ...rider(0.55, -0.15, '#4361ee', '#ffd166')] },
 };
 const KINDS = Object.keys(SPECS) as VKind[];
+
+type V3 = readonly number[];
+/** How a kind is drawn: what keeps its colors, what's tinted its paint, its wheels and its lights. */
+interface Look {
+  body: THREE.BufferGeometry | null;
+  paint: THREE.BufferGeometry | null;
+  wheel: THREE.BufferGeometry | null;
+  hubs: V3[];
+  radius: number;
+  /** Front axle to back (for how far the front wheels steer). */
+  wheelbase: number;
+  head: V3[];
+  tail: V3[];
+  beacons: { at: V3; color: 'red' | 'blue' }[];
+  /** The paints it comes in. */
+  paints: string[];
+}
+
+const codeWheels = new Map<number, THREE.BufferGeometry>();
+/** A wheel in code (hub facing -x), for the bus, and for every car if the models aren't in. */
+function wheelInCode(r: number): THREE.BufferGeometry {
+  let g = codeWheels.get(r);
+  if (!g) {
+    g = merged([[new THREE.CylinderGeometry(r, r, 0.3, 18).rotateZ(Math.PI / 2).translate(-0.15, 0, 0), TYRE], [new THREE.CylinderGeometry(r * 0.55, r * 0.55, 0.32, 10).rotateZ(Math.PI / 2).translate(-0.16, 0, 0), '#c8ccd6']]);
+    g.setIndex([...Array(g.attributes.position.count).keys()]);
+    codeWheels.set(r, g);
+  }
+  return g;
+}
+
+let hullMat: THREE.MeshBasicMaterial | null = null;
+/** The traffic's outline, as the page's OutlineEffect draws everyone else's: dark, its back faces pushed out a few pixels along their normals. */
+function trafficOutline(): THREE.MeshBasicMaterial {
+  if (hullMat) return hullMat;
+  hullMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(0.17, 0.18, 0.26), side: THREE.BackSide });
+  hullMat.userData.outlineParameters = { visible: false };
+  hullMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      `#include <project_vertex>
+      #ifdef USE_BATCHING
+        vec4 outward = projectionMatrix * modelViewMatrix * batchingMatrix * vec4(transformed + normal, 1.0);
+        gl_Position += normalize(outward - gl_Position) * 0.0032 * gl_Position.w;
+      #endif`,
+    );
+  };
+  return hullMat;
+}
+
+/** A kind's look: its Kenney model if that's in, else what's built in code (the bus's wheels included). */
+function lookOf(k: VKind): Look {
+  const look = lookIn(k);
+  const zs = look.hubs.map((h) => h[2]);
+  return { ...look, wheelbase: zs.length ? Math.max(...zs) - Math.min(...zs) : 1 };
+}
+
+function lookIn(k: VKind): Omit<Look, 'wheelbase'> {
+  const spec = SPECS[k];
+  const m = spec.model ? kitModel(spec.model) : null;
+  if (m) {
+    // One with no paint (the police car's black and white) is all "paint", tinted white.
+    return { body: m.paint ? m.body : null, paint: m.paint ?? m.body, wheel: m.wheel, hubs: m.hubs.map((h) => [h.x, h.y, h.z]), radius: m.radius, head: m.head, tail: m.tail, beacons: m.beacons, paints: spec.paints.length || !m.paintColor ? spec.paints : [m.paintColor] };
+  }
+  const paint = merged(spec.parts());
+  paint.setIndex([...Array(paint.attributes.position.count).keys()]);
+  const bike = spec.wid < 1;
+  const r = spec.hubs?.[0][1] ?? 0.36;
+  const hx = spec.wid / 2 - 0.2, hz = spec.len / 2 - 0.9;
+  const ends = (z: number, y: number): V3[] => (bike ? [[0, y, z]] : [[spec.wid / 2 - 0.3, y, z], [-(spec.wid / 2 - 0.3), y, z]]);
+  return {
+    body: null,
+    paint,
+    wheel: bike ? null : wheelInCode(r),
+    hubs: bike ? [] : spec.hubs ?? [[hx, r, hz], [-hx, r, hz], [hx, r, -hz], [-hx, r, -hz]],
+    radius: r,
+    head: ends(spec.len / 2 + 0.02, bike ? 0.9 : 0.65),
+    tail: ends(-spec.len / 2 - 0.02, bike ? 0.75 : 0.65),
+    beacons: [],
+    paints: spec.paints.length ? spec.paints : ['#ffcf1f'],
+  };
+}
 
 const SHIRTS = ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#f4f1de', '#e07a5f', '#9d4edd', '#8ecae6', '#ff8fab', '#3d405b'];
 const PANTS = ['#3d405b', '#264653', '#5c4a3a', '#1d3557', '#6d6875', '#4a4e69'];
@@ -903,33 +988,75 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   const group = new THREE.Group();
   const mat = toonVertex();
 
-  // Vehicles: a mesh per kind, its instances being the slots that are that kind.
+  // Vehicles: every kind's body, paint and wheels in one batch (a single draw call), each car a few
+  // instances of it: its body, its paint (tinted), and a wheel at each hub. Kenney's models when they're in.
   const vehicles: Vehicle[] = [];
-  const meshes = {} as Record<VKind, THREE.InstancedMesh>;
-  for (const k of KINDS) {
-    const m = new THREE.InstancedMesh(merged(SPECS[k].parts()), mat, SPECS[k].count);
-    m.frustumCulled = false;
-    m.castShadow = false;
-    group.add((meshes[k] = m));
+  const vlooks = Object.fromEntries(KINDS.map((k) => [k, lookOf(k)])) as Record<VKind, Look>;
+  const vgeos = new Set<THREE.BufferGeometry>();
+  for (const k of KINDS) for (const g of [vlooks[k].body, vlooks[k].paint, vlooks[k].wheel]) if (g) vgeos.add(g);
+  let vverts = 0;
+  let indices = 0;
+  for (const g of vgeos) {
+    vverts += g.attributes.position.count;
+    indices += g.index!.count;
   }
-  const filled = {} as Record<VKind, number>;
-  for (const k of KINDS) filled[k] = 0;
+  const instances = KINDS.reduce((n, k) => n + SPECS[k].count * (Number(!!vlooks[k].body) + 1 + (vlooks[k].wheel ? vlooks[k].hubs.length : 0)), 0);
+  // The page's OutlineEffect can't draw a batch's outline: a second batch, the same cars a touch bigger
+  // and dark, inside out, draws it instead (two draw calls for all the traffic).
+  const batchMat = (kitModel('sedan') ? kitMaterial() : mat).clone();
+  batchMat.userData.outlineParameters = { visible: false };
+  const batch = new THREE.BatchedMesh(instances, vverts, indices, batchMat);
+  const vhull = new THREE.BatchedMesh(instances, vverts, indices, trafficOutline());
+  batch.name = 'traffic';
+  vhull.name = 'traffic outline';
+  for (const b of [batch, vhull]) {
+    b.frustumCulled = false;
+    b.castShadow = false;
+    group.add(b);
+  }
+  const both = [batch, vhull];
+  const geoId = new Map<THREE.BufferGeometry, number>();
+  for (const g of vgeos) {
+    geoId.set(g, batch.addGeometry(g));
+    vhull.addGeometry(g);
+  }
+  /** Each car's instances in the batch: body (or -1), paint, and its wheels. */
+  const vparts: { body: number; paint: number; wheels: number[] }[] = [];
+  const white = new THREE.Color('#ffffff');
+  const add = (g: THREE.BufferGeometry) => {
+    const id = batch.addInstance(geoId.get(g)!);
+    // (Added in the same order, an instance has the same id in both.)
+    vhull.addInstance(geoId.get(g)!);
+    for (const b of both) b.setVisibleAt(id, false);
+    batch.setColorAt(id, white);
+    return id;
+  };
   for (const k of KINDS) {
+    const look = vlooks[k];
     for (let i = 0; i < SPECS[k].count; i++) {
       const id = vehicles.length;
       const r = rng(9000 + id);
-      const paint = SPECS[k].paints[Math.floor(r() * SPECS[k].paints.length)];
-      meshes[k].setColorAt(i, new THREE.Color(paint));
+      const paint = look.paints[Math.floor(r() * look.paints.length)];
+      vparts.push({ body: look.body ? add(look.body) : -1, paint: add(look.paint!), wheels: look.wheel ? look.hubs.map(() => add(look.wheel!)) : [] });
+      batch.setColorAt(vparts[id].paint, new THREE.Color(paint));
       vehicles.push({ id, kind: k, paint, on: false, v: 0, axis: 'x', dir: 1, line: 0, s: 0, path: null, plan: null, braking: false, hold: 0, stuck: 0, seed: id * 7919 + 13, slot: i, gj: -1, S: 0, acc: 0, pitch: 0, roll: 0, x: 0, z: 0, yaw: 0, len: SPECS[k].len, wid: SPECS[k].wid });
     }
   }
-  // Their lights, all in one mesh: a head strip and a tail strip each.
+  /** How far each car's wheels have turned (rad), and how far its front ones are steered, eased. */
+  const spun = vehicles.map(() => 0);
+  const steered = vehicles.map(() => 0);
+  const lastYaw = vehicles.map(() => 0);
+  // Their lights, all in one mesh: two head, two tail and two on the roof (an emergency vehicle's) each.
+  const LAMPS = 6;
   const lampMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-  const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), lampMat, MAX_VEHICLES * 2);
+  const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), lampMat, MAX_VEHICLES * LAMPS);
   lamps.frustumCulled = false;
   group.add(lamps);
   const HEAD = new THREE.Color('#fff3c4');
   const TAIL = new THREE.Color();
+  const RED = new THREE.Color('#ff2030');
+  const BLUE = new THREE.Color('#2f6bff');
+  const DIM = new THREE.Color('#30343f');
 
   // People, and the dogs some of them walk: every part of everyone (see crowd.ts) is one BatchedMesh,
   // a single draw call, and their outline another. Each person has SLOTS instances, posed by their
@@ -946,6 +1073,8 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     group.add(b);
     return b;
   });
+  crowd.name = 'crowd';
+  hull.name = 'crowd outline';
   const batches = [crowd, hull];
   /** How each of them is put together (by id). */
   const looks: PedLook[] = [];
@@ -1024,9 +1153,9 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       return false;
     }
     // Its paint is the ghost's, the same on every page.
-    const paints = SPECS[v.kind].paints;
+    const paints = vlooks[v.kind].paints;
     v.paint = paints[Math.floor(roll(g.j, 77) * paints.length)];
-    meshes[v.kind].setColorAt(v.slot, tmpColor.set(v.paint));
+    batch.setColorAt(vparts[v.id].paint, tmpColor.set(v.paint));
     Object.assign(v, { v: g.speed, path: null, plan: null, hold: 0, stuck: 0, braking: false, gj: g.j, S, acc: 0, pitch: 0, roll: 0 });
     return true;
   }
@@ -1418,23 +1547,54 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   let started = false;
   let clock = 0;
 
-  function writeVehicle(v: Vehicle) {
-    const m = meshes[v.kind];
-    const hi = v.id * 2;
+  const Q = new THREE.Matrix4();
+  /** Car `v` where it is: its body pitched and rolled about its axles' height, the wheels on the road, turning (and the front ones steering). */
+  function writeVehicle(v: Vehicle, dt: number) {
+    const ids = vparts[v.id];
+    const base = v.id * LAMPS;
+    for (const id of [ids.body, ids.paint, ...ids.wheels]) if (id >= 0) for (const b of both) b.setVisibleAt(id, v.on);
     if (!v.on) {
-      m.setMatrixAt(v.slot, ZERO);
-      lamps.setMatrixAt(hi, ZERO);
-      lamps.setMatrixAt(hi + 1, ZERO);
+      for (let i = 0; i < LAMPS; i++) lamps.setMatrixAt(base + i, ZERO);
+      lastYaw[v.id] = v.yaw;
       return;
     }
-    q.setFromAxisAngle(UP, v.yaw).multiply(qt.setFromAxisAngle(RIGHT, v.pitch)).multiply(new THREE.Quaternion().setFromAxisAngle(FWD, v.roll));
-    P.compose(pos.set(v.x, 0, v.z), q, sc.set(1, 1, 1));
-    m.setMatrixAt(v.slot, P);
-    const [ly, lw] = SPECS[v.kind].lamp;
-    for (const e of [1, -1]) {
-      T.makeScale(lw, 0.16, 0.1).setPosition(0, ly, (e * (v.len + 0.02)) / 2);
-      lamps.setMatrixAt(hi + (e > 0 ? 0 : 1), M.multiplyMatrices(P, T));
+    const look = vlooks[v.kind];
+    const h = look.radius;
+    // Body: about the hubs' height, so its springs don't lift the wheels off the road.
+    q.setFromAxisAngle(RIGHT, v.pitch).multiply(qt.setFromAxisAngle(FWD, v.roll));
+    Q.makeRotationFromQuaternion(q);
+    P.makeRotationY(v.yaw).setPosition(v.x, 0, v.z);
+    M.multiplyMatrices(P, T.makeTranslation(0, h, 0)).multiply(Q).multiply(T.makeTranslation(0, -h, 0));
+    for (const b of both) {
+      if (ids.body >= 0) b.setMatrixAt(ids.body, M);
+      b.setMatrixAt(ids.paint, M);
     }
+    // Wheels: rolled as far as it's gone; the front ones turned by how fast it's turning.
+    const turn = dt > 0 ? wrap(v.yaw - lastYaw[v.id]) / dt : 0;
+    lastYaw[v.id] = v.yaw;
+    const want = v.v > 0.5 ? clamp(Math.atan((turn * look.wheelbase) / v.v), -0.5, 0.5) : steered[v.id];
+    steered[v.id] += (want - steered[v.id]) * Math.min(1, dt * 8);
+    spun[v.id] = (spun[v.id] + (v.v * dt) / h) % (Math.PI * 2);
+    ids.wheels.forEach((id, i) => {
+      const [x, y, z] = look.hubs[i];
+      const left = x > 0;
+      q.setFromAxisAngle(UP, (z > 0 ? steered[v.id] : 0) + (left ? Math.PI : 0)).multiply(qt.setFromAxisAngle(RIGHT, left ? -spun[v.id] : spun[v.id]));
+      T.compose(pos.set(x, y, z), q, sc.set(1, 1, 1));
+      R.multiplyMatrices(P, T);
+      for (const b of both) b.setMatrixAt(id, R);
+    });
+    // Lights, on the body.
+    const lamp = (i: number, at: V3 | undefined, w: number, hgt: number, d: number) => {
+      if (!at) return lamps.setMatrixAt(base + i, ZERO);
+      T.makeScale(w, hgt, d).setPosition(at[0], at[1], at[2]);
+      lamps.setMatrixAt(base + i, R.multiplyMatrices(M, T));
+    };
+    lamp(0, look.head[0], 0.36, 0.15, 0.08);
+    lamp(1, look.head[1], 0.36, 0.15, 0.08);
+    lamp(2, look.tail[0], 0.32, 0.13, 0.08);
+    lamp(3, look.tail[1], 0.32, 0.13, 0.08);
+    lamp(4, look.beacons[0]?.at, 0.24, 0.16, 0.22);
+    lamp(5, look.beacons[1]?.at, 0.24, 0.16, 0.22);
   }
 
   const smooth = (x: number) => x * x * (3 - 2 * x);
@@ -1562,13 +1722,20 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
           if (step > 0) stepPerson(p, step, t, cars, near);
         }
       }
-      for (const v of vehicles) writeVehicle(v);
+      for (const v of vehicles) writeVehicle(v, dt);
+      // Emergency lights take turns, red and blue (or one then the other).
+      const flash = Math.floor(t * 4) % 2;
       for (const v of vehicles) {
-        lamps.setColorAt(v.id * 2, HEAD);
-        lamps.setColorAt(v.id * 2 + 1, TAIL.set(v.braking ? '#ff3030' : night > 0.3 ? '#c81e1e' : '#8a2a2a'));
+        const i = v.id * LAMPS;
+        TAIL.set(v.braking ? '#ff3030' : night > 0.3 ? '#c81e1e' : '#8a2a2a');
+        lamps.setColorAt(i, HEAD);
+        lamps.setColorAt(i + 1, HEAD);
+        lamps.setColorAt(i + 2, TAIL);
+        lamps.setColorAt(i + 3, TAIL);
+        vlooks[v.kind].beacons.forEach((b, k) => lamps.setColorAt(i + 4 + k, k === flash ? (b.color === 'red' ? RED : BLUE) : DIM));
       }
       for (const p of people) writePerson(p);
-      for (const m of [...KINDS.map((k) => meshes[k]), lamps]) {
+      for (const m of [lamps]) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       }
