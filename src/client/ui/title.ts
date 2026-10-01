@@ -38,6 +38,16 @@ export function skipTitle(search: string, storage: Pick<Storage, 'getItem' | 're
 /** Set in sessionStorage just before the page reloads itself into a new version, so you go straight back in. */
 export const RELOADED_KEY = 'agent-office.reloaded';
 
+/** Reloads the page (into a new version of the office) straight back in, past the title. */
+export function reloadPastTitle() {
+  try {
+    sessionStorage.setItem(RELOADED_KEY, '1');
+  } catch {
+    // no storage: the title shows again
+  }
+  location.reload();
+}
+
 /**
  * The flight round the island, street coordinates (y above the street): where the camera is and what it
  * looks at. Down the main road past the tower, between the café and the bar, up the street by the race
@@ -100,8 +110,9 @@ const CONTROLS: Record<Mode, [keys: string[], what: string][]> = {
     [['W', 'S'], 'Gas and brake'],
     [['A', 'D'], 'Steer'],
     [['Space'], 'Handbrake'],
-    [['Shift'], 'Boost'],
-    [['Q'], 'Change camera'],
+    [['Shift'], 'Boost (with the gas)'],
+    [['Z'], 'Change camera'],
+    [['X'], 'Look back'],
     [['H'], 'Honk'],
     [['M'], 'Map'],
     [['R'], 'Race'],
@@ -112,8 +123,9 @@ const CONTROLS: Record<Mode, [keys: string[], what: string][]> = {
     [['W', 'S'], 'Gas and brake'],
     [['A', 'D'], 'Steer'],
     [['Space'], 'Handbrake round the hairpins'],
-    [['Shift'], 'Boost'],
-    [['Q'], 'Change camera'],
+    [['Shift'], 'Boost (with the gas)'],
+    [['Z'], 'Change camera'],
+    [['X'], 'Look back'],
   ],
   Arena: [
     [['W', 'A', 'S', 'D'], 'Move'],
@@ -163,7 +175,13 @@ export class TitleScreen {
   private look = new THREE.Vector3();
   private q = new THREE.Quaternion();
   private m = new THREE.Matrix4();
+  /** Where the player put the camera this frame, while blending to it. */
+  private toAt = new THREE.Vector3();
+  private toQ = new THREE.Quaternion();
   private still: boolean;
+  /** Settings was opened from here: focus comes back to it when it closes. */
+  private inSettings = false;
+  private stopHearing: () => void;
 
   constructor(
     private hooks: TitleHooks,
@@ -182,12 +200,15 @@ export class TitleScreen {
       { 'aria-label': 'Title', hidden: true },
       button('Play', () => this.play()),
       button('Controls', () => this.controls(true)),
-      button('Settings', () => this.hooks.settings()),
+      button('Settings', () => {
+        this.inSettings = true;
+        this.hooks.settings();
+      }),
     );
     this.sheet = this.buildControls();
     this.el = h(
       'section.title',
-      { 'aria-label': 'Agent Office', 'data-stage': 'press' },
+      { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Agent Office', 'data-stage': 'press' },
       h('div.title-sky', { 'aria-hidden': 'true' }, h('span.title-moon'), ...[0, 1, 2, 3].map((i) => h('span.title-bat', { style: `--b:${i}` }, svgBat())), h('span.title-snow')),
       h('div.title-main', {}, this.logo, this.tag, this.menu),
       h('p.title-press', { role: 'status' }, h('span', {}, 'Press any key')),
@@ -199,8 +220,10 @@ export class TitleScreen {
     window.addEventListener('keydown', this.onKey, true);
     this.el.addEventListener('pointerdown', this.onPointer);
     // Back from Settings: on Settings again, to carry on from where you were.
-    onModalChange((open) => {
-      if (!open && this.stage === 'menu' && this.sheet.hidden) (this.menu.children[2] as HTMLElement).focus();
+    this.stopHearing = onModalChange((open) => {
+      if (open || modalOpen() || !this.inSettings) return;
+      this.inSettings = false;
+      if (this.stage === 'menu' && this.sheet.hidden) (this.menu.children[2] as HTMLElement).focus();
     });
   }
 
@@ -228,8 +251,10 @@ export class TitleScreen {
     const k = this.still ? 1 : Math.min(1, this.leftFor / BLEND_S);
     const e = k * k * (3 - 2 * k);
     // The player's pose, as it put the camera this frame, is where this blends to.
-    camera.position.lerpVectors(this.at, camera.position, e);
-    camera.quaternion.slerpQuaternions(this.q, camera.quaternion, e);
+    this.toAt.copy(camera.position);
+    this.toQ.copy(camera.quaternion);
+    camera.position.lerpVectors(this.at, this.toAt, e);
+    camera.quaternion.slerpQuaternions(this.q, this.toQ, e);
     if (k < 1) return;
     this.active = false;
     this.hooks.fade(false);
@@ -238,10 +263,15 @@ export class TitleScreen {
 
   private buildControls(): HTMLElement {
     const modes = Object.keys(CONTROLS) as Mode[];
-    const list = h('dl.title-keys');
-    const tabs = modes.map((mode) => h('button.title-tab', { type: 'button', role: 'tab', 'aria-selected': 'false', onclick: () => show(mode) }, mode));
+    const list = h('dl.title-keys', { id: 'title-keys', role: 'tabpanel' });
+    const tabs = modes.map((mode) => h('button.title-tab', { type: 'button', role: 'tab', id: `title-tab-${mode}`, 'aria-controls': 'title-keys', 'aria-selected': 'false', tabindex: -1, onclick: () => show(mode) }, mode));
     const show = (mode: Mode) => {
-      tabs.forEach((t, i) => t.setAttribute('aria-selected', String(modes[i] === mode)));
+      // Roving: only the chosen tab is in the Tab order; the arrows move between them.
+      tabs.forEach((t, i) => {
+        t.setAttribute('aria-selected', String(modes[i] === mode));
+        t.tabIndex = modes[i] === mode ? 0 : -1;
+      });
+      list.setAttribute('aria-labelledby', `title-tab-${mode}`);
       list.replaceChildren(...CONTROLS[mode].flatMap(([keys, what]) => [h('dt', {}, ...keys.map((k) => h('kbd', {}, k))), h('dd', {}, what)]));
     };
     show('Walking');
@@ -274,6 +304,7 @@ export class TitleScreen {
     this.stage = 'leaving';
     this.el.dataset.stage = 'leaving';
     window.removeEventListener('keydown', this.onKey, true);
+    this.stopHearing();
     document.body.classList.remove('title-up');
     const gone = () => this.el.remove();
     if (this.still) gone();
@@ -285,10 +316,16 @@ export class TitleScreen {
 
   /** The title's keys, before the game's: nothing reaches the office behind it while it's up. */
   private onKey = (e: KeyboardEvent) => {
-    // Settings open over it, or still loading: those have the keys.
-    if (modalOpen() || document.getElementById('loading')) return;
+    // Settings open over it: that has the keys.
+    if (modalOpen()) return;
     e.stopPropagation();
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // Still loading, a browser shortcut or a function key (F5, F11): nothing for the title to do.
+    if (document.getElementById('loading') || e.metaKey || e.ctrlKey || e.altKey || /^F\d+$/.test(e.key)) return;
+    // A held key repeating: not a second choice.
+    if (e.repeat) {
+      e.preventDefault();
+      return;
+    }
     if (this.stage === 'press') {
       if (!['Shift', 'Tab', 'CapsLock'].includes(e.key)) {
         e.preventDefault();

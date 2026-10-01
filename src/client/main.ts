@@ -3129,7 +3129,7 @@ function paletteEntries(): PaletteEntry[] {
 window.addEventListener('keydown', (e) => {
   if (!isPaletteKey(e, IS_MAC)) return;
   const inPalette = paletteOpen() && !!(e.target as HTMLElement | null)?.closest?.('.modal.palette');
-  if (!inPalette && (isTyping(e) || telescope.active)) return;
+  if (!inPalette && (isTyping(e) || telescope.active || title?.active)) return;
   e.preventDefault();
   if (!e.repeat) togglePalette(paletteEntries);
 });
@@ -4436,6 +4436,8 @@ function use(it: Interactable | null, key: DeskKey, note = aimedNote): boolean {
 
 // ---- Input ----------------------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
+  // The title has the keys, and none for the office until the camera's back with you after Play.
+  if (title?.active) return;
   if (telescope.active) {
     if (e.code === 'Escape' || e.code === 'KeyE' || e.code === 'KeyF') telescope.exit();
     e.preventDefault();
@@ -5139,6 +5141,8 @@ function frame(ts?: number) {
   }
   if (title?.active) player.enabled = false;
   player.update(dt);
+  // Where the player's camera goes, all at once: the title blends to it, not to a step toward it from the flight.
+  if (title?.active) player.updateCamera(true);
   // A car coming at you where you stand: out of its way, with a thump if it was going.
   if ((inOffice() || atCircuit) && !driver.active && !upTop && !trip) {
     const hit = fleet().shove(player.pos, null);
