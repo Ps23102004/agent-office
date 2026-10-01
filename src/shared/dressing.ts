@@ -5,7 +5,7 @@
 // What it needs of the city it gets by being handed `clear`, which says whether a disc of radius r at
 // (x, z) has nothing solid in it yet (city.ts passes one over what it has put in its hash so far).
 
-import { PERIOD, PIER, RACE_PLAZA, STREET_X, STREET_Z, cityLayout, cityStreetscape, coastAt, keepClear, rng, surfaceAt, type Area } from './city.js';
+import { PERIOD, ROAD_W, WALK, PIER, RACE_PLAZA, STREET_X, STREET_Z, cityLayout, cityStreetscape, coastAt, keepClear, rng, surfaceAt, type Area } from './city.js';
 
 /** Dressing is placed this far from the middle (m); past it the haze has it. */
 export const DRESS_RADIUS = 170;
@@ -51,6 +51,10 @@ export function placeDressing(clear: (x: number, z: number, r: number) => boolea
   const birds: Bird[] = [];
   const inPlaza = (x: number, z: number) => x > RACE_PLAZA.minX - 1 && x < RACE_PLAZA.maxX + 1 && z > RACE_PLAZA.minZ - 1 && z < RACE_PLAZA.maxZ + 1;
   const ok = (x: number, z: number, r: number) => !keepClear(x, z) && Math.hypot(x, z) < DRESS_RADIUS && clear(x, z, r);
+  const cone = (x: number, z: number, rot: number) => {
+    items.push({ kind: 'cone', x, z, rot, v: 0 });
+    solids.push({ area: disc(x, z, 0.2), h: 0.3 });
+  };
   const put = (kind: DressKind, x: number, z: number, rot: number, v = 0, solid = 0) => {
     items.push({ kind, x, z, rot, v });
     if (solid) solids.push({ area: disc(x, z, solid) });
@@ -78,9 +82,11 @@ export function placeDressing(clear: (x: number, z: number, r: number) => boolea
       const bx = it.x + sx * (alongX ? 12 : 5.4);
       const bz = it.z + sz * (alongX ? 5.4 : 12);
       if (ok(bx, bz, 1.2) && ok(x, z, 0.5)) {
-        put('barrier', bx, bz, alongX ? 0 : Math.PI / 2);
-        for (const o of [-1.4, 1.4]) put('cone', bx + (alongX ? o : 0), bz + (alongX ? 0 : o), r() * 6.28);
-        put('cone', bx + (alongX ? 0 : -sx * 0.9), bz + (alongX ? -sz * 0.9 : 0), r() * 6.28);
+        // The barrier's long side (its model's z) runs along the kerb; low enough to hop, like the cones.
+        put('barrier', bx, bz, alongX ? Math.PI / 2 : 0);
+        solids.push({ area: { minX: bx - (alongX ? 0.9 : 0.55), maxX: bx + (alongX ? 0.9 : 0.55), minZ: bz - (alongX ? 0.55 : 0.9), maxZ: bz + (alongX ? 0.55 : 0.9) }, h: 0.5 });
+        for (const o of [-1.4, 1.4]) cone(bx + (alongX ? o : 0), bz + (alongX ? 0 : o), r() * 6.28);
+        cone(bx + (alongX ? 0 : -sx * 0.9), bz + (alongX ? -sz * 0.9 : 0), r() * 6.28);
       }
     }
   }
@@ -92,16 +98,22 @@ export function placeDressing(clear: (x: number, z: number, r: number) => boolea
     if (r() > 0.6) continue;
     const off = (r() - 0.5) * l.w * 0.5;
     let x: number, z: number;
+    // The street it faces, if it's right there (a front on the block's inside has no street by it); the parasol stands on the road side of the sidewalk's middle, clear of where people walk (streetlife LAT).
+    const near = ROAD_W / 2 + WALK + 5; // fronts on a street stand 7 to 10 m from its middle; ones on the block's inside, 23 and more
     if (l.fz) {
       const dz = l.z + l.fz * (l.d / 2 + 0.15);
-      z = STREET_Z + PERIOD * Math.round((dz - STREET_Z) / PERIOD) - l.fz * 5.7;
+      const street = STREET_Z + PERIOD * Math.round((dz - STREET_Z) / PERIOD);
+      if (Math.abs(dz - street) > near) continue;
+      z = street - l.fz * 4.9;
       x = l.x + off;
     } else {
       const dx = l.x + l.fx * (l.w / 2 + 0.15);
-      x = STREET_X + PERIOD * Math.round((dx - STREET_X) / PERIOD) - l.fx * 5.7;
+      const street = STREET_X + PERIOD * Math.round((dx - STREET_X) / PERIOD);
+      if (Math.abs(dx - street) > near) continue;
+      x = street - l.fx * 4.9;
       z = l.z + off;
     }
-    if (ok(x, z, 1.2)) put('parasol', x, z, r() * 6.28, r() < 0.5 ? 0 : 1, 0.35);
+    if (!inPlaza(x, z) && ok(x, z, 1.2)) put('parasol', x, z, r() * 6.28, r() < 0.5 ? 0 : 1, 0.35);
   }
 
   // Flags: a pole in each park's corner, at the corners of the race plaza, and at the end of the pier.

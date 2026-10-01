@@ -776,8 +776,14 @@ function solids(): Map<number, Area[]> {
   }
   // Signs, parasols, flagpoles: placed against what's above, and their poles are solid too.
   index = map;
-  dressed = placeDressing((x, z, r) => !citySolids(x, z, r).some((a) => x + r > a.minX && x - r < a.maxX && z + r > a.minZ && z - r < a.maxZ));
-  for (const d of dressed.solids) add(d.area, d.h);
+  try {
+    dressed = placeDressing((x, z, r) => !citySolids(x, z, r).some((a) => x + r > a.minX && x - r < a.maxX && z + r > a.minZ && z - r < a.maxZ));
+    for (const d of dressed.solids) add(d.area, d.h);
+  } catch (err) {
+    // The street goes undressed rather than cityDressing() staying null for good.
+    console.error("the street dressing couldn't be placed", err);
+    dressed ??= { items: [], birds: [], solids: [] };
+  }
   return map;
 }
 
