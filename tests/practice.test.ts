@@ -157,6 +157,12 @@ test('the checkpoint coach: the next line, and the one you missed going through 
   store.race = { ...store.race, practice: [{ id: 'me', name: 'Me', car: 0, laps: 0, checkpoint: -1 }] };
   assert.equal(nextCheckpoint(), 0);
   assert.equal(missedCheckpoint(...over(7)), undefined);
+  // Off the grid as the lights go out: the office has counted the start line already, so going over it misses nothing.
+  store.race = { ...store.race, phase: 'racing', practice: [], racers: [{ id: 'me', name: 'Me', car: 0, slot: 0, lap: 0, checkpoint: 0, position: 1 }] };
+  assert.equal(nextCheckpoint(), 1);
+  assert.equal(missedCheckpoint(...over(0)), undefined, 'the start line, from the grid');
+  assert.equal(missedCheckpoint(...over(2)), 1, 'past 1 to 2 still is a miss');
+  store.race = { ...store.race, phase: 'idle', racers: [] };
   store.floor = null;
   assert.equal(nextCheckpoint(), null);
 });
