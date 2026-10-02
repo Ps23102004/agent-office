@@ -47,7 +47,7 @@ import { RACE } from '../shared/race';
 import { Smoke } from './world/smoke';
 // W1 island: splashes in the sea, and where you come back out of it.
 import { Splashes } from './world/ocean';
-import { shoreRespawn, surfaceAt } from '../shared/city';
+import { shoreRespawn, surfaceAt, vehicleSolids } from '../shared/city';
 import { HAZE_MAX, Sky, describeSky } from './world/sky';
 import { Laptop } from './world/laptop';
 import { BoardTexture, QueueBoardTexture, ServicesBoardTexture } from './world/boards';
@@ -1113,9 +1113,23 @@ function goThrough(floor: string, at?: { x: number; y: number; z: number; rotY: 
   player.clearKeys();
   fade(true, true);
   setTimeout(() => {
+    if (gateTrip?.to === 'circuit') parkBesideGate();
     dropCar();
     net.send({ t: 'floor.go', floor, ...(at ? { at } : {}) });
   }, 170);
+}
+
+/** The car you drove into the city's gate, pulled over beside it while the lights are down: it waits there, out of the way of the next one through. */
+function parkBesideGate() {
+  const i = driver.car;
+  if (i === null || !driver.driving) return;
+  const kind = carDefs()[i].kind;
+  const others = fleet().solids(i);
+  const spot = [-8, 8, -12, 12].map((dx) => ({ x: CITY_GATE.out.x + dx, z: CITY_GATE.out.z - 2, rotY: CITY_GATE.rotY })).find((p) => carFits(p, [...others, ...vehicleSolids(p.x, p.z, 8)], kind));
+  if (!spot) return;
+  const pose = { ...spot, speed: 0, steer: 0, slip: 0 };
+  fleet().place(i, pose);
+  net.send({ t: 'car.drive', car: i, ...pose });
 }
 
 /** Arrived through a gate: out of the one at the other end, on foot or in a car (a circuit car of the kind you came in, or your own back in the city). */
@@ -2067,6 +2081,8 @@ function arrive(how: TripKind | 'back' = trip?.how ?? 'elevator') {
   noticeWaiting();
   syncStack();
   if (trip) {
+    // What was said about the place you've left (a race's "Go!", the arena's warm-up) is old news here.
+    document.getElementById('toasts')?.replaceChildren();
     // Down to the garage: into the car at the bottom of the shaft, now that the street is where this floor has it.
     if (trip.garage && store.floor) placeInCar(player.pos, true);
     clearTimeout(trip.timer);
@@ -5670,6 +5686,8 @@ void whoami().then(() => {
 
 // Debug handle for quick checks from the console / headless screenshots.
 (window as any).__office = { world: () => world, court: () => court, plan, applyMap, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, driver, getIn, getOut, golf, balls, thrower, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball };
+// For the playtest harness (scripts/playtest): the race's buttons, without the panel.
+(window as any).__office.race = { joinGrid, startRace, leaveRace };
 (window as any).__voice = voice;
 (window as any).__sound = sound;
 (window as any).__notify = notifier;
