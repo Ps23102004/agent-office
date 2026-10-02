@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { idleRace, type Racer } from '../src/shared/race.js';
-import { boostAvailable, countdownLights, mapProjection, raceGap, raceOrder, raceTime, speedReading } from '../src/client/ui/race-view.js';
+import { boostAvailable, countdownLights, mapProjection, raceGap, raceHudOrder, raceOrder, raceTime, speedReading } from '../src/client/ui/race-view.js';
 
 const racer = (id: string, extra: Partial<Racer> = {}): Racer => ({ id, name: id, car: 0, slot: 0, lap: 0, checkpoint: -1, position: 1, ...extra });
+
+test('live overtakes update the HUD neighbourhood with unique ranks without changing server results', () => {
+  const state = idleRace();
+  state.racers = ['a', 'b', 'c', 'you'].map((id, i) => racer(id, { position: i + 1 }));
+  const order = raceHudOrder(state, 'you', { position: 2, gapAhead: { id: 'c' }, gapBehind: { id: 'a' } });
+  assert.deepEqual(order.map((r) => r.id), ['c', 'you', 'a', 'b']);
+  assert.deepEqual(state.racers.map((r) => r.id), ['a', 'b', 'c', 'you']);
+  assert.deepEqual(state.racers.map((r) => r.position), [1, 2, 3, 4]);
+  assert.deepEqual(raceHudOrder(state, 'you', { position: null, gapAhead: null, gapBehind: null }), raceOrder(state));
+  const stale = raceHudOrder(state, 'you', { position: 1, gapAhead: { id: 'gone' }, gapBehind: { id: 'you' } });
+  assert.equal(new Set(stale.map((r) => r.id)).size, 4);
+});
 
 test('lap clocks handle minute boundaries, absent laps and bad durations', () => {
   assert.equal(raceTime(59_999), '0:59.99');

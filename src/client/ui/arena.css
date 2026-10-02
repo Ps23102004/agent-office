@@ -159,3 +159,29 @@
 /* Chat, toasts and the reconnecting banner stay over the arena's HUD; health sits clear of the chat. */
 #hud:has(.arena-hud:not(.hidden)) :is(#toasts, #conn, .chat) { z-index: 36; }
 .arena-hud .arena-health { bottom: calc(max(var(--arena-edge), env(safe-area-inset-bottom)) + 64px); }
+
+.arena-hud .arena-bots-button {
+  position: absolute; top: max(var(--arena-edge), env(safe-area-inset-top)); left: max(var(--arena-edge), env(safe-area-inset-left));
+  pointer-events: auto; min-height: 44px; padding: 8px 14px; border: 1px solid #ffcf33; border-radius: 4px;
+  background: #10171e; color: #fff; font: 700 13px/1.3 system-ui, sans-serif; cursor: pointer;
+}
+.arena-hud .arena-bots-button:focus-visible { outline: 3px solid #ffcf33; outline-offset: 3px; }
+.arena-hud .arena-other-gun, .arena-hud .arena-swap-hint { margin-top: 7px; font: 600 11px/1.3 system-ui, sans-serif; color: #d0d4d6; }
+.arena-hud .arena-stance { position: absolute; bottom: calc(max(var(--arena-edge), env(safe-area-inset-bottom)) + 155px); left: max(var(--arena-edge), env(safe-area-inset-left)); color: #ffcf33; font-size: 12px; }
+.arena-hud .arena-hitmarker[data-kind='shield'] { color: #b8bec5; }
+.arena-hud .arena-shield-label { position: absolute; top: calc(50% + 24px); left: 50%; transform: translateX(-50%); color: #b8bec5; font: 800 12px/1.2 system-ui, sans-serif; }
+.arena-hud .arena-damage-number { position: absolute; z-index: 4; transform: translate(-50%, -50%); font: 800 18px/1.2 system-ui, sans-serif; white-space: nowrap; }
+.arena-hud .arena-damage-number[data-head='true'] { color: var(--arena-accent); }
+.arena-hud .arena-damage-number[data-pulse='a'] { animation: arena-number-a .75s ease-out both; }
+.arena-hud .arena-damage-number[data-pulse='b'] { animation: arena-number-b .75s ease-out both; }
+@keyframes arena-number-a { from { opacity: 1; transform: translate(-50%, -50%); } to { opacity: 0; transform: translate(-50%, -160%); } }
+@keyframes arena-number-b { from { opacity: 1; transform: translate(-50%, -50%); } to { opacity: 0; transform: translate(-50%, -160%); } }
+.arena-hud .arena-scoreboard tbody th:nth-child(2) { white-space: normal; overflow-wrap: anywhere; font-size: 13px; }
+.arena-hud .arena-feed-name { white-space: normal; overflow-wrap: anywhere; font-size: 11px; }
+@media (max-width: 640px) {
+  .arena-hud .arena-bots-button { top: 110px; }
+  .arena-hud .arena-damage-number { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arena-hud .arena-damage-number { animation: none !important; }
+}

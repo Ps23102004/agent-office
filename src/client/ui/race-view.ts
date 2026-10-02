@@ -32,6 +32,27 @@ export function raceOrder(state: RaceState): Racer[] {
   return [...state.racers].sort((a, b) => (a.position || Infinity) - (b.position || Infinity) || a.slot - b.slot);
 }
 
+/** Live place and adjacent cars can move between checkpoint reports. Keep every rank unique. */
+export function raceHudOrder(state: RaceState, you: string, live: {
+  position: number | null; gapAhead: { id: string } | null; gapBehind: { id: string } | null;
+}): Racer[] {
+  const reported = raceOrder(state);
+  const me = reported.find((r) => r.id === you);
+  const at = live.position;
+  if (!me || me.finishedAt !== undefined || at === null || !Number.isInteger(at) || at < 1 || at > reported.length) return reported;
+  const slots: (Racer | undefined)[] = Array(reported.length);
+  const taken = new Set<string>();
+  for (const [index, id] of [[at - 1, you], [at - 2, live.gapAhead?.id], [at, live.gapBehind?.id]] as const) {
+    const racer = reported.find((r) => r.id === id);
+    if (index < 0 || index >= slots.length || !racer || taken.has(racer.id)) continue;
+    slots[index] = racer;
+    taken.add(racer.id);
+  }
+  const rest = reported.filter((r) => !taken.has(r.id));
+  // Array.from visits the unfilled slots as well; map on a sparse array wouldn't.
+  return Array.from(slots, (r) => r ?? rest.shift()!);
+}
+
 /** Laps behind, else the office-timed gap at the last line (Racer.gap), else checkpoints behind: never invented seconds. */
 export function raceGap(state: RaceState, racer: Racer): string {
   const leader = raceOrder(state)[0];

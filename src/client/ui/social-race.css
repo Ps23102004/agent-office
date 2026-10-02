@@ -17,6 +17,14 @@
 .race-split[data-trend="quicker"] { color: #176237; }
 .race-split[data-trend="slower"] { color: #913718; }
 .race-hud [aria-label="Your practice laps"] > div:last-child { grid-column: auto; }
+.rabbit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.race-live-positions { list-style: none; padding: 0; margin: 10px 0; font: 600 11px/1.5 system-ui, sans-serif; }
+.race-live-positions li { padding: 3px 0; border-bottom: 1px solid var(--ink); overflow-wrap: anywhere; }
+.race-live-positions .race-you { font-weight: 900; }
+.race-neighbours { font-size: 11px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.race-lobby-backdrop { z-index: 35; }
+#hud:has(.race-hud:not(.hidden)) :is(#toasts, #conn, .chat) { z-index: 36; }
+body:has(.race-lobby-backdrop) #hud :is(#toasts, #conn, .chat) { z-index: 36; }
 @media (max-width: 520px) {
   .hangout-meets { grid-template-columns: 1fr; }
   .hangout-person-actions { width: 100%; }

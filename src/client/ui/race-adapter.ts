@@ -3,6 +3,7 @@ import type { PeerInfo } from '../../shared/protocol';
 import { store } from '../state';
 import { toast } from './dom';
 import type { MapPoint } from './race-view';
+import type { BotLevel } from '../../shared/bots';
 
 export interface CircuitMap {
   outline: readonly MapPoint[];
@@ -21,6 +22,10 @@ export interface RaceAdapter {
   startRace(): void;
   joinGrid(): void;
   leaveRace(): void;
+  setBots(fill: number, level: BotLevel): void;
+  rabbit(level: BotLevel | null): void;
+  /** Behind the wheel of a circuit car, including before the first practice lap. */
+  driving(): boolean;
 }
 
 const unavailable = () => { toast('The circuit is not ready yet', 'warn'); };
@@ -37,6 +42,9 @@ export const raceAdapter: RaceAdapter = {
   startRace: unavailable,
   joinGrid: unavailable,
   leaveRace: unavailable,
+  setBots: unavailable,
+  rabbit: unavailable,
+  driving: () => false,
 };
 
 /** Call once with W2's live source. Existing windows and the HUD pick it up on their next update. */

@@ -1,4 +1,6 @@
-import { RULES, type ArenaState } from '../../shared/arena';
+import { RULES, WEAPONS, type ArenaState, type WeaponId } from '../../shared/arena';
+import { botName } from '../player-name';
+import { isBot } from '../../shared/bots';
 import { h } from './dom';
 import './arena.css';
 
@@ -26,6 +28,12 @@ export interface ArenaHudView {
   /** Who killed you, while you're dead, and the health they had left. */
   killedBy?: string;
   killerHp?: number;
+  killerWeapon?: WeaponId;
+  weapon?: WeaponId;
+  guns?: Record<WeaponId, number>;
+  crouching?: boolean;
+  climbing?: boolean;
+  mouseFree?: boolean;
 }
 
 const text = (el: HTMLElement, value: string) => { if (el.textContent !== value) el.textContent = value; };
@@ -57,10 +65,22 @@ export class ArenaHUD {
   private readonly rounds = h('strong.arena-rounds');
   private readonly capacity = h('span.arena-capacity');
   private readonly reloadLabel = h('span.arena-label');
+  private readonly weaponLabel = h('div.arena-label');
+  private readonly otherGun = h('div.arena-other-gun');
+  private readonly stance = h('div.arena-stance', { role: 'status', 'aria-live': 'polite' });
+  private readonly botsButton = h('button.arena-bots-button', {
+    type: 'button', hidden: true, onclick: () => this.openBots?.(), title: 'Bot settings (B)',
+  }, '🤖 Bots · B');
+  private readonly shieldLabel = h('div.arena-shield-label', { hidden: true }, 'SHIELDED');
+  private readonly damageSlots = Array.from({ length: 8 }, () => ({
+    el: h('div.arena-damage-number', { hidden: true }), timer: undefined as ReturnType<typeof setTimeout> | undefined,
+  }));
+  private damageNext = 0;
   private readonly reloadFill = h('i');
   private readonly reloadBar = h('div.arena-track.arena-reload-track', { hidden: true, 'aria-hidden': 'true' }, this.reloadFill);
   private readonly ammo = h('section.arena-ammo', { 'aria-label': 'Ammunition' },
-    h('div.arena-ammo-reading', {}, this.rounds, this.capacity), this.reloadLabel, this.reloadBar);
+    this.weaponLabel, h('div.arena-ammo-reading', {}, this.rounds, this.capacity), this.reloadLabel, this.reloadBar,
+    this.otherGun, h('div.arena-swap-hint', {}, '1 / 2 / Q · swap'));
   private readonly hp = h('strong');
   private readonly hpFill = h('i');
   private readonly health = h('section.arena-health', { 'aria-label': 'Health' },
@@ -108,9 +128,10 @@ export class ArenaHUD {
   private markerTimer?: ReturnType<typeof setTimeout>;
   private arcTimer?: ReturnType<typeof setTimeout>;
 
-  constructor() {
+  constructor(private readonly openBots?: () => void) {
     this.el.append(this.vignette, this.death, this.cross, this.marker, this.arc,
-      this.health, this.ammo, this.match, this.feed, this.medalStack, this.board);
+      this.health, this.ammo, this.match, this.feed, this.medalStack, this.board,
+      this.stance, this.botsButton, this.shieldLabel, ...this.damageSlots.map((slot) => slot.el));
   }
 
   show(on: boolean) {
@@ -123,6 +144,9 @@ export class ArenaHUD {
       clearTimeout(this.arcTimer);
       visible(this.marker, false);
       visible(this.arc, false);
+      visible(this.shieldLabel, false);
+      visible(this.botsButton, false);
+      for (const slot of this.damageSlots) { clearTimeout(slot.timer); visible(slot.el, false); }
       for (const slot of this.medals) { clearTimeout(slot.timer); visible(slot.el, false); }
     }
   }
@@ -140,6 +164,13 @@ export class ArenaHUD {
     style(this.vignette, 'opacity', ((100 - hp) / 100).toFixed(3));
     text(this.rounds, String(v.ammo));
     text(this.capacity, `/ ${v.mag}`);
+    const weapon = v.weapon ?? 'rifle';
+    text(this.weaponLabel, weapon === 'smg' ? 'SMG' : 'RIFLE');
+    const other = weapon === 'rifle' ? 'smg' : 'rifle';
+    text(this.otherGun, v.guns ? `${other.toUpperCase()} ${v.guns[other]} / ${WEAPONS[other].mag}` : '');
+    visible(this.botsButton, !!v.mouseFree && !!this.openBots);
+    const safe = (me?.safeUntil ?? 0) > v.now;
+    text(this.stance, v.climbing ? 'CLIMBING' : v.crouching ? 'CROUCHED' : safe ? 'SPAWN SHIELD' : '');
     toggle(this.ammo, 'low', v.ammo <= 6);
     toggle(this.ammo, 'empty', v.ammo === 0);
     const reloading = v.reloading !== null;
@@ -156,7 +187,7 @@ export class ArenaHUD {
     visible(this.matchDetail, phase !== 'warmup');
     visible(this.matchClock, phase !== 'warmup');
     text(this.matchClock, clock(seconds));
-    text(this.matchStatus, phase === 'warmup' ? 'WARM-UP · waiting for another player' :
+    text(this.matchStatus, phase === 'warmup' ? players.length < 2 ? 'WARM-UP · Add bots (B)' : 'WARM-UP' :
       phase === 'over' ? `${v.state.winner ?? players[0]?.name ?? 'NOBODY'} WINS` : 'FREE-FOR-ALL');
     text(this.myScore, String(me?.kills ?? 0));
     text(this.rivalScore, String(rival?.kills ?? 0));
@@ -168,8 +199,14 @@ export class ArenaHUD {
       const line = lines[i];
       visible(row.el, !!line);
       if (!line) return;
-      text(row.killer, line.killer);
-      text(row.victim, line.victim);
+      const feedName = (name: string) => {
+        const p = players.find((p) => p.name === name);
+        return p?.bot || (p && isBot(p.id)) || name.startsWith('🤖') ? botName(name, v.state.bots?.level) : name;
+      };
+      text(row.killer, feedName(line.killer));
+      text(row.victim, feedName(line.victim));
+      if (row.killer.title !== row.killer.textContent) row.killer.title = row.killer.textContent ?? '';
+      if (row.victim.title !== row.victim.textContent) row.victim.title = row.victim.textContent ?? '';
       visible(row.head, line.head);
       toggle(row.el, 'involved', !!me && (line.killer === me.name || line.victim === me.name));
       // Fade during the final second, in small steps rather than every frame.
@@ -179,13 +216,13 @@ export class ArenaHUD {
 
     visible(this.death, v.killedBy !== undefined);
     if (v.killedBy !== undefined) {
-      text(this.deathText, `KILLED BY ${v.killedBy}${v.killerHp !== undefined && v.killerHp > 0 ? ` · ${Math.ceil(v.killerHp)} HP LEFT` : ''}`);
+      text(this.deathText, `KILLED BY ${v.killedBy}${v.killerHp !== undefined ? ` · ${Math.ceil(v.killerHp)} HP LEFT` : ''}${v.killerWeapon ? ` · ${v.killerWeapon.toUpperCase()}` : ''}`);
       const left = me?.respawnAt === undefined ? 0 : Math.ceil((me.respawnAt - v.now) / 1000);
       text(this.respawn, left > 0 ? `Back in ${left}` : 'Respawning…');
     }
     text(this.boardPhase, phase === 'warmup' ? 'WARM-UP' : phase === 'over' ? 'MATCH OVER' : 'LIVE');
     text(this.boardClock, phase === 'warmup' ? '—' : clock(seconds));
-    const signature = JSON.stringify([v.you, players.map((p) => [p.id, p.name, p.kills, p.deaths, p.streak])]);
+    const signature = JSON.stringify([v.you, v.state.bots?.level, players.map((p) => [p.id, p.name, p.bot, p.kills, p.deaths, p.streak])]);
     if (signature !== this.boardSignature) {
       this.boardSignature = signature;
       const ids = new Set(players.map((p) => p.id));
@@ -197,9 +234,10 @@ export class ArenaHUD {
           row = { el: h('tr', {}, ...cells), cells };
           this.boardRows.set(p.id, row);
         }
-        [String(i + 1), p.name, String(p.kills), String(p.deaths), (p.kills / Math.max(1, p.deaths)).toFixed(2), String(p.streak)]
+        [String(i + 1), p.bot || isBot(p.id) ? botName(p.name, v.state.bots?.level) : p.name, String(p.kills), String(p.deaths), (p.kills / Math.max(1, p.deaths)).toFixed(2), String(p.streak)]
           .forEach((value, index) => text(row.cells[index], value));
         toggle(row.el, 'you', p.id === v.you);
+        row.cells[1].title = row.cells[1].textContent ?? '';
         const current = this.boardBody.children[i];
         if (current !== row.el) this.boardBody.insertBefore(row.el, current ?? null);
       });
@@ -207,11 +245,25 @@ export class ArenaHUD {
   }
 
   /** You hit someone: in the body, the head, or that killed them. */
-  hitmarker(kind: 'hit' | 'head' | 'kill') {
+  hitmarker(kind: 'hit' | 'head' | 'kill' | 'shield') {
     clearTimeout(this.markerTimer);
     this.marker.dataset.kind = kind;
     visible(this.marker, true);
-    this.markerTimer = setTimeout(() => visible(this.marker, false), 180);
+    visible(this.shieldLabel, kind === 'shield');
+    this.markerTimer = setTimeout(() => { visible(this.marker, false); visible(this.shieldLabel, false); }, kind === 'shield' ? 450 : 180);
+  }
+
+  /** A fixed pool of screen-space bursts, created once and recycled per confirmed hit. */
+  damage(dmg: number, hp: number | undefined, head: boolean, x: number, y: number) {
+    const slot = this.damageSlots[this.damageNext++ % this.damageSlots.length];
+    clearTimeout(slot.timer);
+    text(slot.el, `${Math.round(dmg)}${hp !== undefined ? ` · ${Math.ceil(hp)} HP` : ''}`);
+    slot.el.dataset.head = String(head);
+    style(slot.el, 'left', `${clamp(x, 96).toFixed(2)}%`);
+    style(slot.el, 'top', `${clamp(y, 90).toFixed(2)}%`);
+    this.pulse(slot.el);
+    visible(slot.el, true);
+    slot.timer = setTimeout(() => visible(slot.el, false), 750);
   }
 
   /** You were hit, from `angle` (radians from where you're looking, + to the right). */
