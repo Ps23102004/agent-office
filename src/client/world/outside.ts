@@ -5,6 +5,7 @@ import { NEIGHBOURS, neighbourArea, neighbourFacing } from '../../shared/city';
 import type { Collider } from './office';
 import { buildStreetCity } from './city';
 import { mergeByMaterial, mesh, textPlane, toon, toonUnique } from './toon';
+import { detail } from './surface';
 
 const G = STREET_Y;
 /** The building's footprint, walls included. */
@@ -231,7 +232,8 @@ function building(w: number, h: number, d: number, color: string, lit: THREE.Mes
     const t = face(n);
     t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(1, floors);
-    const m = new THREE.MeshToonMaterial({ map: t, emissive: '#ffffff', emissiveMap: lights(n, floors), emissiveIntensity: 0, gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap });
+    // With the city's walls' grain (surface.ts), so they don't stand flat beside the blocks round them.
+    const m = detail(new THREE.MeshToonMaterial({ map: t, emissive: '#ffffff', emissiveMap: lights(n, floors), emissiveIntensity: 0, gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }), 'wall');
     lit.push(m);
     return m;
   };

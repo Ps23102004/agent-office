@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 let gradient: THREE.DataTexture | null = null;
 
 /** Three-step ramp that gives MeshToonMaterial its flat cartoon banding. */
-function gradientMap(): THREE.DataTexture {
+export function gradientMap(): THREE.DataTexture {
   if (gradient) return gradient;
   const data = new Uint8Array([90, 90, 90, 255, 185, 185, 185, 255, 255, 255, 255, 255]);
   gradient = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
@@ -313,15 +313,21 @@ let vertexToon: THREE.MeshToonMaterial | null = null;
 
 /** One toon material for everything merged by mergeColored: each vertex carries its own color. */
 export function toonVertex(): THREE.MeshToonMaterial {
-  return (vertexToon ??= new THREE.MeshToonMaterial({ color: '#ffffff', vertexColors: true, gradientMap: gradientMap() }));
+  return (vertexToon ??= toonVertexUnique());
+}
+
+/** A fresh one of those, for a surface of its own (see surface.ts detail). */
+export function toonVertexUnique(): THREE.MeshToonMaterial {
+  return new THREE.MeshToonMaterial({ color: '#ffffff', vertexColors: true, gradientMap: gradientMap() });
 }
 
 /**
  * Like mergeByMaterial, but every color in `root` (as many as you like) ends up in one mesh, or two:
  * each vertex takes its color from the mesh's material, so a desk's top, legs, pen cup and notepad cost
  * a single draw call between them. Small parts go in the mesh that casts no shadow. Plain toon colors only.
+ * `mat`: a vertex-colored material of its own (toonVertexUnique), for a surface with its own detail.
  */
-export function mergeColored(root: THREE.Object3D): THREE.Group {
+export function mergeColored(root: THREE.Object3D, mat: THREE.Material = toonVertex()): THREE.Group {
   root.updateMatrixWorld(true);
   const inv = root.matrixWorld.clone().invert();
   const by = { cast: [] as THREE.BufferGeometry[], still: [] as THREE.BufferGeometry[] };
@@ -342,7 +348,7 @@ export function mergeColored(root: THREE.Object3D): THREE.Group {
   const out = new THREE.Group();
   for (const [k, geos] of Object.entries(by)) {
     if (!geos.length) continue;
-    out.add(mesh(mergeGeometries(geos)!, toonVertex(), 0, 0, 0, k === 'cast'));
+    out.add(mesh(mergeGeometries(geos)!, mat, 0, 0, 0, k === 'cast'));
     for (const geo of geos) geo.dispose();
   }
   return out;

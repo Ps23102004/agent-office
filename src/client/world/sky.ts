@@ -5,6 +5,7 @@ import { guessPlace, sunPosition } from '../../shared/sun';
 import type { NightParts } from './outside';
 import { decorTicker, quality } from '../quality';
 import { VENUES } from '../../shared/venues';
+import { detailTexture } from './surface';
 
 /*
  * Day, night and the weather outside the windows. The server says where the office is and what the
@@ -16,7 +17,8 @@ import { VENUES } from '../../shared/venues';
  * room would go as dark as the street. A few lines added to every lit material (below) give light
  * back where there are lamps: the office and the garage fill with lamplight, and each street lamp,
  * the balcony's string lights and the lamp over the exit throw a pool of light around them. The
- * same lines darken the ground outside when it's wet and lay snow on whatever faces up out there.
+ * same lines darken the ground outside when it's wet and lay snow on whatever faces up out there,
+ * and give what asks for it (surface.ts detail) its grain: asphalt, grass, gravel, stains, puddles.
  */
 
 const MAX_LAMPS = 24;
@@ -26,6 +28,12 @@ const DEG = Math.PI / 180;
  * and the road round the office end there, the city round the roof just past it), so it hides that.
  */
 export const HAZE_MAX = 300;
+/**
+ * Where the sun, the moon and the stars come among what's see-through: first, so everything else
+ * see-through goes over them (and the circuit's hills, which hide them, at this + 100). Halloween's
+ * sky goes under them, at this - 100.
+ */
+export const SKY_BODIES = -500;
 /**
  * The haze thins out with height over the street: past HAZE_CLEAR meters up, every HAZE_ABOVE
  * meters more you see as far again as down on the street (from the roof of six floors, 3.4 times).
@@ -59,7 +67,11 @@ const uniforms = {
   skyStreet: { value: STREET_Y },
   /** The back office, when the floor's built out into one (see WING): minX, maxX, minZ, maxZ. Empty without. */
   skyWing: { value: new THREE.Vector4(1, 0, 1, 0) },
+  /** The surfaces' grain (surface.ts), made the first time something asks for it, at the Graphics setting's size. */
+  skyDetail: { value: null as THREE.DataTexture | null },
 };
+/** How sharp the grain stays at a slant, at its size. */
+const detailAnisotropy = (size: number) => (size >= 512 ? 8 : 4);
 
 const v3 = (x: number, y: number, z: number) => `vec3(${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)})`;
 
@@ -78,6 +90,12 @@ uniform float skyWet;
 uniform float skySnow;
 uniform float skyDrop;
 uniform vec4 skyWing;
+#ifdef SKY_DETAIL
+  uniform sampler2D skyDetail;
+#endif
+#ifndef USE_FOG
+  uniform float skyStreet;
+#endif
 
 // Inside the office's walls (and up through its open top), or the back office's, up to its ceiling
 // and no further: its roof, and the cornice over where the wall came down, are outdoors.
@@ -119,6 +137,72 @@ vec3 skyLampsAt( vec3 p, vec3 n ) {
 }
 `;
 
+/**
+ * A surface's grain (surface.ts detail, which says what's wanted with SKY_DETAIL_* defines): the
+ * detail tile read where the surface is in the world, the ground in plan and a wall along itself
+ * and up, so nothing needs UVs for it. Its channels, mixed as the surface says, and stains at large
+ * over that; and its extras: mown stripes, joints between slabs, a container's corrugations and
+ * rust, rain streaks and grime down walls, rows of roof tiles. Each fades out where it would
+ * shimmer, far off. `sdStain` is left for the puddles (below).
+ */
+const DETAIL = /* glsl */ `
+#ifdef SKY_DETAIL
+float sdStain = 0.0;
+{
+  vec3 sdA = abs( skyN );
+  bool sdFloor = sdA.y > 0.6;
+  vec2 sdP = sdFloor ? vSkyWorld.xz : vec2( sdA.x > sdA.z ? vSkyWorld.z : vSkyWorld.x, vSkyWorld.y );
+  vec4 sdF = texture2D( skyDetail, sdP * SKY_DETAIL_FREQ ) - 0.5;
+  sdStain = texture2D( skyDetail, sdP * 0.027 + 0.31 ).a - 0.5;
+  vec4 sdW = SKY_DETAIL_MIX;
+  #ifdef SKY_DETAIL_AUTO
+    vec3 sdC = material.diffuseColor;
+    float sdGreen = smoothstep( 0.03, 0.1, sdC.g - max( sdC.r, sdC.b ) );
+    float sdDark = 1.0 - smoothstep( 0.05, 0.16, dot( sdC, vec3( 0.3, 0.59, 0.11 ) ) );
+    sdW = mix( mix( vec4( 0.16, 0.0, 0.03, 0.0 ), vec4( 0.34, 0.0, 0.07, 0.0 ), sdDark ), vec4( 0.04, 0.44, 0.0, 0.0 ), sdGreen );
+  #endif
+  float sdK = 1.0 + dot( sdF, sdW ) + sdStain * SKY_DETAIL_MACRO;
+  #ifdef SKY_DETAIL_STRIPES
+    sdK *= 1.0 + 0.05 * sign( fract( vSkyWorld.x / ( 2.0 * SKY_DETAIL_STRIPES ) ) - 0.5 );
+  #endif
+  #ifdef SKY_DETAIL_JOINTS
+  {
+    vec2 sdJ = abs( fract( sdP / SKY_DETAIL_JOINTS ) - 0.5 );
+    float sdE = ( 0.5 - max( sdJ.x, sdJ.y ) ) * SKY_DETAIL_JOINTS;
+    float sdFw = fwidth( sdE );
+    sdK *= 1.0 - 0.32 * ( 1.0 - smoothstep( 0.015, 0.015 + sdFw * 1.5, sdE ) ) * ( 1.0 - smoothstep( 0.05, 0.2, sdFw ) );
+  }
+  #endif
+  #ifdef SKY_DETAIL_RIBS
+  if ( !sdFloor ) {
+    float sdR = sdP.x * 6.2832 / SKY_DETAIL_RIBS;
+    float sdRw = fwidth( sdR );
+    sdK *= 1.0 + 0.1 * clamp( sin( sdR ) / max( sdRw, 0.001 ), -1.0, 1.0 ) * ( 1.0 - smoothstep( 0.6, 2.0, sdRw ) );
+  }
+  #endif
+  #ifdef SKY_DETAIL_STREAKS
+  if ( !sdFloor ) sdK *= 1.0 - SKY_DETAIL_STREAKS * smoothstep( 0.0, 0.25, texture2D( skyDetail, vec2( sdP.x * 0.6, sdP.y * 0.04 ) + 0.17 ).a - 0.5 );
+  #endif
+  #ifdef SKY_DETAIL_DIRT
+  if ( !sdFloor ) sdK *= 1.0 - SKY_DETAIL_DIRT * ( 1.0 - smoothstep( 0.0, 1.6, vSkyWorld.y - skyStreet ) ) * ( 0.7 + sdF.a );
+  #endif
+  #ifdef SKY_DETAIL_SHINGLES
+  if ( sdA.y < 0.98 ) {
+    float sdRow = vSkyWorld.y / SKY_DETAIL_SHINGLES;
+    float sdAlong = dot( vSkyWorld.xz, normalize( vec2( -skyN.z, skyN.x ) + 1e-5 ) ) / ( SKY_DETAIL_SHINGLES * 1.4 ) + 0.5 * floor( sdRow );
+    float sdT = min( fract( sdAlong ), 1.0 - fract( sdAlong ) );
+    float sdFar = 1.0 - smoothstep( 0.25, 0.6, fwidth( sdRow ) + fwidth( sdAlong ) );
+    sdK *= 1.0 - sdFar * ( 0.2 * smoothstep( 0.72, 1.0, fract( sdRow ) ) + 0.15 * ( 1.0 - smoothstep( 0.03, 0.09, sdT ) ) );
+  }
+  #endif
+  #ifdef SKY_DETAIL_RUST
+    material.diffuseColor = mix( material.diffuseColor, vec3( 0.3, 0.12, 0.05 ), SKY_DETAIL_RUST * smoothstep( 0.12, 0.34, sdF.a + sdStain * 0.6 ) );
+  #endif
+  material.diffuseColor *= sdK;
+}
+#endif
+`;
+
 /** Wet ground is darker; snow covers what faces up. Only outdoors. Runs before the lights. */
 const SURFACE = /* glsl */ `
 vec3 skyN = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
@@ -126,7 +210,12 @@ float skyIndoor = skyOn * skyInside * skyInOffice( vSkyWorld );
 float skyGar = skyOn * skyInside * skyInGarage( vSkyWorld );
 float skyVen = skyOn * skyInside * skyInVenue( vSkyWorld );
 float skyUp = skyOn * ( 1.0 - max( max( skyIndoor, skyGar ), skyVen ) ) * smoothstep( 0.45, 0.85, skyN.y );
+${DETAIL}
 material.diffuseColor *= 1.0 - 0.38 * skyWet * skyUp;
+#ifdef SKY_DETAIL
+  // Puddles in the low spots while it's wet.
+  material.diffuseColor *= 1.0 - 0.4 * skyWet * skyUp * smoothstep( 0.1, 0.2, -sdStain );
+#endif
 material.diffuseColor = mix( material.diffuseColor, vec3( 0.93, 0.96, 1.0 ), skySnow * skyUp );
 `;
 
@@ -206,6 +295,7 @@ THREE.Material.prototype.onBeforeCompile = function (shader) {
     shader.fragmentShader = shader.fragmentShader.replace('#include <fog_pars_fragment>', `#include <fog_pars_fragment>\n${HAZE_PARS}`).replace('#include <fog_fragment>', HAZE);
   }
   if (!shader.fragmentShader.includes('#include <lights_fragment_end>')) return;
+  if (shader.defines?.SKY_DETAIL !== undefined) uniforms.skyDetail.value ??= detailTexture(quality.detail, detailAnisotropy(quality.detail));
   Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vSkyWorld;').replace('#include <project_vertex>', `#include <project_vertex>\n${WORLD}`);
   shader.fragmentShader = shader.fragmentShader
@@ -242,6 +332,9 @@ const C = {
   day: new THREE.Color('#bfe3ff'),
   dusk: new THREE.Color('#ffb48c'),
   night: new THREE.Color('#0b1431'),
+  /** Overhead, on a clear day and night: deeper than the sky down at the horizon. */
+  zenithDay: new THREE.Color('#6eb0ec'),
+  zenithNight: new THREE.Color('#040a20'),
   greyDay: new THREE.Color('#aab3bf'),
   greyNight: new THREE.Color('#11151d'),
   fogDay: new THREE.Color('#d7dce2'),
@@ -291,7 +384,7 @@ export const SPOOKY_MOON = { el: 21 * DEG, az: 182 * DEG } as const;
 /** The way to (el, az) from the middle of the sky. */
 const skyward = (el: number, az: number, out: THREE.Vector3) => out.set(Math.cos(el) * Math.sin(az), Math.sin(el), -Math.cos(el) * Math.cos(az));
 
-/** A dome behind everything, shading from the horizon up to the zenith, with a glow low down and round the moon: Halloween's. */
+/** A dome round you, shading from the horizon up to the zenith, with a glow low down and round the moon: the day's (see Sky) and Halloween's. */
 function gradientDome(): THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial> {
   const mat = new THREE.ShaderMaterial({
     uniforms: {
@@ -425,6 +518,8 @@ export class Sky {
   /** When a far-off flash lights the Halloween sky next. */
   private nextSpook = 0;
   private readonly spookyDome = gradientDome();
+  /** The sky every day: deeper blue overhead, the haze's color at the horizon. Behind everything (drawn first, over nothing). */
+  private readonly dayDome = gradientDome();
   private readonly moonAt = new THREE.Vector3();
   private readonly moonTo = new THREE.Vector3();
   private cover = 0;
@@ -488,7 +583,23 @@ export class Sky {
     this.sunDisc = disc(5, '#fff4c8');
     this.moonDisc = disc(3.2, '#f2f1ea');
     this.moonDisc.material.map = moonTexture();
-    this.dome.add(this.spookyDome, this.stars, this.sunDisc, this.moonDisc);
+    const day = this.dayDome.material;
+    day.transparent = false;
+    day.depthTest = false;
+    day.uniforms.opacity.value = 1;
+    this.dayDome.renderOrder = -1000;
+    this.dayDome.visible = true;
+    this.spookyDome.renderOrder = SKY_BODIES - 100;
+    // And at the very back of the depth buffer: they're only 160 m off, riding along with you, and
+    // whatever solid is further off than that (the circuit's woods and grass) still has to hide them.
+    for (const body of [this.stars, this.sunDisc, this.moonDisc]) {
+      body.renderOrder = SKY_BODIES;
+      body.material.onBeforeCompile = (shader, r) => {
+        THREE.Material.prototype.onBeforeCompile.call(body.material, shader, r);
+        shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z = gl_Position.w * 0.99999;');
+      };
+    }
+    this.dome.add(this.dayDome, this.spookyDome, this.stars, this.sunDisc, this.moonDisc);
     scene.add(this.dome);
 
     // Halos round the bulbs at night, one set of points per size (and per floor or street).
@@ -770,7 +881,17 @@ export class Sky {
     uniforms.skyStreet.value = this.roof ? this.roofStreet : this.indoors ? 0 : this.night.street;
     this.night.clouds.color.copy(C.white).lerp(C.cloudGrey, this.cover).lerp(SPOOKY.cloud, sp);
     this.night.clouds.visible = this.fog < 0.6;
-    // Halloween's gradient, over the flat sky: dark overhead, the sky's color at the horizon, which the fog fades into.
+    // The sky overhead, deeper than at the horizon; flat grey with clouds over it, or in fog.
+    const d = this.dayDome.material.uniforms;
+    d.horizon.value.copy(sky);
+    d.top.value.copy(C.zenithNight).lerp(C.zenithDay, day).lerp(sky, Math.min(1, this.cover * 0.85 + this.fog + flash * 0.5));
+    // The surfaces' grain, at the Graphics setting's size: made again when that changes.
+    const grain = uniforms.skyDetail.value;
+    if (grain && grain.image.width !== quality.detail) {
+      grain.dispose();
+      uniforms.skyDetail.value = detailTexture(quality.detail, detailAnisotropy(quality.detail));
+    }
+    // Halloween's gradient, over that: dark overhead, the sky's color at the horizon, which the fog fades into.
     const u = this.spookyDome.material.uniforms;
     this.spookyDome.visible = sp > 0.005;
     if (this.spookyDome.visible) {

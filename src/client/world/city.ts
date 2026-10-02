@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, roofDrop } from '../../shared/layout';
 import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
-import { mergeByMaterial, mesh, toon, toonVertex } from './toon';
+import { mergeByMaterial, mesh, toon, toonUnique, toonVertex, toonVertexUnique } from './toon';
+import { Decals, decalUV, detail, type Decal } from './surface';
+import { LOT, SIDE_LOT } from '../../shared/garage';
 import { buildTower } from './tower';
 import { CROSSING_PAINT, GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, shopModules, SHOP_H, type Light, type Lot } from '../../shared/city';
 import { districtAt } from '../../shared/places';
@@ -106,31 +108,95 @@ function paintFor(lot: Lot): number {
   return set ? set[(lot.ou + lot.ov * 3 + lot.paint) % set.length] : lot.paint;
 }
 
-/** One bay of one storey: the wall with a window in it. */
+/**
+ * One bay of one storey: the wall with a window in it, its frame, a mullion and a transom, a sill
+ * with its shadow, the reveal's shadow inside the top, and a slab line at the foot of the storey;
+ * brick laid in courses, each brick a shade of its own, with a row on end over the window. The
+ * window's where litTexture lights it at night.
+ */
 function bayTexture(p: Paint): THREE.CanvasTexture {
-  const S = 64;
+  const S = 128;
   return canvasTexture(S, S, (g) => {
     g.fillStyle = p.wall;
     g.fillRect(0, 0, S, S);
-    if (p.brick) {
-      g.fillStyle = 'rgba(255,240,220,0.22)';
-      for (let y = 0; y < S; y += 8) {
-        g.fillRect(0, y, S, 1);
-        for (let x = (y / 8) % 2 ? 0 : 8; x < S; x += 16) g.fillRect(x, y, 1, 8);
-      }
-    }
     const w = S * p.wide;
     const h = S * p.tall;
     const x = (S - w) / 2;
     const y = S * 0.18;
+    const glassy = p.wide > 0.8;
+    if (p.brick) {
+      const course = S / 24;
+      const r = rng(p.wall.length * 977 + S);
+      for (let row = 0; row < 24; row++) {
+        const off = row % 2 ? 0 : course * 1.5;
+        for (let bx = -course * 3 + off; bx < S; bx += course * 3) {
+          const k = (r() - 0.5) * 0.16;
+          g.fillStyle = k > 0 ? `rgba(255,236,214,${k.toFixed(3)})` : `rgba(40,16,8,${(-k).toFixed(3)})`;
+          g.fillRect(bx, row * course, course * 3, course);
+        }
+      }
+      g.fillStyle = 'rgba(255,240,220,0.3)';
+      for (let row = 0; row < 24; row++) {
+        g.fillRect(0, row * course, S, 1);
+        for (let bx = row % 2 ? 0 : course * 1.5; bx < S; bx += course * 3) g.fillRect(bx, row * course, 1, course);
+      }
+      // A row of bricks on end over the window.
+      g.fillStyle = 'rgba(60,20,10,0.22)';
+      g.fillRect(x - 4, y - course * 1.6, w + 8, course * 1.6);
+      g.fillStyle = 'rgba(255,240,220,0.3)';
+      for (let bx = x - 4; bx < x + w + 4; bx += course * 0.8) g.fillRect(bx, y - course * 1.6, 1, course * 1.6);
+    } else if (!glassy) {
+      // The floor slab, at the foot of the storey.
+      g.fillStyle = 'rgba(0,0,0,0.07)';
+      g.fillRect(0, S - 5, S, 5);
+      g.fillStyle = 'rgba(255,255,255,0.12)';
+      g.fillRect(0, S - 6, S, 1);
+    }
+    // The glass: the sky in it, lighter at the top, and a slant of shine.
+    const sky = g.createLinearGradient(0, y, 0, y + h);
+    sky.addColorStop(0, '#e9f5ff');
+    sky.addColorStop(0.35, p.glass);
+    sky.addColorStop(1, p.open ? p.glass : 'rgba(40,60,90,0.55)');
     g.fillStyle = p.glass;
     g.fillRect(x, y, w, h);
     if (p.open) return;
+    g.fillStyle = sky;
+    g.globalAlpha = 0.7;
+    g.fillRect(x, y, w, h);
+    g.globalAlpha = 1;
+    g.save();
+    g.beginPath();
+    g.rect(x, y, w, h);
+    g.clip();
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.beginPath();
+    g.moveTo(x + w * 0.1, y + h);
+    g.lineTo(x + w * 0.3, y + h);
+    g.lineTo(x + w * 0.62, y);
+    g.lineTo(x + w * 0.42, y);
+    g.fill();
+    // The reveal's shadow, inside the top and the left of the opening.
+    g.fillStyle = 'rgba(0,0,0,0.2)';
+    g.fillRect(x, y, w, 5);
+    g.fillRect(x, y, 3, h);
+    g.restore();
+    // The frame, a mullion down the middle and a transom near the top.
+    const frame = glassy ? '#2f3b48' : '#f3efe6';
+    g.strokeStyle = 'rgba(0,0,0,0.3)';
+    g.lineWidth = 1;
+    g.strokeRect(x - 2.5, y - 2.5, w + 5, h + 5);
+    g.strokeStyle = frame;
+    g.lineWidth = glassy ? 2 : 3;
+    g.strokeRect(x, y, w, h);
+    g.fillStyle = frame;
+    g.fillRect(x + w / 2 - 1, y, 2, h);
+    g.fillRect(x, y + h * 0.3, w, 2);
+    if (glassy) return;
+    // A sill under it, catching the light, and its shadow down the wall.
     g.fillStyle = 'rgba(255,255,255,0.45)';
-    g.fillRect(x + w * 0.12, y, w * 0.1, h);
-    // A sill under it.
-    g.fillStyle = 'rgba(0,0,0,0.12)';
-    g.fillRect(x - 2, y + h, w + 4, 3);
+    g.fillRect(x - 5, y + h + 2, w + 10, 4);
+    g.fillStyle = 'rgba(0,0,0,0.2)';
+    g.fillRect(x - 5, y + h + 6, w + 10, 3);
   });
 }
 
@@ -192,6 +258,25 @@ class Walls {
   /** A flat top at y. */
   top(cx: number, cz: number, w: number, d: number, y: number) {
     this.quad([cx - w / 2, y, cz + d / 2], [w, 0, 0], d, [0, 1, 0], [0, 0, 1, 1]);
+  }
+
+  /** A parapet `h` high and `t` thick round the edge of a flat top at y: its outsides, insides and coping. */
+  rim(cx: number, cz: number, w: number, d: number, y: number, h = 0.5, t = 0.3) {
+    const hw = w / 2;
+    const hd = d / 2;
+    const uv: [number, number, number, number] = [0, 0, 1, 1];
+    this.quad([cx - hw, y, cz + hd], [w, 0, 0], h, [0, 0, 1], uv);
+    this.quad([cx + hw, y, cz - hd], [-w, 0, 0], h, [0, 0, -1], uv);
+    this.quad([cx + hw, y, cz + hd], [0, 0, -d], h, [1, 0, 0], uv);
+    this.quad([cx - hw, y, cz - hd], [0, 0, d], h, [-1, 0, 0], uv);
+    this.quad([cx + hw - t, y, cz + hd - t], [-(w - 2 * t), 0, 0], h, [0, 0, -1], uv);
+    this.quad([cx - hw + t, y, cz - hd + t], [w - 2 * t, 0, 0], h, [0, 0, 1], uv);
+    this.quad([cx + hw - t, y, cz - hd + t], [0, 0, d - 2 * t], h, [-1, 0, 0], uv);
+    this.quad([cx - hw + t, y, cz + hd - t], [0, 0, -(d - 2 * t)], h, [1, 0, 0], uv);
+    this.quad([cx - hw, y + h, cz + hd], [w, 0, 0], t, [0, 1, 0], uv);
+    this.quad([cx - hw, y + h, cz - hd + t], [w, 0, 0], t, [0, 1, 0], uv);
+    this.quad([cx + hw - t, y + h, cz + hd - t], [t, 0, 0], d - 2 * t, [0, 1, 0], uv);
+    this.quad([cx - hw, y + h, cz + hd - t], [t, 0, 0], d - 2 * t, [0, 1, 0], uv);
   }
 
   geometry(): THREE.BufferGeometry {
@@ -295,12 +380,16 @@ function stack(b: Batch, lot: Lot, k: number, o: { paint?: number; y0?: number; 
   let td = lot.d;
   if (lot.step) {
     b.tops.top(lot.x, lot.z, lot.w, lot.d, topY);
+    b.tops.rim(lot.x, lot.z, lot.w, lot.d, topY);
     tw = lot.step.w;
     td = lot.step.d;
     bucket.box(lot.x, lot.z, tw, td, topY, topY + lot.step.up * k, lot.ou + 5, lot.ov + 3);
     topY += lot.step.up * k;
   }
-  if (o.flat !== false) b.tops.top(lot.x, lot.z, tw, td, topY);
+  if (o.flat !== false) {
+    b.tops.top(lot.x, lot.z, tw, td, topY);
+    b.tops.rim(lot.x, lot.z, tw, td, topY);
+  }
   return topY;
 }
 
@@ -327,7 +416,7 @@ export function buildCity(night: NightParts): City {
   const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
   // Line the texture up with the streets: a road down its middle falls on x = STREET_X, z = STREET_Z.
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
-  const ground = new THREE.Mesh(groundGeo, new THREE.MeshToonMaterial({ map: groundTexture(), gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }));
+  const ground = new THREE.Mesh(groundGeo, detail(new THREE.MeshToonMaterial({ map: groundTexture(), gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }), 'ground'));
   ground.receiveShadow = false;
   street.add(ground, buildIsland(night));
 
@@ -340,8 +429,9 @@ export function buildCity(night: NightParts): City {
   const parks = new THREE.Group();
   const blockAt = (i: number, j: number) => ({ x: STREET_X - PERIOD / 2 + i * PERIOD, z: STREET_Z - PERIOD / 2 + j * PERIOD });
   const inner = INNER;
+  const lawn = detail(toonUnique('#8fcf7a'), 'grass');
   for (const p of parkAt) {
-    parks.add(mesh(new THREE.PlaneGeometry(p.size, p.size).rotateX(-Math.PI / 2), toon('#8fcf7a'), p.x, 0.03, p.z, false));
+    parks.add(mesh(new THREE.PlaneGeometry(p.size, p.size).rotateX(-Math.PI / 2), lawn, p.x, 0.03, p.z, false));
     for (const t of p.trees) {
       const tr = tree(t.s, t.tone);
       tr.position.set(t.x, 0, t.z);
@@ -364,7 +454,7 @@ export function buildCity(night: NightParts): City {
   garage.add(mesh(new THREE.PlaneGeometry(B.maxX - B.minX, B.maxZ - B.minZ).rotateX(-Math.PI / 2), toon('#9a9ea8'), (B.minX + B.maxX) / 2, 0.03, (B.minZ + B.maxZ) / 2, false));
   street.add(mergeByMaterial(garage));
   // Its plaza, with a few trees in front.
-  parks.add(mesh(new THREE.PlaneGeometry(inner, inner).rotateX(-Math.PI / 2), toon('#cfc8b8'), blockAt(0, 0).x, 0.02, blockAt(0, 0).z, false));
+  parks.add(mesh(new THREE.PlaneGeometry(inner, inner).rotateX(-Math.PI / 2), detail(toonUnique('#cfc8b8'), 'slab'), blockAt(0, 0).x, 0.02, blockAt(0, 0).z, false));
   for (const [x, z] of [
     [-16, 18],
     [-6, 18],
@@ -390,13 +480,13 @@ export function buildCity(night: NightParts): City {
       const p = PAINTS[i];
       const lit = litTexture(p, i + 1);
       lit.repeat.set(1 / 16, 1 / 16);
-      m = new THREE.MeshToonMaterial({ map: bayTexture(p), emissive: '#ffffff', emissiveMap: lit, emissiveIntensity: 0, gradientMap: gradient });
+      m = detail(new THREE.MeshToonMaterial({ map: bayTexture(p), emissive: '#ffffff', emissiveMap: lit, emissiveIntensity: 0, gradientMap: gradient }), 'wall');
       night.windows.push(m);
       paintMats.set(i, m);
     }
     return m;
   };
-  const roofs = toon('#a19d97');
+  const roofs = detail(toonUnique('#a19d97'), 'roof');
   const mastGeo = new THREE.CylinderGeometry(0.2, 0.35, 12, 6);
   const legGeo = new THREE.CylinderGeometry(0.12, 0.12, 2.4, 5);
   const tankGeo = new THREE.CylinderGeometry(1.6, 1.6, 3.2, 12);
@@ -670,13 +760,14 @@ class Soup {
     }
   }
 
-  mesh(): THREE.Mesh {
+  /** `mat`: a vertex-colored material of its own, for a surface with its own grain (surface.ts). */
+  mesh(mat: THREE.Material = toonVertex()): THREE.Mesh {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.norm, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.computeBoundingSphere();
-    return new THREE.Mesh(g, toonVertex());
+    return new THREE.Mesh(g, mat);
   }
 }
 
@@ -801,6 +892,19 @@ function streetTexture(): THREE.CanvasTexture {
         R('#383c46', s * (road - 0.18) - 0.09, a0, s * (road - 0.18) + 0.09, a1);
       }
     }
+    // Tactile paving where each zebra (below) meets the sidewalk: a yellow pad of raised dots across its end, in from the curb.
+    // The two at a corner make an L, the second stopping where the first is.
+    const flip = (s: number, a: number, b: number) => (s > 0 ? [a, b] : [-b, -a]);
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (const [ax, az, bx, bz] of [[road + 0.4, road + 0.3, road + 2.4, road + 1.1], [road + 0.3, road + 1.1, road + 1.1, road + 2.4]]) {
+          const [x0, x1] = flip(sx, ax, bx), [z0, z1] = flip(sz, az, bz);
+          R('#e9c46a', x0, z0, x1, z1);
+          g.fillStyle = 'rgba(110,80,20,0.4)';
+          for (let x = x0 + 0.125; x < x1; x += 0.25) for (let z = z0 + 0.125; z < z1; z += 0.25) g.fillRect(mid + x * px - 0.8, mid - z * px - 0.8, 1.6, 1.6);
+        }
+      }
+    }
     // Lane markings: a dashed yellow line down the middle, a white edge line each side, stopping short of the crossings.
     const dash = 2.6;
     for (let a = road + 5; a < H - 1; a += dash * 2) {
@@ -819,6 +923,58 @@ function streetTexture(): THREE.CanvasTexture {
     // Zebra crossings across all four arms (where the walkers cross), and stop lines in front of them (where the cars wait), the lane each way's own.
     for (const r of [...CROSSING_PAINT.zebra, ...CROSSING_PAINT.stop]) R('#f5f5f5', ...r);
   });
+}
+
+/** Somewhere a decal lies on the road: which, where, `w` across and `l` long, its length turned `rotY` (0: along z). */
+export interface RoadDecal {
+  decal: Decal;
+  x: number;
+  z: number;
+  w: number;
+  l: number;
+  rotY: number;
+}
+
+/**
+ * What lies on the roads near enough to see (within POST_RADIUS): along each block's length of road,
+ * clear of the crossings and stop lines at either end, a manhole cover in a lane now and then, a
+ * storm drain in each gutter, patches, cracks and oil where the cars stand, and an arrow in each lane
+ * before the crossing it's heading for (right-hand traffic: streetlife.ts laneOffset). Not under the garage's
+ * lots, which are laid over the road there. The same for everyone.
+ */
+export function roadDecals(): RoadDecal[] {
+  const out: RoadDecal[] = [];
+  const r = rng(20261002);
+  const keep = 10;
+  const covered = [LOT, SIDE_LOT].map((b) => ({ minX: b.minX - 1, maxX: b.maxX + 1, minZ: b.minZ - 1, maxZ: b.maxZ + 1 }));
+  const clear = (x: number, z: number) => !covered.some((b) => x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) && Math.hypot(x, z) < POST_RADIUS;
+  const lane = ROAD / 4;
+  const gutter = ROAD / 2 - 0.35;
+  const n = Math.ceil(POST_RADIUS / PERIOD) + 1;
+  for (const alongX of [true, false]) {
+    for (let j = -n; j <= n; j++) {
+      // The road's centre line across, and its blocks' lengths along it.
+      const line = (alongX ? STREET_Z : STREET_X) + j * PERIOD;
+      for (let i = -n; i < n; i++) {
+        const a0 = (alongX ? STREET_X : STREET_Z) + i * PERIOD + keep;
+        const span = PERIOD - keep * 2;
+        const put = (decal: Decal, along: number, across: number, w: number, l: number, turn = 0) => {
+          const x = alongX ? along : line + across;
+          const z = alongX ? line + across : along;
+          if (clear(x, z)) out.push({ decal, x, z, w, l, rotY: (alongX ? Math.PI / 2 : 0) + turn });
+        };
+        const at = () => a0 + r() * span;
+        if (r() < 0.7) put('manhole', at(), (r() < 0.5 ? -1 : 1) * lane, 0.85, 0.85, r() * Math.PI);
+        for (const side of [-1, 1]) put('drain', at(), side * gutter, 0.5, 0.9);
+        for (let k = Math.floor(r() * 3); k > 0; k--) put('patch', at(), (r() - 0.5) * ROAD * 0.6, 1.4 + r() * 1.6, 1.6 + r() * 2.6, (r() - 0.5) * 0.1);
+        for (let k = Math.floor(r() * 2.4); k > 0; k--) put('crack', at(), (r() - 0.5) * ROAD * 0.7, 1.6 + r(), 1.6 + r(), r() * Math.PI * 2);
+        for (let k = 1 + Math.floor(r() * 2); k > 0; k--) put('oil', at(), (r() < 0.5 ? -1 : 1) * lane + (r() - 0.5) * 0.6, 0.8 + r() * 0.7, 1 + r() * 0.8, r() * Math.PI);
+        // Heading + (east, or south), on the right: +z of an east-west road, -x of a north-south one.
+        for (const dir of [-1, 1]) put('arrow', dir > 0 ? a0 + span - 4 : a0 + 4, (alongX ? dir : -dir) * lane, 1.2, 4.8, dir > 0 ? 0 : Math.PI);
+      }
+    }
+  }
+  return out;
 }
 
 /** Light discs' colors: what the signal shows. */
@@ -862,7 +1018,7 @@ export function buildStreetCity(night: NightParts): THREE.Group {
       const p = PAINTS[i];
       const lit = litTexture(p, i + 1);
       lit.repeat.set(1 / 16, 1 / 16);
-      m = new THREE.MeshToonMaterial({ map: bayTexture(p), emissive: '#ffffff', emissiveMap: lit, emissiveIntensity: 0, gradientMap: gradient });
+      m = detail(new THREE.MeshToonMaterial({ map: bayTexture(p), emissive: '#ffffff', emissiveMap: lit, emissiveIntensity: 0, gradientMap: gradient }), 'wall');
       night.windows.push(m);
       paintMats.set(i, m);
     }
@@ -874,6 +1030,9 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   const batch = newBatch();
   const soup = new Soup();
+  /** The parks' lawns, paths and hedges, and the houses' tiled roofs: each a surface with a grain of its own. */
+  const lawns = new Soup();
+  const tiles = new Soup();
   const box = new THREE.BoxGeometry(1, 1, 1);
   const cyl = new THREE.CylinderGeometry(1, 1, 1, 6);
   const ball = new THREE.SphereGeometry(1, 8, 6);
@@ -937,19 +1096,19 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     const y = l.h;
     // The ridge runs along the longer side.
     if (l.w >= l.d) {
-      soup.tri([l.x - hx, y, l.z + hz], [l.x + hx, y, l.z + hz], [l.x + hx, y + rise, l.z], roof);
-      soup.tri([l.x - hx, y, l.z + hz], [l.x + hx, y + rise, l.z], [l.x - hx, y + rise, l.z], roof);
-      soup.tri([l.x + hx, y, l.z - hz], [l.x - hx, y, l.z - hz], [l.x - hx, y + rise, l.z], roof);
-      soup.tri([l.x + hx, y, l.z - hz], [l.x - hx, y + rise, l.z], [l.x + hx, y + rise, l.z], roof);
-      soup.tri([l.x + hx, y, l.z + hz], [l.x + hx, y, l.z - hz], [l.x + hx, y + rise, l.z], roof);
-      soup.tri([l.x - hx, y, l.z - hz], [l.x - hx, y, l.z + hz], [l.x - hx, y + rise, l.z], roof);
+      tiles.tri([l.x - hx, y, l.z + hz], [l.x + hx, y, l.z + hz], [l.x + hx, y + rise, l.z], roof);
+      tiles.tri([l.x - hx, y, l.z + hz], [l.x + hx, y + rise, l.z], [l.x - hx, y + rise, l.z], roof);
+      tiles.tri([l.x + hx, y, l.z - hz], [l.x - hx, y, l.z - hz], [l.x - hx, y + rise, l.z], roof);
+      tiles.tri([l.x + hx, y, l.z - hz], [l.x - hx, y + rise, l.z], [l.x + hx, y + rise, l.z], roof);
+      tiles.tri([l.x + hx, y, l.z + hz], [l.x + hx, y, l.z - hz], [l.x + hx, y + rise, l.z], roof);
+      tiles.tri([l.x - hx, y, l.z - hz], [l.x - hx, y, l.z + hz], [l.x - hx, y + rise, l.z], roof);
     } else {
-      soup.tri([l.x + hx, y, l.z - hz], [l.x + hx, y, l.z + hz], [l.x, y + rise, l.z + hz], roof);
-      soup.tri([l.x + hx, y, l.z - hz], [l.x, y + rise, l.z + hz], [l.x, y + rise, l.z - hz], roof);
-      soup.tri([l.x - hx, y, l.z + hz], [l.x - hx, y, l.z - hz], [l.x, y + rise, l.z - hz], roof);
-      soup.tri([l.x - hx, y, l.z + hz], [l.x, y + rise, l.z - hz], [l.x, y + rise, l.z + hz], roof);
-      soup.tri([l.x - hx, y, l.z + hz], [l.x + hx, y, l.z + hz], [l.x, y + rise, l.z + hz], roof);
-      soup.tri([l.x + hx, y, l.z - hz], [l.x - hx, y, l.z - hz], [l.x, y + rise, l.z - hz], roof);
+      tiles.tri([l.x + hx, y, l.z - hz], [l.x + hx, y, l.z + hz], [l.x, y + rise, l.z + hz], roof);
+      tiles.tri([l.x + hx, y, l.z - hz], [l.x, y + rise, l.z + hz], [l.x, y + rise, l.z - hz], roof);
+      tiles.tri([l.x - hx, y, l.z + hz], [l.x - hx, y, l.z - hz], [l.x, y + rise, l.z - hz], roof);
+      tiles.tri([l.x - hx, y, l.z + hz], [l.x, y + rise, l.z - hz], [l.x, y + rise, l.z + hz], roof);
+      tiles.tri([l.x - hx, y, l.z + hz], [l.x + hx, y, l.z + hz], [l.x, y + rise, l.z + hz], roof);
+      tiles.tri([l.x + hx, y, l.z - hz], [l.x - hx, y, l.z - hz], [l.x, y + rise, l.z - hz], roof);
     }
     soup.add(box, '#8d99ae', l.x + l.w * 0.25, y + rise + 0.4, l.z + l.d * 0.2, 0.8, 1.8, 0.8);
     const door = doors[Math.floor(pick() * doors.length)];
@@ -986,20 +1145,33 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     soup.add(cyl, '#3d405b', gas.sign.x, GAS_POLE / 2, gas.sign.z, 0.14, GAS_POLE, 0.14);
   };
 
+  // What stands on a flat roof: a box of air conditioning with its fan, or a water tower on legs.
+  const roofKit = (top: NonNullable<Lot['top']>, y: number) => {
+    if (top.kind === 'plant') {
+      soup.add(box, '#c9ccd4', top.x, y + 0.8, top.z, top.w, 1.6, top.d);
+      soup.add(box, '#9aa0aa', top.x, y + 1.62, top.z, top.w * 0.92, 0.04, top.d * 0.92);
+      soup.add(cyl, '#4a4f58', top.x, y + 1.66, top.z, Math.min(top.w, top.d) * 0.32, 0.05, Math.min(top.w, top.d) * 0.32);
+    } else if (top.kind === 'tank') {
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) soup.add(cyl, '#5b3a29', top.x + sx * 1.1, y + 1.2, top.z + sz * 1.1, 0.12, 2.4, 0.12);
+      soup.add(cyl, '#9c6b4a', top.x, y + 4, top.z, 1.6, 3.2, 1.6);
+      soup.add(cyl, '#6b4a35', top.x, y + 5.95, top.z, 1.8, 0.7, 1.8);
+    }
+  };
   for (const lot of lots) {
     if (lot.hand) continue;
+    let topY = -1;
     switch (lot.kind) {
       case 'shop': {
         const bucket = batch.walls.get(paintFor(lot)) ?? new Walls();
         batch.walls.set(paintFor(lot), bucket);
         // The other three walls of its ground floor are plain; the front is the shop's.
         bucket.box(lot.x, lot.z, lot.w, lot.d, 0, SHOP_H, lot.ou, lot.ov, 15 & ~face(lot));
-        stack(batch, lot, 1, { y0: SHOP_H });
+        topY = stack(batch, lot, 1, { y0: SHOP_H });
         shopFront(lot);
         break;
       }
       case 'walkup':
-        stack(batch, lot, 1, { paint: districtAt(lot.x, lot.z) === 'Downtown' ? 3 : BRICKS[(lot.ou + lot.ov) & 1] });
+        topY = stack(batch, lot, 1, { paint: districtAt(lot.x, lot.z) === 'Downtown' ? 3 : BRICKS[(lot.ou + lot.ov) & 1] });
         break;
       case 'deck':
         stack(batch, lot, 1, { paint: DECK });
@@ -1013,24 +1185,25 @@ export function buildStreetCity(night: NightParts): THREE.Group {
         station();
         break;
       default: {
-        const topY = stack(batch, lot, 1);
+        topY = stack(batch, lot, 1);
         if (lot.top?.kind === 'mast') {
           soup.add(cyl, '#8d99ae', lot.x, topY + 6, lot.z, 0.28, 12, 0.28);
           beacons.push(lot.x, topY + 12.3, lot.z);
         }
       }
     }
+    if (lot.top && topY >= 0) roofKit(lot.top, topY);
   }
   for (const [paint, w] of batch.walls) group.add(new THREE.Mesh(w.geometry(), paintOf(paint)));
-  group.add(new THREE.Mesh(batch.tops.geometry(), toon('#a19d97')), new THREE.Mesh(stores.geometry(), storeMat));
+  group.add(new THREE.Mesh(batch.tops.geometry(), detail(toonUnique('#a19d97'), 'roof')), new THREE.Mesh(stores.geometry(), storeMat));
 
   // Parks: a lawn, a kerb of hedge all round, two paths, and the trees.
   for (const p of parks) {
-    soup.add(box, '#8fcf7a', p.x, 0.04, p.z, p.size, 0.08, p.size);
-    soup.add(box, '#dcd2b8', p.x, 0.09, p.z, 2.4, 0.06, p.size);
-    soup.add(box, '#dcd2b8', p.x, 0.09, p.z, p.size, 0.06, 2.4);
+    lawns.add(box, '#8fcf7a', p.x, 0.04, p.z, p.size, 0.08, p.size);
+    lawns.add(box, '#dcd2b8', p.x, 0.09, p.z, 2.4, 0.06, p.size);
+    lawns.add(box, '#dcd2b8', p.x, 0.09, p.z, p.size, 0.06, 2.4);
     // Open where the paths come out: you can drive in (shared/city.ts parkHedges, which are solid).
-    for (const a of parkHedges(p)) soup.add(box, '#4ea657', (a.minX + a.maxX) / 2, 0.3, (a.minZ + a.maxZ) / 2, a.maxX - a.minX, 0.6, a.maxZ - a.minZ);
+    for (const a of parkHedges(p)) lawns.add(box, '#4ea657', (a.minX + a.maxX) / 2, 0.3, (a.minZ + a.maxZ) / 2, a.maxX - a.minX, 0.6, a.maxZ - a.minZ);
     for (const t of p.trees) tree(t.x, t.z, t.s, t.tone);
   }
 
@@ -1151,8 +1324,13 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   lit.onBeforeRender = signals;
   group.add(lit);
 
-  // Everything vertex-colored (trees' trunks, roofs, furniture, gas station...) in the one mesh.
-  group.add(soup.mesh());
+  // Everything vertex-colored (trees' trunks, furniture, gas station...) in the one mesh; the parks and the houses' roofs in theirs.
+  group.add(soup.mesh(), lawns.mesh(detail(toonVertexUnique(), 'ground')), tiles.mesh(detail(toonVertexUnique(), 'shingles')));
+  // The ground's grain (asphalt, paving, grass: surface.ts), and manhole covers, drains, patches, cracks, oil and arrows down the roads (see roadDecals).
+  detail(groundMat, 'ground');
+  const decals = new Decals();
+  for (const d of roadDecals()) decals.flat(decalUV(d.decal), d.x, 0, d.z, d.w, d.l, d.rotY);
+  group.add(decals.mesh());
   // The tall lit signs that say where the gates, the gas station, the parking deck, the café and the bar are.
   group.add(buildLandmarks(() => darkOf(storeMat), GAS_POLE));
   // The trees' tops and the awnings' fringes sway in the wind (world/dressing.ts): they're the trees and awnings, so they're here at once.

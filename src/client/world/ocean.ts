@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { GRID, LIGHTHOUSE, PIER, coastAt } from '../../shared/city';
 import { bulb, type NightParts } from './outside';
 import { mergeColored, mesh, toon, toonUnique } from './toon';
+import { detail } from './surface';
 
 // The island the city stands on (shared/city.ts coastAt): a verge of grass past the ring road, a
 // beach all round, and the sea out to the horizon, with a pier off the south shore and a lighthouse
@@ -75,10 +76,13 @@ const flat = (m: THREE.Material) => {
 };
 
 let sandMap: THREE.Texture | null = null;
-/** The beach's sand (textures/sand.jpg, made with gpt-image-2), tiled every 8 m. */
+/** The beach's sand (textures/sand.jpg, made with gpt-image-2), tiled every SAND m across (and its own shape's worth along). */
+const SAND = 8;
+/** The picture's height over its width (512 × 341), so the sand's grains stay round. */
+const SAND_ASPECT = 341 / 512;
 function sand(): THREE.Texture {
   if (sandMap) return sandMap;
-  sandMap = new THREE.TextureLoader().load('/textures/sand.jpg');
+  sandMap = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}textures/sand.jpg`);
   sandMap.colorSpace = THREE.SRGBColorSpace;
   sandMap.wrapS = sandMap.wrapT = THREE.RepeatWrapping;
   sandMap.anisotropy = 8;
@@ -198,7 +202,7 @@ export function buildIsland(night: NightParts): THREE.Group {
   // Grass from the streets' square out to the beach, level with the street.
   const grass = new THREE.Mesh(
     ring(2, (i, j) => ({ r: j ? COAST[i].land : squareAt(ANGLES[i]), y: 0 })),
-    flat(toonUnique('#a7d98b')),
+    flat(detail(toonUnique('#a7d98b'), 'grass')),
   );
   group.add(grass);
 
@@ -212,8 +216,8 @@ export function buildIsland(night: NightParts): THREE.Group {
   const uv = new Float32Array(bp.count * 2);
   const tint = new Float32Array(bp.count * 3);
   for (let i = 0; i < bp.count; i++) {
-    uv[i * 2] = bp.getX(i) / 8;
-    uv[i * 2 + 1] = bp.getZ(i) / 8;
+    uv[i * 2] = bp.getX(i) / SAND;
+    uv[i * 2 + 1] = bp.getZ(i) / (SAND * SAND_ASPECT);
     const wet = i % 3 === 0 ? 1 : 0.72;
     tint.set([wet, wet * 0.97, wet * 0.93], i * 3);
   }
