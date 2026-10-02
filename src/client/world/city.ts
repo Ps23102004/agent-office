@@ -944,8 +944,9 @@ export interface RoadDecal {
 /**
  * What lies on the roads near enough to see (within POST_RADIUS): along each block's length of road,
  * clear of the crossings and stop lines at either end, a manhole cover in a lane now and then, a
- * storm drain in each gutter, patches, cracks and oil where the cars stand. Not under the garage's
- * lots or the race plaza, which are laid over the road there. The same for everyone.
+ * storm drain in each gutter, patches, cracks and oil where the cars stand, and an arrow in each lane
+ * before the crossing it's heading for (right-hand traffic: streetlife.ts laneOffset). Not under the garage's
+ * lots, which are laid over the road there. The same for everyone.
  */
 export function roadDecals(): RoadDecal[] {
   const out: RoadDecal[] = [];
@@ -974,6 +975,8 @@ export function roadDecals(): RoadDecal[] {
         for (let k = Math.floor(r() * 3); k > 0; k--) put('patch', at(), (r() - 0.5) * ROAD * 0.6, 1.4 + r() * 1.6, 1.6 + r() * 2.6, (r() - 0.5) * 0.1);
         for (let k = Math.floor(r() * 2.4); k > 0; k--) put('crack', at(), (r() - 0.5) * ROAD * 0.7, 1.6 + r(), 1.6 + r(), r() * Math.PI * 2);
         for (let k = 1 + Math.floor(r() * 2); k > 0; k--) put('oil', at(), (r() < 0.5 ? -1 : 1) * lane + (r() - 0.5) * 0.6, 0.8 + r() * 0.7, 1 + r() * 0.8, r() * Math.PI);
+        // Heading + (east, or south), on the right: +z of an east-west road, -x of a north-south one.
+        for (const dir of [-1, 1]) put('arrow', dir > 0 ? a0 + span - 4 : a0 + 4, (alongX ? dir : -dir) * lane, 1.2, 4.8, dir > 0 ? 0 : Math.PI);
       }
     }
   }

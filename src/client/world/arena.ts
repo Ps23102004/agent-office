@@ -76,7 +76,7 @@ function containerDecals(into: Decals, b: ArenaBox) {
   const n: [number, number] = alongX ? [1, 0] : [0, 1];
   const at = (across: number) => (alongX ? { x: cx + door, z: cz + across } : { x: cx + across, z: cz + door });
   // Seen from in front of the doors, the code's top right and the plate low down on the left.
-  const code = at(-n[1] * 0 + (alongX ? -1 : 1) * wid * 0.22);
+  const code = at((alongX ? -1 : 1) * wid * 0.22);
   into.wall(decalUV('code', line), code.x, b.y1 - 0.5, code.z, 1.1, 0.55, n);
   const plate = at((alongX ? 1 : -1) * wid * 0.3);
   into.wall(decalUV('plate'), plate.x, b.y0 + 0.9, plate.z, 0.36, 0.36, n);
@@ -106,11 +106,11 @@ function barrier(into: THREE.Object3D, b: ArenaBox) {
   }
 }
 
-/** The yard's walls: concrete panels with pilasters, and a yellow-and-black band along the top. */
-function wall(into: THREE.Object3D, b: ArenaBox) {
+/** The yard's walls: concrete panels with pilasters (into `panels`), and a yellow-and-black band along the top (into `into`). */
+function wall(into: THREE.Object3D, panels: THREE.Object3D, b: ArenaBox) {
   const w = b.maxX - b.minX, l = b.maxZ - b.minZ;
   const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
-  block(into, w, WALL_H, l, '#a7a9ac', cx, 0, cz);
+  block(panels, w, WALL_H, l, '#a7a9ac', cx, 0, cz);
   const alongX = w > l;
   const len = alongX ? w : l;
   // Which side faces the yard.
@@ -122,8 +122,8 @@ function wall(into: THREE.Object3D, b: ArenaBox) {
     else block(into, 0.06, 0.45, 1, c, cx + inward * face, WALL_H - 0.7, cz + s, false);
   }
   for (let s = -len / 2 + 4; s < len / 2 - 2; s += 8) {
-    if (alongX) block(into, 0.6, WALL_H, 0.3, '#94969a', cx + s, 0, cz + inward * (face + 0.12));
-    else block(into, 0.3, WALL_H, 0.6, '#94969a', cx + inward * (face + 0.12), 0, cz + s);
+    if (alongX) block(panels, 0.6, WALL_H, 0.3, '#94969a', cx + s, 0, cz + inward * (face + 0.12));
+    else block(panels, 0.3, WALL_H, 0.6, '#94969a', cx + inward * (face + 0.12), 0, cz + s);
   }
 }
 
@@ -183,8 +183,8 @@ export function buildArena(): ArenaWorld {
   const solid = new THREE.Group();
   const C = ARENA_CENTER;
 
-  // The ground: concrete, with painted bays and lanes.
-  const ground = mesh(new THREE.PlaneGeometry(600, 600).rotateX(-Math.PI / 2), toon(GROUND), C.x, 0, C.z, false);
+  // The ground: concrete slabs, with painted bays and lanes.
+  const ground = mesh(new THREE.PlaneGeometry(600, 600).rotateX(-Math.PI / 2), detail(toonUnique(GROUND), 'slab'), C.x, 0, C.z, false);
   group.add(ground);
   // Something to stand on: the street's far below, out here.
   colliders.push({ minX: C.x - 300, maxX: C.x + 300, minZ: C.z - 300, maxZ: C.z + 300, bottom: -1, top: 0 });
@@ -195,11 +195,16 @@ export function buildArena(): ArenaWorld {
   block(solid, 8, 0.014, 8, '#f4c430', C.x, 0.003, C.z, false);
   block(solid, 7.4, 0.016, 7.4, GROUND, C.x, 0.004, C.z, false);
 
+  // The containers and the walls each a surface of their own (surface.ts): corrugated, rusting steel; concrete panels.
+  const steel = new THREE.Group(), panels = new THREE.Group();
+  const decals = new Decals();
   for (const b of ARENA_BOXES) {
-    if (b.kind === 'container') container(solid, b);
-    else if (b.kind === 'crate') crate(solid, b);
+    if (b.kind === 'container') {
+      container(steel, b);
+      containerDecals(decals, b);
+    } else if (b.kind === 'crate') crate(solid, b);
     else if (b.kind === 'barrier') barrier(solid, b);
-    else wall(solid, b);
+    else wall(solid, panels, b);
     colliders.push({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, bottom: b.y0, top: b.y1 });
   }
   const m = ARENA_HALF - 2;
@@ -213,13 +218,14 @@ export function buildArena(): ArenaWorld {
       const b: ArenaBox = along
         ? { minX: C.x + s - 6, maxX: C.x + s + 6, minZ: C.z + out - 1.25, maxZ: C.z + out + 1.25, y0: y * 2.6, y1: (y + 1) * 2.6, kind: 'container', paint: k + y }
         : { minX: C.x + out - 1.25, maxX: C.x + out + 1.25, minZ: C.z + s - 6, maxZ: C.z + s + 6, y0: y * 2.6, y1: (y + 1) * 2.6, kind: 'container', paint: k + y + 1 };
-      container(solid, b);
+      container(steel, b);
+      containerDecals(decals, b);
     }
     k++;
   }
   const home = gate(ARENA_GATE, '🏙️ Back to the city', solid, colliders, 0, ['#3d4147', '#f4c430']);
   (home.shimmer.material as THREE.MeshBasicMaterial).color.set('#ff6b6b');
-  group.add(mergeColored(solid), home.sign, home.shimmer);
+  group.add(mergeColored(solid), mergeColored(steel, detail(toonVertexUnique(), 'container')), mergeColored(panels, detail(toonVertexUnique(), 'panels')), decals.mesh(), home.sign, home.shimmer);
 
   // Shots: a pool of streaks and sparks.
   const fx: Fx[] = [];

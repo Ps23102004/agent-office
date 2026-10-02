@@ -597,7 +597,7 @@ export function buildCircuit(): Circuit {
       (slow ? gravel : runoff).band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, 0, slow ? '#e4d3a0' : '#8f949e');
     }
   }
-  // Skid marks into the corners you brake for: pairs of tyres' streaks along the racing line, fading in and out.
+  // Skid marks into the corners you brake for: pairs of tyres' streaks along the racing line, thinning out at their ends.
   const skid = decalUV('skid');
   const sr = rng(4242);
   for (const c of corners) {
@@ -605,11 +605,16 @@ export function buildCircuit(): Circuit {
     for (let n = 0; n < 4; n++) {
       const from = c.s0 - 85 + sr() * 30, len = 30 + sr() * 35, wander = (sr() - 0.5) * 2.4;
       for (const wheel of [-0.8, 0.8]) {
+        // Where the streak is across the track `s` m round, so each piece starts where the last one ended.
+        const off = (s: number) => racingLine(s) + wander + wheel + Math.sin(s * 0.11 + n) * 0.15;
         for (let s = from; s < from + len; s += 2) {
-          const d = racingLine(s) + wander + wheel + Math.sin(s * 0.11 + n) * 0.15;
           const a = pointAt(s), b = pointAt(s + 2);
           const at = (p: typeof a, dd: number) => [p.x + p.tz * dd, 0, p.z - p.tx * dd];
-          marks.quad(at(a, d - 0.14), at(a, d + 0.14), at(b, d + 0.14), at(b, d - 0.14), skid, UP);
+          const da = off(s), db = off(s + 2);
+          // Narrowing to nothing at either end: where the tyre locked, and where it let go.
+          const half = (t: number) => 0.14 * Math.max(0, Math.min(1, (t - from) / 8, (from + len - t) / 8));
+          const ha = half(s), hb = half(s + 2);
+          marks.quad(at(a, da - ha), at(a, da + ha), at(b, db + hb), at(b, db - hb), skid, UP);
         }
       }
     }
@@ -810,7 +815,7 @@ export function buildCircuit(): Circuit {
     const p = pointAt(s);
     const d = SIGNS * out;
     const x = p.x + p.tz * d, z = p.z - p.tx * d;
-    if (!railClear(x, z)) return;
+    if (!railClear(x, z) || !open(x, z)) return;
     // Facing whoever's `face` m back round the track.
     const from = pointAt(s - face);
     const rotY = Math.atan2(from.x - x, from.z - z);

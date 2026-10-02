@@ -39,7 +39,7 @@ const GRAINS = {
   /** A flat roof: gravel, and the weather on it. */
   roof: { tile: 2, mix: [0.12, 0, 0.3, 0], macro: 0.28 },
   shingles: { tile: 2, mix: [0.08, 0, 0.12, 0], macro: 0.2, with: { SHINGLES: 0.24 } },
-  container: { tile: 3, mix: [0.05, 0, 0, 0], macro: 0.1, with: { RIBS: 0.3, RUST: 0.55, STREAKS: 0.12 } },
+  container: { tile: 3, mix: [0.05, 0, 0, 0], macro: 0.1, with: { RIBS: 0.3, RUST: 0.4, STREAKS: 0.12 } },
 } as const satisfies Record<string, { tile: number; mix: readonly number[]; macro: number; with?: Record<string, number> }>;
 export type Grain = keyof typeof GRAINS;
 
@@ -173,6 +173,8 @@ export const DECALS = {
   oil: [4, 0, 1, 1],
   /** Seamless top to bottom, for laying end to end. */
   skid: [5, 0, 1, 1],
+  /** A lane's arrow, pointing up the cell: drawn squeezed, to be laid four times longer than it's wide. */
+  arrow: [6, 0, 1, 1],
   /** Grid numbers 1 to 8: digit n is at column n - 1. */
   digit: [0, 1, 1, 1],
   pit: [0, 2, 4, 1],
@@ -258,9 +260,9 @@ export function decalAtlas(): THREE.CanvasTexture {
   // A patch: a darker, newer rectangle of asphalt with a sealed edge.
   {
     const { x, y } = cell('patch');
-    g.fillStyle = 'rgba(28,30,36,0.55)';
+    g.fillStyle = 'rgba(28,30,36,0.22)';
     g.fillRect(x + 4, y + 6, 56, 52);
-    g.strokeStyle = 'rgba(16,17,20,0.6)';
+    g.strokeStyle = 'rgba(16,17,20,0.4)';
     g.lineWidth = 2;
     g.strokeRect(x + 4, y + 6, 56, 52);
   }
@@ -311,6 +313,17 @@ export function decalAtlas(): THREE.CanvasTexture {
       g.fillRect(x + 2, y + row, 6, 1);
       g.fillRect(x + CELL - 8, y + row, 6, 1);
     }
+  }
+  // A lane's arrow, straight on: a shaft and a head, squeezed four to one along its length.
+  {
+    const { x, y } = cell('arrow');
+    g.fillStyle = 'rgba(248,249,250,0.92)';
+    g.fillRect(x + 27, y + 22, 10, 40);
+    g.beginPath();
+    g.moveTo(x + 32, y + 2);
+    g.lineTo(x + 58, y + 24);
+    g.lineTo(x + 6, y + 24);
+    g.fill();
   }
   // Grid numbers.
   g.textAlign = 'center';
