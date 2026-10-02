@@ -288,9 +288,10 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
   // island's beach (walk into the sea and you're put back on it: main.ts).
   colliders.push({ minX: -700, maxX: 700, minZ: -700, maxZ: 700, bottom: G - 1, top: G });
 
-  // The lot in front of the garage, out to the sidewalk, and the one down its east side: paved only on the office's own block, not over the avenues.
+  // The lot in front of the garage, out to the sidewalk, and the one down its east side: paved only on the office's own block, not over the avenues,
+  // a hair above the city's ground (wherever that is), the side lot a hair under the front one where they meet.
   LOT_PAVING.forEach((b, k) => {
-    group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, G - 0.01 - 0.002 * k, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
+    group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, city.position.y + 0.02 - 0.002 * k, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
   });
 
   const forest = new THREE.Group();
