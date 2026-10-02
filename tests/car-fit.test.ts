@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { kitModel, setCarKit, type KitName } from '../src/client/world/carkit.js';
-import { BODY, Fleet, TAIL_BRAKE, TAIL_NIGHT, profiles, springs, supercar } from '../src/client/world/cars.js';
+import { BODY, Fleet, HULLS, TAIL_BRAKE, TAIL_NIGHT, slice, springs, stations, supercar } from '../src/client/world/cars.js';
 import { CARS, SPECS, drive, parked, type CarKind, type CarPose } from '../src/shared/garage.js';
 import { STREET_Y } from '../src/shared/layout.js';
 
@@ -30,21 +30,25 @@ function meshesUnder(root: THREE.Object3D, skip: Set<THREE.Object3D>): THREE.Mes
   return out;
 }
 
-test("a supercar's side profile never crosses itself (no hole in the hood), and each arch clears its tire", () => {
+test("a supercar's hull never folds through itself (no hole in the hood), and each arch clears its tire", () => {
+  const cross = (a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2, d: THREE.Vector2) => {
+    const o = (p: THREE.Vector2, q: THREE.Vector2, r: THREE.Vector2) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+    return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+  };
   for (const kind of ['lambo', 'ferrari'] as const) {
-    const { body, axles } = profiles(kind);
-    const pts = body.getPoints(24);
-    const n = pts.length;
-    const cross = (a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2, d: THREE.Vector2) => {
-      const o = (p: THREE.Vector2, q: THREE.Vector2, r: THREE.Vector2) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
-      return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
-    };
-    for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
-      if (i === 0 && j === n - 1) continue;
-      assert.ok(!cross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]), `${kind}'s outline crosses itself near x ${pts[i].x.toFixed(2)}`);
+    const h = HULLS[kind];
+    for (const { z, well } of stations(h)) {
+      const half = slice(h, z, well);
+      const ring = [...half, ...half.slice(1, -1).reverse().map(([x, y]) => [-x, y] as const)].map(([x, y]) => new THREE.Vector2(x, y));
+      const n = ring.length;
+      for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+        if (i === 0 && j === n - 1) continue;
+        assert.ok(!cross(ring[i], ring[(i + 1) % n], ring[j], ring[(j + 1) % n]), `${kind}'s slice at z ${z.toFixed(2)} crosses itself`);
+      }
+      // Over a wheel well, the shoulder and the hood's edge stay a skin's thickness over the arch.
+      if (well) assert.ok(Math.min(half[7][1], half[8][1]) - half[2][1] >= 0.03, `${kind} at z ${z.toFixed(2)}: ${((Math.min(half[7][1], half[8][1]) - half[2][1]) * 100).toFixed(1)} cm of hood over the arch`);
     }
-    // The body's sides stand 5 cm out past the outline (its bevel), so its arches are 5 cm tighter there: still over the tire.
-    for (const a of axles) assert.ok(a.arch - 0.05 - a.r >= 0.025, `${kind} arch at ${a.x} is ${((a.arch - 0.05 - a.r) * 100).toFixed(1)} cm over its tire`);
+    for (const a of h.axles) assert.ok(a.arch - a.r >= 0.05, `${kind} arch at ${a.z} is ${((a.arch - a.r) * 100).toFixed(1)} cm over its tire`);
   }
 });
 
@@ -111,6 +115,24 @@ test('a fender never comes down through its tire, at the most the body ever pitc
     // Parked, there's a gap over each tire for the springs to use.
     springs(m, 0, 0, 0);
     for (const w of m.wheels) assert.ok(w.userData.clear >= 0.025, `${kind} ${w.userData.clear} m over its tire`);
+  }
+});
+
+test('nothing under a body comes down onto the road, at the most it ever pitches, rolls and bobs', () => {
+  const v = new THREE.Vector3();
+  for (const kind of [...CLOSED, 'race-future'] as const) {
+    const m = supercar(kind, '#3366cc');
+    const body = meshesUnder(m.body, new Set(m.wheels));
+    for (const pitch of [-1, 0, 1]) for (const roll of [-1, 0, 1]) {
+      springs(m, pitch * BODY.pitch, roll * BODY.roll, -BODY.bob);
+      m.root.updateMatrixWorld(true);
+      let low = Infinity;
+      for (const b of body) {
+        const p = b.geometry.attributes.position;
+        for (let i = 0; i < p.count; i++) low = Math.min(low, v.fromBufferAttribute(p, i).applyMatrix4(b.matrixWorld).y);
+      }
+      assert.ok(low > 0.02, `${kind} pitch ${pitch} roll ${roll}: its underside ${(low * 100).toFixed(1)} cm over the road`);
+    }
   }
 });
 

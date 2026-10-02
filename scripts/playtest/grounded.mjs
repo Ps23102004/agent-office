@@ -307,6 +307,9 @@ function bodyCheck({ which, index, poses, steer, relative }) {
     inv.copy(v.root.matrixWorld).invert();
     const body = [];
     v.root.traverse((m) => m.isMesh && visible(m) && !isWheel(m) && !isFlame(m) && body.push(m));
+    // Both faces: a wheel well's roof is the inside of the body, met from behind by a ray coming down through the hood.
+    const sides = body.map((m) => m.material.side);
+    body.forEach((m) => (m.material.side = T.DoubleSide));
     let worst = Infinity;
     for (const w of v.wheels) {
       const tyre = [];
@@ -318,10 +321,15 @@ function bodyCheck({ which, index, poses, steer, relative }) {
         const top = ray.intersectObjects(tyre, false)[0];
         if (!top) continue;
         const tyreTop = top.point.clone().applyMatrix4(inv).y;
-        const above = ray.intersectObjects(body, false).map((h) => h.point.clone().applyMatrix4(inv).y).filter((y) => y > hub.y + 0.2);
+        // Only faces the ray meets head-on: one that's all but upright is a wall it runs down beside, not a fender
+        // over the tyre (a Kenney well's inner panel stands 4 mm off a front hub: the least roll tips it across the ray).
+        const above = ray.intersectObjects(body, false)
+          .filter((h) => Math.abs(h.face.normal.clone().transformDirection(h.object.matrixWorld).transformDirection(inv).y) > 0.3)
+          .map((h) => h.point.clone().applyMatrix4(inv).y).filter((y) => y > hub.y + 0.2);
         if (above.length) worst = Math.min(worst, Math.min(...above) - tyreTop);
       }
     }
+    body.forEach((m, i) => (m.material.side = sides[i]));
     return worst === Infinity ? null : Math.round(worst * 1000) / 10;
   };
   const poke = () => {
