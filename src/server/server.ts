@@ -54,7 +54,7 @@ import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
 import { ArenaControl } from './arena.js';
-import { ArenaBots } from './arenabots.js';
+import { ArenaBots, TICK as BOT_TICK } from './arenabots.js';
 import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF, isWeapon, type V3 } from '../shared/arena.js';
 import { BOTS, isBotLevel } from '../shared/bots.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
@@ -1300,7 +1300,7 @@ export async function startServer(cfg: Config) {
     }
     // Bots in as people come in, out as they go (straight away where they do: this catches anything else).
     bots.fill(now);
-    if (bots.size && !botTimer) botTimer = setInterval(() => bots.tick(Date.now()), 50);
+    if (bots.size && !botTimer) botTimer = setInterval(() => bots.tick(Date.now()), BOT_TICK);
     if (!bots.size && botTimer) {
       clearInterval(botTimer);
       botTimer = undefined;

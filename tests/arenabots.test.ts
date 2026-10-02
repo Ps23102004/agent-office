@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, EYE_Y, RULES, SPAWNS, type Body, type V3 } from '../src/shared/arena.js';
+import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, EYE_Y, RULES, SPAWNS, SWAP, WEAPONS, type Body, type V3 } from '../src/shared/arena.js';
 import { BOT_LEVELS, SKILL, isBot, type BotLevel } from '../src/shared/bots.js';
 import { rng } from '../src/shared/city.js';
 import { ArenaControl } from '../src/server/arena.js';
-import { ArenaBots, arenaYard, sees } from '../src/server/arenabots.js';
+import { ArenaBots, TICK, arenaYard, sees } from '../src/server/arenabots.js';
 
 /**
  * The arena with people standing (or moved about) where a test puts them and bots filled in, wired up
@@ -44,10 +44,10 @@ function yard(people: Record<string, Body>, opts: { fill?: number; level?: BotLe
       return now;
     },
     shoot,
-    /** The clock on `ms`, 50 ms at a time: the arena's own tick every 250, `each` before the bots think. */
+    /** The clock on `ms`, a bot tick at a time: the arena's own tick every 250, `each` before the bots think. */
     run(ms: number, each?: (now: number) => void) {
-      for (let t = 0; t < ms; t += 50) {
-        now += 50;
+      for (let t = 0; t < ms; t += TICK) {
+        now += TICK;
         each?.(now);
         if (now % 250 === 0) for (const s of arena.tick(now).spawned) Object.assign(bots.peer(s.id) ?? {}, { x: s.x, y: 0, z: s.z, rotY: s.rotY });
         bots.tick(now);
@@ -191,7 +191,7 @@ test('each level aims as well as it should against someone strafing 15 m off, an
     kills.sort((a, b) => a - b);
     return { level, rate: hits / shots, kill: kills[15] };
   });
-  // Measured (these 30 duels each): easy 36% and 3.5 s to the kill, normal 55% / 1.4 s, hard 75% / 0.8 s, insane 92% / 0.6 s.
+  // Measured (these 30 duels each): easy 35% and 3.35 s to the kill, normal 54% / 1.3 s, hard 75% / 0.8 s, insane 92% / 0.6 s.
   const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.25, 0.5, 1500, 4000], normal: [0.45, 0.7, 700, 1600], hard: [0.65, 0.88, 450, 900], insane: [0.8, 0.97, 300, 700] };
   for (const r of rows) {
     const [lo, hi, k0, k1] = bands[r.level];
@@ -315,23 +315,102 @@ test('a bot has the SMG out close in and the rifle further off, and a good one c
     const m = yard({ a }, { fill: 2, level: 'hard', seed: 2 });
     const bot = m.bots.peers()[0];
     Object.assign(bot, { x: a.x, z: a.z - dist, rotY: 0 });
+    const start = m.now;
     let crouched = 0;
     m.run(2500, () => (crouched += bot.crouch ? 1 : 0));
-    return { fired: m.shots.filter((s) => s.by === bot.id), crouched };
+    return { fired: m.shots.filter((s) => s.by === bot.id), crouched, start };
   };
   const near = play(6), far = play(15);
   assert.ok(near.fired.length > 0 && near.fired.every((s) => s.w === 'smg'), `close in: ${near.fired.map((s) => s.w)}`);
   assert.ok(far.fired.length > 0 && far.fired.every((s) => s.w === 'rifle'), `further off: ${far.fired.map((s) => s.w)}`);
+  // It swaps (from the rifle every life starts with) while it's still reacting, not after: the first
+  // shot a swap after it first sees them (the first tick), not a reaction and then a swap (750 ms).
+  assert.ok(near.fired[0].at - near.start <= TICK + SWAP, `first SMG shot ${near.fired[0].at - near.start} ms in`);
+  // And fires it as fast as the gun goes (65 ms a shot, on whichever tick is nearest), not a tick
+  // slower: before, every shot in a burst came 100 ms apart, slower close in than the rifle it put away.
+  const gaps = near.fired.slice(1).map((s, i) => s.at - near.fired[i].at).filter((g) => g <= 100);
+  const mean = gaps.reduce((n, g) => n + g, 0) / gaps.length;
+  assert.ok(gaps.length >= 3 && Math.abs(mean - WEAPONS.smg.every) < 12, `SMG shots ${gaps} ms apart`);
+  assert.ok(near.fired.every((s) => !s.refused));
   // Crouched for some of it, and its shots left from crouched eyes then (the judge took every one).
   assert.ok(far.crouched > 0 && far.fired.some((s) => s.o.y < EYE_Y - 0.3));
   assert.ok(far.fired.every((s) => !s.refused));
 });
 
-test('seven bots think in well under a millisecond or two a tick', () => {
-  const m = yard({ a: { x: C.x - 20, y: 0, z: C.z + 16 } }, { fill: 8, seed: 3 });
-  m.run(2000);
-  const t0 = performance.now();
-  m.run(10_000);
-  const per = (performance.now() - t0) / 200;
-  assert.ok(per < 3, `${per.toFixed(2)} ms a tick`);
+test('a bot that runs one gun dry (or is reloading it) fights on with the other, and reloads the empty one once nobody is in sight', () => {
+  // A hard bot 15 m off someone up the open west lane, down to its last two rifle rounds (or, every
+  // other seed, ten and reloading), its SMG full. Before, it broke off for cover as soon as the rifle
+  // was empty or reloading (never mind the SMG it had), and never reloaded the rifle again while it
+  // lived: it only ever reloaded the gun in its hands.
+  let ran = 0;
+  for (let seed = 1; seed <= 10; seed++) {
+    const a: V3 = { x: C.x - 20, y: 0, z: C.z + 7 };
+    const m = yard({ a }, { fill: 2, level: 'hard', seed });
+    const bot = m.bots.peers()[0];
+    Object.assign(bot, { x: a.x, z: a.z - 15, rotY: 0 });
+    Object.assign(m.arena.gun(bot.id, m.now)!.ammo, { rifle: seed % 2 ? 2 : 10 });
+    if (!(seed % 2)) assert.ok(m.arena.reload(bot.id, m.now));
+    // It stands its ground while they're up (a good bot plants itself, or strafes at a walk, 0.23 m a
+    // tick), not running off for cover.
+    let was = { x: bot.x, z: bot.z };
+    m.run(2000, () => {
+      if (alive(m.arena, 'a') && Math.hypot(bot.x - was.x, bot.z - was.z) > 0.3) ran++;
+      was = { x: bot.x, z: bot.z };
+    });
+    const fired = m.shots.filter((s) => s.by === bot.id);
+    assert.ok(fired.some((s) => s.w === 'smg'), `seed ${seed}: on with the SMG (${fired.map((s) => s.w)})`);
+    // They go: nobody in sight, it gets the rifle out and reloads it (after the SMG, if that's low).
+    m.arena.leave('a', m.now);
+    m.run(4500);
+    const gun = m.arena.gun(bot.id, m.now)!;
+    assert.equal(gun.ammo.rifle, WEAPONS.rifle.mag, `seed ${seed}: rifle reloaded`);
+    assert.ok(gun.ammo.smg >= WEAPONS.smg.mag / 2, `seed ${seed}: SMG ${gun.ammo.smg}`);
+  }
+  assert.equal(ran, 0, `ran ${ran} ticks`);
+});
+
+test('seven bots think in well under a millisecond a tick, and no tick piles up much more', () => {
+  // A busy match; then someone the bots can never see, behind the east wall, firing away (every bot off
+  // to find somewhere to peek at them from: the dearest thing a bot works out). Before, the mean was
+  // fine, but now and then one tick did that for a few bots at once: up to five or six routes worked
+  // out in a tick, 6 ms a tick at the 99th percentile, 8 at worst.
+  const { nav } = arenaYard();
+  const route = nav.route;
+  let routes = 0, most = 0;
+  nav.route = (from, to) => (routes++, route.call(nav, from, to));
+  const play = () => {
+    const ticks: number[] = [];
+    for (const [a, firing] of [[{ x: C.x - 20, y: 0, z: C.z + 16 }, false], [{ x: C.x + ARENA_HALF + 1.5, y: 0, z: C.z + 10 }, true]] as const) {
+      const m = yard({ a }, { fill: 8, level: 'insane', seed: 3 });
+      m.run(2000);
+      const tick = m.bots.tick.bind(m.bots);
+      m.bots.tick = (now) => {
+        routes = 0;
+        const t0 = performance.now();
+        tick(now);
+        ticks.push(performance.now() - t0);
+        most = Math.max(most, routes);
+      };
+      m.run(10_000, (now) => {
+        if (firing && now % 100 === 0 && !m.shoot('a', { x: a.x, y: EYE_Y, z: a.z }, { x: 0, y: 1, z: 0.01 }, now)) m.arena.reload('a', now);
+      });
+    }
+    return ticks;
+  };
+  // Played out three times, the same each time, keeping each tick's quickest: what it costs, not what
+  // other tests running alongside (or a garbage collection) happened to add to it.
+  let runs: number[][];
+  try {
+    runs = [play(), play(), play()];
+  } finally {
+    nav.route = route;
+  }
+  // One bot a tick works out where to go (a hunt's two legs, to a peek and on), whatever the rest want.
+  assert.ok(most <= 2, `${most} routes in a tick`);
+  const ticks = runs[0].map((_, i) => Math.min(...runs.map((r) => r[i]))).sort((x, y) => x - y);
+  const mean = ticks.reduce((n, t) => n + t, 0) / ticks.length, p99 = ticks[Math.floor(ticks.length * 0.99)];
+  // About 0.2 ms and 1.5 here (twice that with the machine twice over busy): the clock only catches a
+  // gross slip, the route count above is what holds the spikes down.
+  assert.ok(mean < 1, `${mean.toFixed(2)} ms a tick`);
+  assert.ok(p99 < 5, `${p99.toFixed(2)} ms a tick at the 99th percentile`);
 });

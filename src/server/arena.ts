@@ -110,15 +110,16 @@ export class ArenaControl {
   }
 
   /**
-   * `id`'s guns as the office has them: the one in their hands, the rounds left in each, and whether
-   * it's reloading. A page keeps its own count; a bot (server/arenabots.ts) goes by this one.
+   * `id`'s guns as the office has them: the one in their hands, the rounds left in each, whether it's
+   * reloading, and the soonest the office takes their next shot (`ready`, epoch ms: see fire). A page
+   * keeps its own count; a bot (server/arenabots.ts) goes by this one.
    */
-  gun(id: string, now: number): { w: WeaponId; ammo: Readonly<Record<WeaponId, number>>; reloading: boolean } | undefined {
+  gun(id: string, now: number): { w: WeaponId; ammo: Readonly<Record<WeaponId, number>>; reloading: boolean; ready: number } | undefined {
     const me = this.arena.players.find((p) => p.id === id);
     const g = this.guns.get(id);
     if (!me || !g) return undefined;
     this.reloaded(g, me.w, now);
-    return { w: me.w, ammo: g.ammo, reloading: g.reloadAt !== undefined };
+    return { w: me.w, ammo: g.ammo, reloading: g.reloadAt !== undefined, ready: g.ready - jitter(me.w) };
   }
 
   /** `id` came into the arena: in, alive, and safe for a moment. */

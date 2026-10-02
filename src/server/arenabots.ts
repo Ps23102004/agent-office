@@ -1,4 +1,4 @@
-import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, BODY_TOP, CROUCH, EYE_Y, HEAD_C, HEAD_R, KICK, RULES, SPREAD, SWAP, WEAPONS, eyeY, rayWorld, spreadOf, type ArenaPlayer, type Body, type V3, type WeaponId } from '../shared/arena.js';
+import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, BODY_TOP, CROUCH, EYE_Y, HEAD_C, HEAD_R, KICK, RULES, SPREAD, SWAP, WEAPONS, eyeY, nextShot, rayWorld, spreadOf, type ArenaPlayer, type Body, type V3, type WeaponId } from '../shared/arena.js';
 import { lookFromSeed } from '../shared/avatar.js';
 import { BOTS, BOT_ID, BOT_NAMES, SKILL, isBot, type BotLevel, type BotSettings, type BotSkill } from '../shared/bots.js';
 import { NavGrid, type Pt, type Rect } from '../shared/nav.js';
@@ -15,6 +15,8 @@ import type { ArenaControl, ShotResult } from './arena.js';
 // judged where their pages showed it. It crouches to shoot when it stands to (if it still sees them
 // from down there), and has the SMG out close in and the rifle further off.
 
+/** How often (ms) the bots think: server.ts's timer, and the fake clock in tests/arenabots.test.ts. */
+export const TICK = 50;
 /** A person's pace walking and running (client/player.ts): bots go no faster. */
 const WALK = 4.6;
 const RUN = 7.5;
@@ -29,6 +31,8 @@ const CROWN = HEAD_C + HEAD_R / 2;
 /** Closer than this (m) it wants the SMG, further than RIFLE_OUT the rifle; between, whichever it has out. */
 const SMG_IN = 10;
 const RIFLE_OUT = 16;
+/** The gun it isn't holding. */
+const otherGun = (w: WeaponId): WeaponId => (w === 'rifle' ? 'smg' : 'rifle');
 /** How much lower someone's aim points are (m): crouching, or not. */
 const low = (p: { crouch?: boolean }) => (p.crouch ? CROUCH : 0);
 /** How long (ms) it remembers where someone was. */
@@ -77,7 +81,10 @@ interface Bot {
   goal?: Pt;
   /** When it last looked for cover. */
   searched: number;
-  /** When it can fire next, by its own rhythm (its rounds and reloads are the office's: ArenaControl.gun). */
+  /**
+   * When its next shot is due, in a person's rhythm (shared/arena.ts nextShot), or after a pause or a
+   * swap. Its rounds and reloads, and the soonest the judge takes a shot, are the office's (ArenaControl.gun).
+   */
   nextShot: number;
   /** Shots left in this burst. */
   burst: number;
@@ -122,10 +129,10 @@ export function sees(o: V3, p: Body): boolean {
 
 /**
  * The nearest of `cells` to `from`, within `r` m, that's `ok`: nearest first, so it's usually the
- * first ray or two. ponytail: a scan of the whole grid for the ones in reach, and a ray for each till
- * one's ok: a few ms when nothing near is (someone it can't see from anywhere close). Only as a bot
- * sets off somewhere, and that's at most twice a second (see think); a spatial index, or rays from
- * a coarser grid, if that ever shows up.
+ * first ray or two. ponytail: a scan of the whole list for the ones in reach, and a ray for each till
+ * one's ok: a millisecond or two when nothing near is (someone it can't see from anywhere close),
+ * hence the coarse `peeks` for that, and one bot a tick doing it (see plan). A spatial index if it
+ * ever shows up again.
  */
 function nearest(cells: Pt[], from: Pt, r: number, ok: (c: Pt) => boolean): Pt | undefined {
   const near: [number, Pt][] = [];
@@ -142,6 +149,8 @@ interface Yard {
   cells: Pt[];
   /** Those right beside cover taller than a head: containers and the tall crates. */
   cover: Pt[];
+  /** Every fourth of them, a metre apart: where it looks for a peek from (a quarter of the rays). */
+  peeks: Pt[];
 }
 let yard: Yard | undefined;
 
@@ -157,11 +166,18 @@ export function arenaYard(): Yard {
   const bounds = { minX: C.x - ARENA_HALF + m, maxX: C.x + ARENA_HALF - m, minZ: C.z - ARENA_HALF + m, maxZ: C.z + ARENA_HALF - m };
   const solid = ARENA_BOXES.filter((b) => b.kind !== 'wall' && b.y0 < 1);
   const nav = new NavGrid(bounds, { rects: solid.map((b): Rect => [b.minX - m, b.maxX + m, b.minZ - m, b.maxZ + m]), circles: [] });
-  const cells: Pt[] = [];
-  for (let x = bounds.minX + 0.25; x < bounds.maxX; x += 0.5) for (let z = bounds.minZ + 0.25; z < bounds.maxZ; z += 0.5) if (nav.walkable(x, z)) cells.push([x, z]);
+  const cells: Pt[] = [], peeks: Pt[] = [];
+  for (let i = 0; bounds.minX + 0.25 + i * 0.5 < bounds.maxX; i++) {
+    for (let j = 0; bounds.minZ + 0.25 + j * 0.5 < bounds.maxZ; j++) {
+      const c: Pt = [bounds.minX + 0.25 + i * 0.5, bounds.minZ + 0.25 + j * 0.5];
+      if (!nav.walkable(c[0], c[1])) continue;
+      cells.push(c);
+      if (i % 2 === 0 && j % 2 === 0) peeks.push(c);
+    }
+  }
   const tall = solid.filter((b) => b.y1 >= 2.4);
   const cover = cells.filter(([x, z]) => tall.some((b) => x > b.minX - 1.2 && x < b.maxX + 1.2 && z > b.minZ - 1.2 && z < b.maxZ + 1.2));
-  return (yard = { nav, cells, cover });
+  return (yard = { nav, cells, cover, peeks });
 }
 
 /**
@@ -178,6 +194,10 @@ export class ArenaBots {
   private changed = -Infinity;
   /** Whoever a bot killed this tick, after the tick looked who was alive. */
   private downed = new Set<string>();
+  /** Whether a bot has worked out a way somewhere yet this tick (see plan). */
+  private planned = false;
+  /** Ticks so far: which bot goes first (see plan). */
+  private turn = 0;
 
   constructor(
     private arena: ArenaControl,
@@ -274,7 +294,11 @@ export class ArenaBots {
     const state = this.arena.state();
     const k = SKILL[this.settings.level];
     this.downed.clear();
-    for (const b of this.bots.values()) {
+    this.planned = false;
+    // A different bot first each tick, so one that wants to work out a way every tick can't keep the
+    // rest from ever getting to (see plan): each gets first go within as many ticks as there are bots.
+    const all = [...this.bots.values()], first = all.length ? this.turn++ % all.length : 0;
+    for (const b of [...all.slice(first), ...all.slice(0, first)]) {
       const me = state.players.find((p) => p.id === b.peer.id);
       if (!me?.alive || this.downed.has(b.peer.id)) {
         b.alive = false;
@@ -339,9 +363,11 @@ export class ArenaBots {
     }
     if (target !== b.target) b.tracked = 0;
     b.target = target;
-    const weak = hp < k.cover || !!gun?.reloading || rounds === 0;
+    // Nothing to fight with only when neither gun has rounds to hand: one run dry or reloading, fire()
+    // swaps to the other on the spot.
+    const weak = hp < k.cover || !gun || (gun.reloading ? 0 : gun.ammo[gun.w]) + gun.ammo[otherGun(gun.w)] === 0;
     if (target) {
-      if (weak && b.mode !== 'cover' && now - b.searched > 1000) {
+      if (weak && b.mode !== 'cover' && now - b.searched > 1000 && this.plan()) {
         b.searched = now;
         if (this.toCover(b, b.mem.get(target)!, now)) return;
       }
@@ -353,10 +379,10 @@ export class ArenaBots {
     }
     // Nobody in sight. In cover, it waits till it's healed and reloaded.
     if (b.mode === 'cover' && now < b.until && (hp < 90 || rounds < mag)) {
-      this.reload(b, now);
+      this.rearm(b, 1, now);
       return;
     }
-    if (rounds < mag / 2) this.reload(b, now);
+    this.rearm(b, 0.5, now);
     // Anything newer than it last went to look at: where it lost sight of someone, a shot it heard,
     // where it was shot from. It goes for a look (a peek first). Already on its way to look near there
     // (what it hears is only ever a few metres out), it keeps going; somewhere else, it sets off again,
@@ -367,12 +393,22 @@ export class ArenaBots {
       const going = b.mode === 'hunt' && b.path.length > 0;
       const near = going && !!b.goal && Math.hypot(b.goal[0] - last.x, b.goal[1] - last.z) < 8;
       if (!going || (!near && now - b.chased >= 500)) {
+        if (!this.plan()) return;
         b.chased = last.at;
         return this.hunt(b, last, now);
       }
     }
     if (b.mode === 'hunt' && b.path.length && now < b.until) return;
-    if (b.mode !== 'roam' || !b.path.length) this.roam(b);
+    if ((b.mode !== 'roam' || !b.path.length) && this.plan()) this.roam(b);
+  }
+
+  /**
+   * Whether this bot may work out a way somewhere this tick (a peek, cover, a route: a few ms at worst):
+   * one bot a tick, the rest carrying on as they were till a tick of their own, so the dear part of a
+   * bot's thinking never piles up on one tick.
+   */
+  private plan(): boolean {
+    return this.planned ? false : (this.planned = true);
   }
 
   /** Off to where it last knew of someone: first the nearest spot that sees there (a peek), then there itself. */
@@ -409,7 +445,7 @@ export class ArenaBots {
 
   /** The nearest spot to `from` (within `r` m) a bot standing there could see `at` from. */
   private vantage(from: Pt, at: V3, r: number): Pt | undefined {
-    return nearest(arenaYard().cells, from, r, (c) => clear({ x: c[0], y: EYE_Y, z: c[1] }, at));
+    return nearest(arenaYard().peeks, from, r, (c) => clear({ x: c[0], y: EYE_Y, z: c[1] }, at));
   }
 
   /** In a fight it strafes (or stands to shoot, if it's good), else it follows its way; it faces whoever it's after. */
@@ -494,19 +530,20 @@ export class ArenaBots {
     const side = Math.sign(s.vx * (s.z - p.z) - s.vz * (s.x - p.x));
     if (side && side === -b.side) b.tracked /= 2;
     if (side) b.side = side;
+    // On whichever tick is nearest when its shot's due (early by half a tick at most, inside the judge's
+    // half-gap slack), so on average it fires as fast as the gun does, not a whole tick slower.
     const gun = this.arena.gun(p.id, now);
-    if (!gun || now < s.ready || gun.reloading || now < b.nextShot) return;
-    const empty = gun.ammo[gun.w] <= 0;
-    const other: WeaponId = gun.w === 'rifle' ? 'smg' : 'rifle';
+    if (!gun || now < b.nextShot - TICK / 2) return;
+    // Reloading is as good as empty in a fight: out with the other gun if that has rounds (the reload's
+    // dropped, the rounds left stay), else wait it out.
+    const empty = gun.reloading || gun.ammo[gun.w] <= 0;
+    const other = otherGun(gun.w);
     const range = Math.hypot(s.x - p.x, s.z - p.z);
     const fits: WeaponId = range < SMG_IN ? 'smg' : range > RIFLE_OUT ? 'rifle' : gun.w;
-    if ((empty || (fits !== gun.w && !b.burst)) && gun.ammo[other] > 0 && this.arena.weapon(p.id, other, now)) {
-      b.burst = 0;
-      b.nextShot = now + SWAP;
-      this.io.changed();
-      return;
-    }
+    // Swapped while it's still reacting, as anyone would the moment they see someone: the two overlap.
+    if ((empty || (fits !== gun.w && !b.burst)) && gun.ammo[other] > 0 && this.swap(b, other, now)) return;
     if (empty) return this.reload(b, now);
+    if (now < s.ready || now < gun.ready) return;
     const w = WEAPONS[gun.w];
     const eye = { x: p.x, y: eyeY(p), z: p.z };
     // Stepped out of sight of them since it looked, someone else just killed them, or they're just back in
@@ -534,7 +571,7 @@ export class ArenaBots {
     yaw += Math.cos(a) * r;
     pitch += Math.sin(a) * r;
     const d = { x: Math.sin(yaw) * Math.cos(pitch), y: Math.sin(pitch), z: Math.cos(yaw) * Math.cos(pitch) };
-    b.nextShot = now + w.every;
+    b.nextShot = nextShot(b.nextShot, now, w.every);
     const shot = this.io.shoot(p.id, eye, d, now);
     if (!shot) return;
     if (shot.kill && shot.hit) this.downed.add(shot.hit);
@@ -542,12 +579,34 @@ export class ArenaBots {
     b.kick += KICK.up * w.kick * (p.crouch ? 0.75 : 1) * (1 - k.recoil);
     if (--b.burst <= 0) {
       b.burst = 0;
-      b.nextShot = now + k.pause[0] + this.rand() * (k.pause[1] - k.pause[0]);
+      b.nextShot = Math.max(b.nextShot, now + k.pause[0] + this.rand() * (k.pause[1] - k.pause[0]));
     }
   }
 
   private reload(b: Bot, now: number) {
     this.arena.reload(b.peer.id, now);
+  }
+
+  /** Out with gun `w` (everyone hears): no shots from it for SWAP ms, as anyone's. Says whether it did. */
+  private swap(b: Bot, w: WeaponId, now: number): boolean {
+    if (!this.arena.weapon(b.peer.id, w, now)) return false;
+    b.burst = 0;
+    b.nextShot = now + SWAP;
+    this.io.changed();
+    return true;
+  }
+
+  /**
+   * Nobody in sight: it loads up. The gun in its hands, if that's under `share` of a magazine; else the
+   * other, if that is (out with it, to reload it next tick), so a gun it swapped off empty in a fight
+   * doesn't stay empty till it dies.
+   */
+  private rearm(b: Bot, share: number, now: number) {
+    const gun = this.arena.gun(b.peer.id, now);
+    if (!gun || gun.reloading) return;
+    const other = otherGun(gun.w);
+    if (gun.ammo[gun.w] < WEAPONS[gun.w].mag * share) this.reload(b, now);
+    else if (gun.ammo[other] < WEAPONS[other].mag * share) this.swap(b, other, now);
   }
 
   /** A normally distributed number (mean 0, deviation 1). */

@@ -62,8 +62,8 @@ const DEG = Math.PI / 180;
 
 /**
  * Each level. From first sight of someone strafing at walking pace 15 m off (tests/arenabots.test.ts,
- * 30 duels each, median kill, against the judge's head ball and body column): easy hits 36% of its
- * shots and kills in about 3.5 s, normal 55% in 1.4 s, hard 75% in 0.8 s, insane 92% in 0.6 s.
+ * 30 duels each, median kill, against the judge's head ball and body column): easy hits 35% of its
+ * shots and kills in about 3.35 s, normal 54% in 1.3 s, hard 75% in 0.8 s, insane 92% in 0.6 s.
  * Judged against people (Jev, from the near-same numbers before the judge changed): easy plays like
  * a beginner, normal an average player, hard a skilled one, insane a top player or better. What keeps insane beatable is that it has to see you
  * first, react and turn.
