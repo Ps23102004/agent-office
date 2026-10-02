@@ -410,7 +410,7 @@ function theCircuit(): Circuit {
   if (!circuit) {
     circuit = buildCircuit();
     // Its cars on its own ground, as the driver's (below): bogging down on the grass isn't braking (their brake lights).
-    circuit.fleet.course = { surfaceAt: (x, z) => (trackSurface(x, z) === 'grass' ? 'grass' : 'road'), surface: onGrass };
+    circuit.fleet.course = CIRCUIT_COURSE;
     circuit.group.visible = false;
     scene.add(circuit.group);
     noOutline(circuit.group);
