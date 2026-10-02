@@ -154,7 +154,7 @@ export function buildArenaCityGate(street: number): { group: THREE.Group; collid
   for (const side of [-1, 1]) for (let x = x0; x < x1 - 0.01; x++) {
     flat.add(mesh(new THREE.PlaneGeometry(1, 0.3).rotateX(-Math.PI / 2), toon((x - x0) % 2 ? '#212529' : '#f4c430'), x + 0.5, 0, g.z + side * (g.width / 2 - 0.15), false));
   }
-  const runway = mergeColored(flat, paintOver(toonVertexUnique(), -1));
+  const runway = mergeColored(flat, paintOver(detail(toonVertexUnique(), 'asphalt'), -1));
   const { sign, shimmer } = gate(g, '🎯 Arena', solid, colliders, street, ['#3d4147', '#f4c430']);
   sign.position.y -= street;
   shimmer.position.y -= street;

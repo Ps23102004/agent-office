@@ -14,47 +14,77 @@ import { gradientMap } from './toon';
 
 /**
  * How each surface takes the noise: `tile` metres to a repeat of it, how much of each channel
- * (r: fine grain, g: grass, b: pebbles, a: stains) and of the stains at large (`macro`), and the
- * extras sky.ts draws for it (SKY_DETAIL_<name>):
- * AUTO: one texture of several grounds (the city's): asphalt where it's dark, grass where it's green, else paving.
- * STRIPES: mown stripes this wide (m). JOINTS: slabs or panels this big (m), with dark joints between.
+ * (r: fine grain, g: grass, b: pebbles, a: stains) it takes up close (`mix`) and from the same tile
+ * read again five times the size (`mid`: what's left of it from a car's seat, where the fine grain has
+ * gone to grey), and of the stains at large (`macro`); and the extras sky.ts draws for it (SKY_DETAIL_<name>):
+ * AUTO: one texture of several grounds (the city's): asphalt where it's dark, grass where it's green, paving slabs where it's pale.
+ * CHIPS: light chips of stone in asphalt, close up. TAR: crack sealant snaking across a road. DRY: grass gone straw-coloured in patches.
+ * STRIPES: mown stripes this wide (m). JOINTS: slabs or panels this big (m), with dark joints between and a tone each.
  * RIBS: a container's corrugations this far apart (m). RUST: how much rust. STREAKS: rain streaks down walls.
  * DIRT: grime at the foot of a wall, over the street. SHINGLES: rows of roof tiles this high (m).
  */
 const GRAINS = {
-  asphalt: { tile: 3, mix: [0.34, 0, 0.07, 0], macro: 0.22 },
+  asphalt: { tile: 3, mix: [0.62, 0, 0.12, 0], mid: [1.25, 0, 0, 0.7], macro: 0.4, with: { CHIPS: 0.3, TAR: 0.34 } },
+  /** A race track's: kept, so fewer cracks sealed. */
+  track: { tile: 3, mix: [0.55, 0, 0.1, 0], mid: [1.1, 0, 0, 0.55], macro: 0.32, with: { CHIPS: 0.3, TAR: 0.16 } },
   /** A run-off area's paler, smoother asphalt. */
-  runoff: { tile: 3, mix: [0.22, 0, 0.04, 0], macro: 0.16 },
-  concrete: { tile: 4, mix: [0.18, 0, 0.03, 0], macro: 0.24 },
+  runoff: { tile: 3, mix: [0.4, 0, 0.08, 0], mid: [1.1, 0, 0, 0.6], macro: 0.3, with: { CHIPS: 0.16 } },
+  concrete: { tile: 4, mix: [0.22, 0, 0.04, 0], mid: [0.75, 0, 0, 0.7], macro: 0.36 },
   /** Concrete laid in slabs: a yard, a paddock. */
-  slab: { tile: 4, mix: [0.2, 0, 0.03, 0], macro: 0.26, with: { JOINTS: 6 } },
-  grass: { tile: 2.5, mix: [0.04, 0.44, 0, 0], macro: 0.26 },
-  /** Grass mown in stripes. */
-  lawn: { tile: 2.5, mix: [0.04, 0.4, 0, 0], macro: 0.2, with: { STRIPES: 12 } },
-  gravel: { tile: 1.6, mix: [0.1, 0, 0.55, 0], macro: 0.1 },
-  ground: { tile: 3, mix: [0, 0, 0, 0], macro: 0.2, with: { AUTO: 1 } },
-  wall: { tile: 5, mix: [0.07, 0, 0, 0], macro: 0.16, with: { STREAKS: 0.12, DIRT: 0.16 } },
+  slab: { tile: 4, mix: [0.22, 0, 0.04, 0], mid: [0.75, 0, 0, 0.8], macro: 0.38, with: { JOINTS: 6 } },
+  /** Paving flags, a metre square: a sidewalk, a plaza. */
+  paving: { tile: 3, mix: [0.3, 0, 0.04, 0], mid: [0.8, 0, 0, 0.6], macro: 0.32, with: { JOINTS: 1 } },
+  /** Rough, a park's, a verge's: clumps, and dry patches here and there (but green, not dirt, up close). */
+  grass: { tile: 2.5, mix: [0.04, 0.28, 0, 0], mid: [0, 1.5, 0, 0.45], macro: 0.4, with: { DRY: 0.2 } },
+  /** Grass mown in stripes: kept, so its clumps are fewer than the stripes are bold. */
+  lawn: { tile: 2.5, mix: [0.06, 0.5, 0, 0], mid: [0, 1.3, 0, 0.35], macro: 0.3, with: { STRIPES: 6, DRY: 0.3 } },
+  /** Turf cut short and kept: a fairway, a green and its fringe, a tee's mat. A fine even grain, no dry patches (their stripes are their own). */
+  turf: { tile: 2, mix: [0.04, 0.36, 0, 0], mid: [0, 0.8, 0, 0.25], macro: 0.15 },
+  /** A bunker's sand: fine and pale, raked smooth, with a few pebbles. */
+  sand: { tile: 2, mix: [0.2, 0, 0.1, 0], mid: [0.35, 0, 0.2, 0.45], macro: 0.18 },
+  gravel: { tile: 4.5, mix: [0.1, 0, 1.4, 0], mid: [0.3, 0, 0.6, 0.6], macro: 0.2 },
+  ground: { tile: 3, mix: [0, 0, 0, 0], mid: [0, 0, 0, 0], macro: 0.3, with: { AUTO: 1 } },
+  wall: { tile: 5, mix: [0.08, 0, 0, 0], mid: [0.12, 0, 0, 0.14], macro: 0.16, with: { STREAKS: 0.14, DIRT: 0.2 } },
   /** Precast concrete panels. */
-  panels: { tile: 4, mix: [0.16, 0, 0, 0], macro: 0.2, with: { JOINTS: 4, STREAKS: 0.16 } },
+  panels: { tile: 4, mix: [0.16, 0, 0, 0], mid: [0.35, 0, 0, 0.3], macro: 0.2, with: { JOINTS: 4, STREAKS: 0.18 } },
   /** A flat roof: gravel, and the weather on it. */
-  roof: { tile: 2, mix: [0.12, 0, 0.3, 0], macro: 0.28 },
-  shingles: { tile: 2, mix: [0.08, 0, 0.12, 0], macro: 0.2, with: { SHINGLES: 0.24 } },
-  container: { tile: 3, mix: [0.05, 0, 0, 0], macro: 0.1, with: { RIBS: 0.3, RUST: 0.4, STREAKS: 0.12 } },
-} as const satisfies Record<string, { tile: number; mix: readonly number[]; macro: number; with?: Record<string, number> }>;
+  roof: { tile: 2, mix: [0.14, 0, 0.36, 0], mid: [0.4, 0, 0.3, 0.5], macro: 0.3 },
+  shingles: { tile: 2, mix: [0.1, 0, 0.14, 0], mid: [0.2, 0, 0, 0.2], macro: 0.2, with: { SHINGLES: 0.24 } },
+  container: { tile: 3, mix: [0.06, 0, 0, 0], mid: [0.2, 0, 0, 0.2], macro: 0.1, with: { RIBS: 0.3, RUST: 0.4, STREAKS: 0.12 } },
+} as const satisfies Record<string, { tile: number; mix: readonly number[]; mid: readonly number[]; macro: number; with?: Record<string, number> }>;
 export type Grain = keyof typeof GRAINS;
+type Spec = { tile: number; mix: readonly number[]; mid: readonly number[]; macro: number; with?: Record<string, number> };
+/** What AUTO takes from where it's asphalt, paving or grass: the city's ground is all three in one texture. */
+const AUTO = { ASPHALT: GRAINS.asphalt, PAVE: GRAINS.paving, GRASS: GRAINS.grass } as const;
 
-/** `m` with the surface `grain` on it (see GRAINS): `m` back, for chaining. Part of its shader's key, so give each grain its own material. */
-export function detail<M extends THREE.Material>(m: M, grain: Grain): M {
-  const g: { tile: number; mix: readonly number[]; macro: number; with?: Record<string, number> } = GRAINS[grain];
+const vec4 = (k: readonly number[]) => `vec4( ${k.map((x) => x.toFixed(3)).join(', ')} )`;
+
+/** The defines that give `m` the surface `grain`, for sky.ts (exported for the tests). */
+export function detailDefines(grain: Grain): Record<string, string> {
+  const g: Spec = GRAINS[grain];
   const defines: Record<string, string> = {
-    ...(m as { defines?: Record<string, string> }).defines,
     SKY_DETAIL: '',
     SKY_DETAIL_FREQ: (1 / g.tile).toFixed(4),
-    SKY_DETAIL_MIX: `vec4( ${g.mix.map((k) => k.toFixed(3)).join(', ')} )`,
+    SKY_DETAIL_MIX: vec4(g.mix),
+    SKY_DETAIL_MID: vec4(g.mid),
     SKY_DETAIL_MACRO: g.macro.toFixed(3),
   };
   for (const [k, v] of Object.entries(g.with ?? {})) defines[`SKY_DETAIL_${k}`] = v.toFixed(3);
-  (m as { defines?: Record<string, string> }).defines = defines;
+  if (grain === 'ground') {
+    for (const [name, a] of Object.entries(AUTO) as [string, Spec][]) {
+      defines[`SKY_DETAIL_${name}_MIX`] = vec4(a.mix);
+      defines[`SKY_DETAIL_${name}_MID`] = vec4(a.mid);
+    }
+    // The extras each of them has, for sky.ts to put down wherever it's that.
+    for (const [k, v] of Object.entries({ ...AUTO.ASPHALT.with, ...AUTO.PAVE.with, ...AUTO.GRASS.with })) defines[`SKY_DETAIL_${k}`] = v.toFixed(3);
+  }
+  return defines;
+}
+
+/** `m` with the surface `grain` on it (see GRAINS): `m` back, for chaining. Part of its shader's key, so give each grain its own material. */
+export function detail<M extends THREE.Material>(m: M, grain: Grain): M {
+  const own = m as { defines?: Record<string, string> };
+  own.defines = { ...own.defines, ...detailDefines(grain) };
   return m;
 }
 
@@ -95,10 +125,10 @@ function pebble(out: Float32Array, size: number, cx: number, cy: number, rad: nu
     for (let dx = -Math.ceil(rad); dx <= Math.ceil(rad); dx++) {
       const d2 = dx * dx + dy * dy;
       if (d2 > r2) continue;
-      const shade = ((dx + dy) / (rad * 2)) * 0.18;
+      const shade = ((dx + dy) / (rad * 2)) * 0.3;
       const x = (((Math.round(cx) + dx) % size) + size) % size;
       const y = (((Math.round(cy) + dy) % size) + size) % size;
-      out[y * size + x] = v - shade - (d2 > r2 * 0.6 ? 0.06 : 0);
+      out[y * size + x] = v - shade - (d2 > r2 * 0.55 ? 0.14 : 0);
     }
   }
 }
@@ -114,13 +144,15 @@ export function detailPixels(size: number): Uint8Array {
   const at = size / 512;
   const ch = [0, 1, 2, 3].map(() => new Float32Array(px));
   const [grain, grass, stones, stain] = ch;
-  // Fine grain: three octaves, a speckle a pixel, and the odd light chip and dark pit.
+  // Fine grain: three octaves, a speckle a pixel, dark pits, and chips of light stone a centimetre or so across.
   noise(grain, size, [[8, 0.2], [32, 0.22], [128, 0.26]], r);
   for (let i = 0; i < px; i++) {
     grain[i] += (r() - 0.5) * 0.24;
-    const k = r();
-    if (k < 0.014) grain[i] += 0.32;
-    else if (k < 0.026) grain[i] -= 0.3;
+    if (r() < 0.012) grain[i] -= 0.3;
+  }
+  for (let k = Math.round(9000 * at * at); k > 0; k--) {
+    const cx = Math.floor(r() * size), cy = Math.floor(r() * size), w = at >= 1 && r() < 0.6 ? 2 : 1;
+    for (let dy = 0; dy < w; dy++) for (let dx = 0; dx < w; dx++) grain[((cy + dy) % size) * size + ((cx + dx) % size)] += 0.36;
   }
   // Grass: clumps, and blades lighter and darker a pixel or two at a time.
   noise(grass, size, [[16, 0.22], [64, 0.3], [256, 0.18]], r);
@@ -132,9 +164,9 @@ export function detailPixels(size: number): Uint8Array {
   }
   // Pebbles packed on a dark bed.
   noise(stones, size, [[64, 0.12]], r);
-  for (let i = 0; i < px; i++) stones[i] -= 0.22;
+  for (let i = 0; i < px; i++) stones[i] -= 0.32;
   const n = Math.round(6500 * at * at);
-  for (let k = 0; k < n; k++) pebble(stones, size, r() * size, r() * size, (1.4 + r() * 3.6) * at + 0.4, (r() - 0.5) * 0.6 + 0.08);
+  for (let k = 0; k < n; k++) pebble(stones, size, r() * size, r() * size, (1.4 + r() * 3.6) * at + 0.4, r() * 0.42);
   // Stains: big soft blotches.
   noise(stain, size, [[4, 0.42], [8, 0.3], [16, 0.16], [64, 0.06]], r);
   const out = new Uint8Array(px * 4);
@@ -257,13 +289,13 @@ export function decalAtlas(): THREE.CanvasTexture {
     g.fillStyle = '#1f2126';
     for (let k = 0; k < 9; k++) g.fillRect(x + 9 + k * 5.6, y + 19, 3, 26);
   }
-  // A patch: a darker, newer rectangle of asphalt with a sealed edge.
+  // A patch: a newer rectangle of asphalt, a shade darker, with a thin sealed edge.
   {
     const { x, y } = cell('patch');
-    g.fillStyle = 'rgba(28,30,36,0.22)';
+    g.fillStyle = 'rgba(28,30,36,0.14)';
     g.fillRect(x + 4, y + 6, 56, 52);
-    g.strokeStyle = 'rgba(16,17,20,0.4)';
-    g.lineWidth = 2;
+    g.strokeStyle = 'rgba(16,17,20,0.28)';
+    g.lineWidth = 1.2;
     g.strokeRect(x + 4, y + 6, 56, 52);
   }
   // A crack, branching.
