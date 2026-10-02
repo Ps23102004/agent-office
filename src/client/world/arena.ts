@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, WALL_H, type ArenaBox, type V3 } from '../../shared/arena';
 import { RACE_PLAZA } from '../../shared/city';
 import { gate, pulse } from './circuit';
+import type { WeaponId } from '../../shared/arena';
 import type { Collider, Interactable } from './office';
 import { mergeColored, mesh, toon, toonUnique, toonVertexUnique } from './toon';
 import { Decals, LINE_COUNT, decalUV, detail } from './surface';
@@ -10,7 +11,7 @@ import { Decals, LINE_COUNT, decalUV, detail } from './surface';
 // black at the top, shipping containers in four paints with their ribs, rust, lines' names and doors, wooden crates,
 // concrete barriers, floodlight masts in the corners, and stacks of containers outside the walls to
 // look at. All of it merged into a couple of draw calls. Also the shots (tracers, sparks), the
-// rifle you hold and the ones everyone else holds, and the arena's gate on the race plaza in the city.
+// guns you hold and the ones everyone else holds, and the arena's gate on the race plaza in the city.
 
 const CONTAINER_PAINT = ['#c0392b', '#2e6f9e', '#3f8f5a', '#d9822b'];
 const GROUND = '#8d9096';
@@ -22,8 +23,12 @@ export interface ArenaWorld {
   pickables: THREE.Object3D[];
   /** Each frame while you're there: the shots fading, the gate's shimmer. */
   update(dt: number, t: number): void;
-  /** A shot from `o` to `end`: a streak of light, and sparks where it stopped (not on someone it `hit`). */
-  shot(o: V3, end: V3, hit: boolean): void;
+  /**
+   * A shot from `o` (its muzzle) to `end`: a streak of light, and a puff where it stopped: sparks off
+   * the yard, white off someone it hit in the `body`, gold off a `head`, blue off someone still safe
+   * (`shield`).
+   */
+  shot(o: V3, end: V3, hit?: 'body' | 'head' | 'shield'): void;
 }
 
 function block(into: THREE.Object3D, w: number, h: number, l: number, color: string, x: number, y: number, z: number, cast = true) {
@@ -173,7 +178,12 @@ interface Fx {
   mesh: THREE.Mesh;
   life: number;
   max: number;
+  /** How much a puff grows as it fades. */
+  grow?: number;
 }
+
+/** A shot's puff where it stopped (see ArenaWorld.shot): its colour and how big it gets, off the yard or off someone. */
+const PUFF = { yard: ['#ffd27a', 1.4], body: ['#f4f1ea', 2.4], head: ['#ffd84d', 3], shield: ['#6ec6ff', 3.4] } as const;
 
 export function buildArena(): ArenaWorld {
   const group = new THREE.Group();
@@ -259,12 +269,12 @@ export function buildArena(): ArenaWorld {
         f.life -= dt;
         const k = Math.max(0, f.life / f.max);
         (f.mesh.material as THREE.MeshBasicMaterial).opacity = k;
-        if (f.mesh.geometry === spark) f.mesh.scale.setScalar(0.6 + (1 - k) * 1.4);
+        if (f.mesh.geometry === spark) f.mesh.scale.setScalar(0.6 + (1 - k) * (f.grow ?? 1.4));
         f.mesh.visible = f.life > 0;
       }
     },
     shot(o, end, hit) {
-      from.set(o.x, o.y - 0.12, o.z);
+      from.set(o.x, o.y, o.z);
       to.set(end.x, end.y, end.z);
       const len = from.distanceTo(to);
       if (len > 0.5) {
@@ -275,34 +285,76 @@ export function buildArena(): ArenaWorld {
         tr.life = tr.max;
         tr.mesh.visible = true;
       }
-      if (hit) return;
+      const [color, grow] = PUFF[hit ?? 'yard'];
       const sp = sparks[si++ % sparks.length];
+      (sp.mesh.material as THREE.MeshBasicMaterial).color.set(color);
+      sp.grow = grow;
       sp.mesh.position.copy(to);
-      sp.life = sp.max;
+      sp.life = sp.max * (hit ? 1.5 : 1);
       sp.mesh.visible = true;
     },
   };
 }
 
+/** How high over a gun's grip its sight's dot is (m, before it's scaled): where your eye goes, aiming down the sights. */
+export const SIGHT_Y = 0.19;
+
+/** A gun to hold (see gun): its model, the point its flash comes out of, and where the hands go on it (m, before it's scaled). */
+export interface GunModel {
+  group: THREE.Group;
+  muzzle: THREE.Object3D;
+  /** The right hand round the grip, the left under the front. */
+  hands: { right: THREE.Vector3; left: THREE.Vector3 };
+}
+
 /**
- * A rifle, its muzzle pointing along -z (as in camera space; turn it round to point a character's +z),
- * its grip at the origin. `muzzle`: where the flash goes.
+ * Gun `w` (shared/arena.ts WEAPONS), its muzzle pointing along -z (as in camera space; turn it round
+ * to point a character's +z), its grip at the origin. The rifle: long, tan furniture, a full stock.
+ * The SMG: short and black, a long straight magazine, a grip under its nose and a wire stock. Both
+ * wear the same red-dot sight, SIGHT_Y over the grip: an open ring you see the yard through, a small
+ * glowing dot floating in it.
  */
-export function rifle(): { group: THREE.Group; muzzle: THREE.Object3D } {
+export function gun(w: WeaponId = 'rifle'): GunModel {
   const parts = new THREE.Group();
-  const metal = '#2b2f33', tan = '#a8875a', light = '#4a5056';
-  block(parts, 0.07, 0.09, 0.42, metal, 0, 0.02, -0.12); // receiver
-  block(parts, 0.06, 0.05, 0.3, tan, 0, 0.03, -0.42); // handguard
-  parts.add(mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.22, 8).rotateX(Math.PI / 2), toon(metal), 0, 0.075, -0.66, false)); // barrel
-  block(parts, 0.04, 0.03, 0.06, light, 0, 0.065, -0.76); // muzzle brake
-  block(parts, 0.045, 0.16, 0.07, metal, 0, -0.12, -0.17); // magazine
-  block(parts, 0.04, 0.11, 0.05, tan, 0, -0.08, 0.02); // grip
-  block(parts, 0.05, 0.08, 0.2, tan, 0, 0.01, 0.17); // stock
-  block(parts, 0.025, 0.035, 0.12, light, 0, 0.11, -0.12); // sight rail
-  block(parts, 0.03, 0.04, 0.03, '#e03131', 0, 0.13, -0.16); // red dot
+  const metal = '#2b2f33', light = '#4a5056';
+  let sightZ: number, muzzleZ: number, left: THREE.Vector3;
+  if (w === 'smg') {
+    const poly = '#3b4031';
+    block(parts, 0.065, 0.085, 0.3, metal, 0, 0.02, -0.08); // receiver
+    block(parts, 0.05, 0.045, 0.12, light, 0, 0.035, -0.29); // barrel shroud
+    parts.add(mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.08, 8).rotateX(Math.PI / 2), toon(metal), 0, 0.06, -0.39, false)); // barrel
+    block(parts, 0.035, 0.2, 0.05, metal, 0, -0.17, -0.12); // magazine
+    block(parts, 0.04, 0.11, 0.05, poly, 0, -0.08, 0.02); // grip
+    block(parts, 0.035, 0.09, 0.035, poly, 0, -0.07, -0.27); // the grip under its nose
+    block(parts, 0.02, 0.02, 0.2, light, 0, 0.05, 0.16); // wire stock
+    block(parts, 0.04, 0.07, 0.015, light, 0, 0.0, 0.26); // its butt
+    block(parts, 0.03, 0.012, 0.1, light, 0, 0.105, -0.08); // sight rail
+    block(parts, 0.008, 0.049, 0.012, metal, 0, 0.117, -0.12); // the sight's post
+    sightZ = -0.12;
+    muzzleZ = -0.44;
+    left = new THREE.Vector3(0, -0.04, -0.27);
+  } else {
+    const tan = '#a8875a';
+    block(parts, 0.07, 0.09, 0.42, metal, 0, 0.02, -0.12); // receiver
+    block(parts, 0.06, 0.05, 0.3, tan, 0, 0.03, -0.42); // handguard
+    parts.add(mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.22, 8).rotateX(Math.PI / 2), toon(metal), 0, 0.075, -0.66, false)); // barrel
+    block(parts, 0.04, 0.03, 0.06, light, 0, 0.065, -0.76); // muzzle brake
+    block(parts, 0.045, 0.16, 0.07, metal, 0, -0.12, -0.17); // magazine
+    block(parts, 0.04, 0.11, 0.05, tan, 0, -0.08, 0.02); // grip
+    block(parts, 0.05, 0.08, 0.2, tan, 0, 0.01, 0.17); // stock
+    block(parts, 0.03, 0.012, 0.12, light, 0, 0.11, -0.12); // sight rail
+    block(parts, 0.008, 0.044, 0.012, metal, 0, 0.122, -0.15); // the sight's post, up to its ring: high, so the rifle sits low under your eye
+    sightZ = -0.15;
+    muzzleZ = -0.8;
+    left = new THREE.Vector3(0, -0.03, -0.4);
+  }
   const group = mergeColored(parts);
+  const ring = mesh(new THREE.TorusGeometry(0.024, 0.0032, 6, 28), toon(metal), 0, SIGHT_Y, sightZ, false);
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 12), new THREE.MeshBasicMaterial({ color: '#ff2d2d', toneMapped: false }));
+  dot.position.set(0, SIGHT_Y, sightZ);
+  group.add(ring, dot);
   const muzzle = new THREE.Object3D();
-  muzzle.position.set(0, 0.075, -0.8);
+  muzzle.position.set(0, w === 'smg' ? 0.06 : 0.075, muzzleZ);
   group.add(muzzle);
-  return { group, muzzle };
+  return { group, muzzle, hands: { right: new THREE.Vector3(0, -0.09, 0.03), left } };
 }

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CROUCH, HEAD_C } from '../../shared/arena';
 import { HAIR_COLORS, HAIR_STYLES, SKIN_TONES, type Look } from '../../shared/avatar';
 import { EMOTE_BY_ID, type Emote, type EmoteId } from '../../shared/emotes';
 import type { CarriedIssue, Theme, WorkerAction, WorkerStatus, WorkerTask } from '../../shared/protocol';
@@ -585,6 +586,19 @@ export class Person {
   /** Dressed up for a holiday (see setCostume): a warlock's hat and undead skin, or a Santa hat. */
   private costume: Theme | null = null;
   private hat: THREE.Object3D[] = [];
+  /** In the arena (client/arena.ts): the rifle they hold up in front of them (see holdRifle), on its mount at the shoulders. */
+  private rifle: { gun: THREE.Object3D; mount: THREE.Group } | null = null;
+  /** In the arena: how far they look up (radians, - down), the rifle and their head with it. */
+  aimPitch = 0;
+  /** In the arena: how far down they're crouching, 0 to 1 (shared/arena.ts CROUCH all the way). */
+  crouchK = 0;
+  /** The crouch the head was last put down for. */
+  private hunched = 0;
+  /** In the arena: how far they've fallen, killed, 0 to 1: backward (`fallDir` 1) or forward (-1). */
+  fallen = 0;
+  fallDir: 1 | -1 = 1;
+  /** Seconds left of the flash of being hit (see flash). */
+  private hitT = 0;
 
   constructor(
     private name: string,
@@ -1267,6 +1281,71 @@ export class Person {
     }
   }
 
+  /**
+   * The arena's rifle in their hands, held up in front of them where they look (see aimPitch); null puts
+   * it away. Its muzzle is along its own -z (see world/arena.ts rifle).
+   */
+  holdRifle(gun: THREE.Object3D | null) {
+    if ((this.rifle?.gun ?? null) === gun) return;
+    if (this.rifle) this.body.remove(this.rifle.mount);
+    this.rifle = null;
+    if (!gun) return;
+    const mount = new THREE.Group();
+    mount.position.y = RIFLE_MOUNT.y;
+    gun.position.copy(RIFLE_GRIP);
+    gun.rotation.set(0, Math.PI, 0);
+    mount.add(gun);
+    this.body.add(mount);
+    this.rifle = { gun, mount };
+  }
+
+  /** Hit: a white flash, for a moment. */
+  flash() {
+    this.hitT = HIT_FLASH;
+  }
+
+  /** The arena's pose on top of everything else: the rifle up where they look, crouching, falling when killed, the flash of a hit. */
+  private arenaStep(dt: number) {
+    const r = this.rifle;
+    if (r) {
+      // Both hands on it, the right round its grip and the left reaching for it further along, the whole lot tipped up or down with their look.
+      r.mount.rotation.x = -this.aimPitch;
+      for (const [arm, side, at] of [
+        [this.armL, -1, RIFLE_GRIP],
+        [this.armR, 1, RIFLE_HOLD],
+      ] as const) {
+        v2.copy(at).applyEuler(r.mount.rotation);
+        v2.y += RIFLE_MOUNT.y - 0.9;
+        v2.x -= side * 0.33;
+        v2.normalize();
+        arm.rotation.set(Math.atan2(-v2.z, -v2.y), 0, Math.asin(THREE.MathUtils.clamp(v2.x, -1, 1)));
+      }
+      this.head.rotation.x -= this.aimPitch * 0.6;
+    }
+    const c = this.crouchK;
+    if (c > 0.001) {
+      // Down on one knee, more or less: the right leg out in front, the left back under them (and the head down into the shoulders, see update).
+      this.body.position.y -= KNEEL * c;
+      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, -1.25, c);
+      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 1.25, c);
+    }
+    const f = this.fallen;
+    if (f > 0.001) {
+      // Over like a plank from the feet, arms flung out.
+      const k = f * f * (3 - 2 * f);
+      this.body.rotation.x = -this.fallDir * 1.45 * k;
+      for (const arm of [this.armL, this.armR]) arm.rotation.x = THREE.MathUtils.lerp(arm.rotation.x, -2.5, k);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.6, k);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.6, k);
+    }
+    if (this.hitT > 0 || this.shirt.emissive.r > 0) {
+      this.hitT = Math.max(0, this.hitT - dt);
+      const glow = (this.hitT / HIT_FLASH) * 0.9;
+      this.shirt.emissive.setScalar(glow);
+      this.skin.emissive.setScalar(glow);
+    }
+  }
+
   /** `pace` speeds up the walk cycle for someone walking faster than usual. */
   update(dt: number, t: number, moving: boolean, airborne: boolean, pace = 1) {
     // Off a bike (ride sets this after update, every frame): no sideways lean offset left over.
@@ -1401,8 +1480,30 @@ export class Person {
     if (this.emoting) this.emoteStep(dt, moving || airborne ? 0 : 1 - sit);
     if (this.golf && !sit && !airborne) this.golfStep(dt);
     if (this.oche && !sit) this.ocheStep(dt);
+    if (this.rifle || this.crouchK > 0.001 || this.fallen > 0.001 || this.hitT > 0 || this.shirt.emissive.r > 0) this.arenaStep(dt);
+    // Crouching, the head goes down into the shoulders the rest of the way the body doesn't (where the
+    // office has it: shared/arena.ts), and a holiday hat comes off: it'd show over cover the head's down behind.
+    if (this.crouchK !== this.hunched) {
+      this.hunched = this.crouchK;
+      this.head.position.y = HEAD_C - (CROUCH - KNEEL) * this.crouchK;
+      for (const h of this.hat) h.visible = this.crouchK < 0.5;
+    }
   }
 }
+
+/**
+ * Where the arena's rifle is held, on someone (see Person.holdRifle): its mount at the shoulders, which
+ * tips with their look; its grip in the right hand, a little right of the middle and out in front; and
+ * the way the left arm reaches across for it (an arm's too short to get all the way: it ends up under
+ * the back of it).
+ */
+const RIFLE_MOUNT = { y: 0.9 };
+const RIFLE_GRIP = new THREE.Vector3(-0.08, -0.08, 0.3);
+const RIFLE_HOLD = new THREE.Vector3(-0.3, -0.1, 0.5);
+/** How long (s) a hit's flash lasts. */
+const HIT_FLASH = 0.12;
+/** How far (m) the body goes down crouching, on one knee; the head goes the rest of CROUCH, down into the shoulders. */
+const KNEEL = 0.32;
 
 // -----------------------------------------------------------------------------------------------
 

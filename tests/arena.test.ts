@@ -1,6 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, EYE_Y, RULES, SPAWNS, rayBox, rayPerson, rayWorld, type V3 } from '../src/shared/arena.js';
+import {
+  ARENA_BOXES,
+  ARENA_CENTER,
+  ARENA_GATE,
+  ARENA_HALF,
+  BODY_R,
+  CITY_ARENA_GATE,
+  CROUCH,
+  EYE_Y,
+  HEAD_C,
+  HEAD_R,
+  PRACTICE_DOWN,
+  PRACTICE_TARGETS,
+  RULES,
+  SPAWNS,
+  SWAP,
+  WEAPONS,
+  damageOf,
+  eyeY,
+  nextShot,
+  rayBox,
+  rayPerson,
+  rayWorld,
+  spreadOf,
+  targetAt,
+  type Body,
+  type V3,
+} from '../src/shared/arena.js';
 import { CITY_GATE, inGate } from '../src/shared/circuit.js';
 import { RACE_PLAZA, cityPaved } from '../src/shared/city.js';
 import { ArenaControl } from '../src/server/arena.js';
@@ -33,7 +60,7 @@ test('rays: boxes, the ground, and a person, head and body', () => {
   assert.equal(rayBox(o, { x: 1, y: 0, z: 0 }, { minX: 5, maxX: 6, minZ: -1, maxZ: 1, y0: 0, y1: 2 }), 5);
   assert.equal(rayBox(o, { x: 1, y: 0, z: 0 }, { minX: 5, maxX: 6, minZ: 2, maxZ: 3, y0: 0, y1: 2 }), Infinity);
   const feet = { x: 10, y: 0, z: 0 };
-  const body = rayPerson({ x: 0, y: 1, z: 0 }, { x: 1, y: 0, z: 0 }, feet);
+  const body = rayPerson({ x: 0, y: 0.8, z: 0 }, { x: 1, y: 0, z: 0 }, feet);
   assert.ok(body && !body.head && Math.abs(body.t - (10 - 0.42)) < 1e-6);
   const head = rayPerson({ x: 0, y: 1.65, z: 0 }, { x: 1, y: 0, z: 0 }, feet);
   assert.ok(head?.head);
@@ -49,9 +76,10 @@ function match(spots: Record<string, V3>) {
   let now = 1_000_000;
   for (const id of Object.keys(spots)) a.join(id, id.toUpperCase(), now);
   const eye = (id: string) => ({ ...spots[id], y: spots[id].y + EYE_Y });
+  // At the chest (or `dy` up from it: 0.6 is the face).
   const at = (from: string, to: string, dy = 0) => {
     const o = eye(from), t = spots[to];
-    const d = { x: t.x - o.x, y: t.y + 1.0 + dy - o.y, z: t.z - o.z };
+    const d = { x: t.x - o.x, y: t.y + 0.75 + dy - o.y, z: t.z - o.z };
     return { o, d };
   };
   return {
@@ -71,7 +99,7 @@ function match(spots: Record<string, V3>) {
   };
 }
 
-test('a match: two in makes it live; four body shots kill, a head shot is two; the dead come back', () => {
+test('a match: two in makes it live; four body shots kill, head shots three; the dead come back', () => {
   const m = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
   assert.equal(m.a.state().phase, 'live');
   // Safe for a moment after coming in.
@@ -91,9 +119,9 @@ test('a match: two in makes it live; four body shots kill, a head shot is two; t
   assert.deepEqual(back.spawned.map((x) => x.id), ['b']);
   s = m.a.state();
   assert.ok(s.players.find((p) => p.id === 'b')!.alive);
-  // Head shots: two.
+  // Head shots: three.
   m.wait(RULES.safe * 1000);
-  assert.ok(m.shoot('a', 'b', 0.6)?.head);
+  for (let i = 0; i < 2; i++) assert.ok(m.shoot('a', 'b', 0.6)?.head);
   assert.ok(m.shoot('a', 'b', 0.6)?.kill);
 });
 
@@ -162,4 +190,274 @@ test('a shot after someone is due back leaves their respawn to the timer; late s
   assert.equal(m2.a.fire('a', o, d, t0 + 210), undefined, 'but not faster than the rifle');
   // Nor from over the top of cover, out of their own eyes' sight.
   assert.equal(m2.a.fire('a', { ...o, y: o.y + 2 }, d, t0 + 1000), undefined);
+});
+
+test('the head is a ball where the Person draws it: low on the face counts, the shoulders beside it don\'t; crouching takes it down', () => {
+  const feet = { x: 10, y: 0, z: 0 };
+  const across = { x: 1, y: 0, z: 0 };
+  // Straight at the face, from its chin up to the crown.
+  for (const y of [1.05, 1.15, 1.25, 1.32, 1.5, 1.62]) assert.equal(rayPerson({ x: 0, y, z: 0 }, across, feet)?.head, true, `face at ${y}`);
+  // Chest and belly: the body.
+  for (const y of [0.3, 0.6, 0.9]) assert.equal(rayPerson({ x: 0, y, z: 0 }, across, feet)?.head, false, `body at ${y}`);
+  // Beside the neck, over the shoulder: nothing there.
+  assert.equal(rayPerson({ x: 0, y: 1.08, z: 0.38 }, across, feet), undefined);
+  // Over the top of the head.
+  assert.equal(rayPerson({ x: 0, y: HEAD_C + HEAD_R + 0.02, z: 0 }, across, feet), undefined);
+  // Crouching, the head comes down: where the face was is clear, and the face is lower.
+  const low = { ...feet, crouch: true };
+  assert.equal(rayPerson({ x: 0, y: 1.6, z: 0 }, across, low), undefined);
+  assert.equal(rayPerson({ x: 0, y: HEAD_C - CROUCH, z: 0 }, across, low)?.head, true);
+  // From above, down onto the head: the head first.
+  const down = rayPerson({ x: 10, y: 5, z: 0.05 }, { x: 0, y: -1, z: 0 }, feet);
+  assert.ok(down?.head && Math.abs(down.t - (5 - HEAD_C - HEAD_R)) < 0.01);
+});
+
+test('shots say what they did: damage and health left, the streak on a kill; someone just back in is shielded, unharmed', () => {
+  const m = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
+  // Safe just after coming in: shielded, no hit, no harm.
+  const safe = m.shoot('a', 'b');
+  assert.equal(safe?.shield, 'b');
+  assert.equal(safe?.hit, undefined);
+  assert.equal(m.a.state().players.find((p) => p.id === 'b')!.hp, RULES.hp);
+  m.wait(RULES.safe * 1000);
+  const first = m.shoot('a', 'b');
+  assert.deepEqual([first?.hit, first?.dmg, first?.hp, first?.head], ['b', RULES.body, RULES.hp - RULES.body, false]);
+  const head = m.shoot('a', 'b', 0.6);
+  assert.deepEqual([head?.dmg, head?.hp, head?.head], [RULES.head, RULES.hp - RULES.body - RULES.head, true]);
+  const kill = m.shoot('a', 'b', 0.6);
+  assert.ok(kill?.kill);
+  assert.equal(kill.hp, 0);
+  assert.equal(kill.streak, 1, 'the streak counting this kill, before the state catches up');
+  // Firing gives up your own safety straight away.
+  const m2 = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
+  m2.shoot('b', 'a');
+  assert.equal(m2.a.state().players.find((p) => p.id === 'b')!.safeUntil, undefined);
+  assert.equal(m2.shoot('a', 'b')?.hit, 'b');
+});
+
+test('lag: a shot at where the shooter saw someone running counts, looked for that far back; a bot (no round trip) is judged on now', () => {
+  // b runs across a's view at 7.5 m/s, its moves reaching the office every 66 ms.
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 26 } };
+  const a = new ArenaControl((id) => spots[id]);
+  let now = 2_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  now += RULES.safe * 1000;
+  const run = 7.5;
+  for (let i = 0; i < 20; i++) {
+    now += 66;
+    spots.b = { x: spots.b.x, y: 0, z: spots.b.z - run * 0.066 };
+    a.moved('b', spots.b, now);
+  }
+  // a's page showed b where they were 100 ms (a's round trip) + the page's easing ago: 1.3 m back.
+  const rtt = 100;
+  const seen = { x: spots.b.x, y: 0, z: spots.b.z + run * (rtt + 100) / 1000 };
+  const o = { x: spots.a.x, y: EYE_Y, z: spots.a.z };
+  const d = { x: seen.x - o.x, y: 0.75 - EYE_Y, z: seen.z - o.z };
+  assert.equal(a.fire('a', o, d, now, rtt)?.hit, 'b', 'rewound: a hit');
+  assert.equal(a.fire('a', o, d, now + RULES.every)?.hit, undefined, 'judged on where b is now: a miss');
+  // Never further back than 300 ms, however slow the connection.
+  const long = { x: spots.b.x, y: 0, z: spots.b.z + run * 0.9 };
+  assert.equal(a.fire('a', o, { x: long.x - o.x, y: 0.75 - EYE_Y, z: long.z - o.z }, now + 2 * RULES.every, 5000)?.hit, undefined);
+});
+
+test('fire rate: holding the trigger fires ten a second at any frame rate, and never two in a burst', () => {
+  for (const fps of [24, 30, 60, 75, 144]) {
+    let due = 0, shots = 0, s = 1;
+    const jitter = () => ((s = (s * 16807) % 2147483647) / 2147483647 - 0.5) * 0.6;
+    for (let now = 0; now < 3000; now += 1000 / fps + jitter()) {
+      if (now < due) continue;
+      shots++;
+      due = nextShot(due, now);
+    }
+    assert.ok(Math.abs(shots - 30) <= 1, `${fps} fps: ${shots} shots in 3 s`);
+  }
+  // Let go a while and pulled again: the next is a whole gap after.
+  assert.equal(nextShot(100, 5000), 5000 + RULES.every);
+});
+
+test('spread: still is tightest, running spreads more than walking, the sights and crouching tighten it', () => {
+  const still = spreadOf(0, true, 0, 0), walk = spreadOf(4.6, true, 0, 0), run = spreadOf(7.5, true, 0, 0);
+  assert.ok(still < walk && walk < run);
+  assert.ok(spreadOf(0, true, 1, 0) < still * 0.2);
+  // Down the sights you still can't run and gun: moving keeps half its spread.
+  assert.ok(spreadOf(4.6, true, 1, 0) > spreadOf(0, true, 1, 0) * 3);
+  assert.ok(spreadOf(4.6, true, 0, 0, true) < walk);
+});
+
+test('practice targets: in warm-up alone, shot down in four, back up after a while; gone once it\'s a match', () => {
+  // Every lane clear of the cover, inside the walls.
+  for (let i = 0; i < PRACTICE_TARGETS; i++) {
+    for (let k = 0; k <= 40; k++) {
+      const p = targetAt(i, k * 400);
+      assert.ok(Math.abs(p.x - C.x) < ARENA_HALF - 1 && Math.abs(p.z - C.z) < ARENA_HALF - 1);
+      for (const b of ARENA_BOXES) assert.ok(!inside(b, p.x, p.z, BODY_R), `target ${i} into a ${b.kind}`);
+    }
+  }
+  const me = { x: C.x - 19, y: 0, z: C.z - 20 };
+  const a = new ArenaControl((id) => (id === 'a' ? me : undefined));
+  let now = 3_000_000;
+  a.join('a', 'A', now);
+  assert.equal(a.state().phase, 'warmup');
+  assert.deepEqual(a.state().targets, [0, 0, 0, 0]);
+  const o = { x: me.x, y: EYE_Y, z: me.z };
+  const shoot = () => {
+    now += RULES.every;
+    const t = targetAt(1, now);
+    return a.fire('a', o, { x: t.x - o.x, y: 0.75 - EYE_Y, z: t.z - o.z }, now, 0);
+  };
+  for (let i = 0; i < 3; i++) assert.equal(shoot()?.target, 1);
+  const down = shoot();
+  assert.ok(down?.kill && down.target === 1 && down.hp === 0);
+  assert.ok(a.state().targets![1] > now);
+  assert.equal(shoot()?.target, undefined, 'down, it can\'t be hit');
+  now += PRACTICE_DOWN * 1000;
+  assert.ok(a.tick(now).changed);
+  assert.equal(a.state().targets![1], 0, 'back up');
+  // Someone else in: a match, and no targets.
+  a.join('b', 'B', now);
+  assert.equal(a.state().phase, 'live');
+  assert.equal(a.state().targets, undefined);
+});
+
+test('coming back in: a spawn out of everyone\'s sight, even when the furthest one is in it', () => {
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, c: { x: C.x - 30, y: 0, z: C.z + 14 } };
+  const a = new ArenaControl((id) => spots[id]);
+  for (const id of ['a', 'b', 'c']) a.join(id, id, 0);
+  const sees = (from: V3, s: { x: number; z: number }) => {
+    const eye = { x: from.x, y: EYE_Y, z: from.z };
+    const dx = s.x - eye.x, dy = 1.1 - eye.y, dz = s.z - eye.z, len = Math.hypot(dx, dy, dz);
+    return rayWorld(eye, { x: dx / len, y: dy / len, z: dz / len }, len) >= len - 0.1;
+  };
+  const near = (s: { x: number; z: number }) => Math.min(...Object.values(spots).map((o) => Math.hypot(o.x - s.x, o.z - s.z)));
+  const furthest = [...SPAWNS].sort((p, q) => near(q) - near(p))[0];
+  assert.ok(sees(spots.a, furthest) || sees(spots.c, furthest), 'the furthest spawn is in sight');
+  const s = a.spawnFor('b');
+  assert.ok(!sees(spots.a, s) && !sees(spots.c, s), `spawn ${s.x - C.x}, ${s.z - C.z} out of sight`);
+});
+
+test('two guns: a swap takes a moment and drops the reload; the SMG fires faster from its own magazine and weakens with range', () => {
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 12, y: 0, z: C.z - 30 } };
+  const a = new ArenaControl((id) => spots[id]);
+  let now = 4_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  now += RULES.safe * 1000;
+  const o = { x: spots.a.x, y: EYE_Y, z: spots.a.z };
+  const at = (id: string) => ({ x: spots[id].x - o.x, y: 0.75 - EYE_Y, z: spots[id].z - o.z });
+  const down = { x: 0, y: -1, z: 0.1 };
+  assert.equal(a.fire('a', o, down, now)?.w, 'rifle');
+  // Half the rifle's mag gone, a reload started, then a swap: no shots till it's up, and the reload's off.
+  for (let i = 1; i < 15; i++) a.fire('a', o, down, (now += WEAPONS.rifle.every));
+  assert.ok(a.reload('a', now));
+  assert.ok(a.weapon('a', 'smg', now));
+  assert.equal(a.state().players.find((p) => p.id === 'a')!.w, 'smg');
+  assert.equal(a.weapon('a', 'smg', now), false, 'already in hand');
+  assert.equal(a.fire('a', o, down, now + SWAP / 2), undefined, 'still coming up');
+  now += SWAP;
+  // Then the SMG's quicker rate: a shot 65 ms after the last is fine, as the rifle's 100 ms gap isn't needed.
+  let shots = 0;
+  for (let i = 0; i < 20; i++) if (a.fire('a', o, down, (now += WEAPONS.smg.every))) shots++;
+  assert.equal(shots, 20);
+  // Its own magazine: 35 rounds, the rifle's 15 left alone.
+  for (let i = 0; i < 15; i++) a.fire('a', o, down, (now += WEAPONS.smg.every));
+  assert.equal(a.fire('a', o, down, (now += WEAPONS.smg.every)), undefined, 'the SMG is empty');
+  assert.ok(a.weapon('a', 'rifle', now));
+  now += SWAP;
+  let left = 0;
+  while (a.fire('a', o, down, (now += WEAPONS.rifle.every))) left++;
+  assert.equal(left, WEAPONS.rifle.mag - 15, 'the rifle kept its rounds');
+  // A hit from 8 m does the SMG's full damage; at range less, never under its floor; the rifle's the same at any range.
+  a.weapon('a', 'smg', now);
+  now += SWAP;
+  assert.ok(a.reload('a', now), 'the empty SMG reloads');
+  now += WEAPONS.smg.reload;
+  const hit = a.fire('a', o, at('b'), now);
+  assert.deepEqual([hit?.hit, hit?.dmg, hit?.w], ['b', WEAPONS.smg.body, 'smg']);
+  assert.equal(damageOf(WEAPONS.smg, false, 8), 17);
+  assert.equal(damageOf(WEAPONS.smg, false, 21), Math.round(17 * 0.8));
+  assert.equal(damageOf(WEAPONS.smg, false, 60), Math.round(17 * 0.6));
+  assert.equal(damageOf(WEAPONS.rifle, true, 60), RULES.head);
+});
+
+test('a reload that\'s done stays done through a swap that gets to the office before its timer does', () => {
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 12, y: 0, z: C.z - 30 } };
+  const a = new ArenaControl((id) => ({ ...spots[id], crouch: false }));
+  let now = 5_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  const o = { x: spots.a.x, y: EYE_Y, z: spots.a.z };
+  const down = { x: 0, y: -1, z: 0.1 };
+  while (a.fire('a', o, down, (now += WEAPONS.rifle.every), undefined));
+  assert.ok(a.reload('a', now));
+  // The page's reload is over and it swaps away and back, all before the office's timer next ticks.
+  now += WEAPONS.rifle.reload + 80;
+  assert.ok(a.weapon('a', 'smg', now));
+  assert.ok(a.weapon('a', 'rifle', (now += 100)));
+  now += SWAP;
+  let shots = 0;
+  while (a.fire('a', o, down, (now += WEAPONS.rifle.every), undefined)) shots++;
+  assert.equal(shots, WEAPONS.rifle.mag, 'a full magazine, not blanks');
+});
+
+test('crouched behind a barrier, nobody on the ground beyond can hit you, head and all, and you can\'t see over; standing, your head shows and you can', () => {
+  // One shot, judged by the office, from `from`'s eyes at `aim`, at someone at `them`.
+  const judge = (from: V3, them: Body, aim: V3) => {
+    const spots: Record<string, Body> = { a: from, b: them };
+    const a = new ArenaControl((id) => ({ ...spots[id], crouch: !!spots[id].crouch }));
+    a.join('a', 'A', 0);
+    a.join('b', 'B', 0);
+    const o = { x: from.x, y: eyeY(from), z: from.z };
+    return a.fire('a', o, { x: aim.x - o.x, y: aim.y - o.y, z: aim.z - o.z }, RULES.safe * 1000 + 1, undefined);
+  };
+  const barriers = ARENA_BOXES.filter((b) => b.kind === 'barrier');
+  assert.equal(barriers.length, 4);
+  for (const b of barriers) {
+    assert.ok(eyeY({ y: 0, crouch: true }) < b.y1 && eyeY({ y: 0 }) > b.y1, 'eyes under it crouching, over it standing');
+    // Across it the short way (u), along it the long way (w).
+    const thinX = b.maxX - b.minX < b.maxZ - b.minZ;
+    const mid = { x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 };
+    const half = thinX ? (b.maxX - b.minX) / 2 : (b.maxZ - b.minZ) / 2;
+    const spot = (u: number, w: number, y = 0): V3 => (thinX ? { x: mid.x + u, y, z: mid.z + w } : { x: mid.x + w, y, z: mid.z + u });
+    for (const side of [-1, 1]) {
+      // Up against its far side (player.ts RADIUS 0.32 off it).
+      const near = half + 0.32;
+      let crouchedHits = 0, standingHits = 0;
+      for (const dist of [3, 6, 12, 25]) {
+        const from = spot(-side * (half + dist), 0.3);
+        for (let y = 0.4; y <= 1.8; y += 0.02) {
+          for (let w = -0.45; w <= 0.45; w += 0.15) {
+            const aim = spot(side * near, w, y);
+            if (judge(from, { ...spot(side * near, 0), crouch: true }, aim)?.hit) crouchedHits++;
+            if (judge(from, spot(side * near, 0), aim)?.hit) standingHits++;
+          }
+        }
+      }
+      assert.equal(crouchedHits, 0, 'crouched: hidden');
+      assert.ok(standingHits > 0, 'standing: the head shows');
+    }
+  }
+});
+
+test('a page can\'t say it\'s crouching (low behind cover) and fire from standing height; standing up, or jumping, it can', () => {
+  const spots: Record<string, Body> = { a: { x: C.x - 20, y: 0, z: C.z - 30, crouch: true }, b: { x: C.x - 10, y: 0, z: C.z - 30 } };
+  const a = new ArenaControl((id) => ({ ...spots[id], crouch: !!spots[id].crouch }));
+  let now = 6_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  now += RULES.safe * 1000;
+  const from = (y: number) => ({ x: spots.a.x, y, z: spots.a.z });
+  const atB = (o: V3) => ({ x: spots.b.x - o.x, y: spots.b.y + 0.75 - o.y, z: spots.b.z - o.z });
+  const shoot = (o: V3) => a.fire('a', o, atB(o), (now += RULES.every), 0);
+  a.moved('a', spots.a, now);
+  // Just down: eyes still on their way.
+  assert.equal(shoot(from(EYE_Y))?.hit, 'b');
+  // Down a while: from crouched eyes, yes; from standing ones, no.
+  now += 400;
+  assert.equal(shoot(from(EYE_Y)), undefined);
+  assert.equal(shoot(from(eyeY(spots.a) + 0.1))?.hit, 'b');
+  // Leaving the ground (the page says so straight away: main.ts), higher than that's fine.
+  spots.a = { ...spots.a, y: 0.1 };
+  a.moved('a', spots.a, now);
+  assert.equal(shoot(from(eyeY(spots.a) + 0.35))?.hit, 'b');
 });

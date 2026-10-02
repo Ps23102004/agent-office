@@ -43,20 +43,26 @@ const box = (x: number, z: number, sx: number, sz: number, h: number, kind: Aren
 
 /** A container's height and width; they're 12 m long. */
 const CH = 2.6, CW = 2.5;
+/**
+ * A concrete barrier's height: over it standing (eyes at EYE_Y), hidden behind it crouching, eyes and
+ * head and all (see CROUCH).
+ */
+const BARRIER_H = 1.3;
 
 /**
  * Half the yard (from its middle, m): the other half is the same turned round (x, z → -x, -z), so
  * nobody's side is better. A two-container block in the middle with crates to climb it, a pinwheel of
- * containers round it, low barriers across the lanes, crates piled in the corners and a stack of two
- * containers on each side wall. Crates are 1.2 m: jump onto one, then onto a container.
+ * containers round it, low barriers across the lanes, short containers further out, crates piled in
+ * the corners and a stack of two containers on each side wall. Crates are 1.2 m: jump at one and you climb up (see client/player.ts
+ * MANTLE), then up again onto a container.
  */
 const HALF: readonly ArenaBox[] = [
   box(0, 1.3, 6, CW, CH, 'container', 0),
   box(4.2, 2.2, 1.2, 1.2, 1.2, 'crate'),
   box(12, -6, CW, 12, CH, 'container', 1),
   box(-6, -12, 12, CW, CH, 'container', 2),
-  box(22, 10, 0.6, 8, 1.15, 'barrier'),
-  box(10, -22, 8, 0.6, 1.15, 'barrier'),
+  box(22, 10, 0.6, 8, BARRIER_H, 'barrier'),
+  box(10, -22, 8, 0.6, BARRIER_H, 'barrier'),
   box(26, 26, 1.4, 1.4, 1.4, 'crate'),
   box(27.6, 26, 1.4, 1.4, 1.4, 'crate'),
   box(26, 27.6, 1.4, 1.4, 2.8, 'crate'),
@@ -66,6 +72,10 @@ const HALF: readonly ArenaBox[] = [
   box(29, 0, CW, 12, CH, 'container', 0, CH),
   box(18, 18, 1.2, 1.2, 1.2, 'crate'),
   box(-2, -20, 1.2, 1.2, 1.2, 'crate'),
+  // Two short (20-foot) containers out in the ring round the middle, across its long lanes: from 40%
+  // of the yard's spots seeing each other to 31%.
+  box(12, 20, CW, 6, CH, 'container', 2),
+  box(20, -12, 6, CW, CH, 'container', 0),
 ];
 
 /** The four walls round the yard, a metre thick. */
@@ -109,10 +119,13 @@ export const CITY_ARENA_GATE: Gate = { x: 72, z: -66, rotY: Math.PI / 2, width: 
 // ---- The rules ------------------------------------------------------------------------------------
 
 export const RULES = {
-  /** Health, and what a shot takes off it: anywhere, or in the head. */
+  /**
+   * Health, and what a shot takes off it: anywhere, or in the head. A Person's head is big (a ball as
+   * wide as their shoulders), so a headshot's worth less than double: three to kill, or four anywhere.
+   */
   hp: 100,
   body: 25,
-  head: 50,
+  head: 40,
   /** Rounds in the rifle, ms between shots, and ms to reload. */
   mag: 30,
   every: 100,
@@ -133,12 +146,101 @@ export const RULES = {
   players: 2,
 } as const;
 
-/** Where someone stands, and how tall they are to be hit (m): a body up to HEAD_Y, then the head. */
+/**
+ * Where someone stands, and how they're shaped to be hit, as character.ts draws a Person (m): a body
+ * BODY_R round from their feet up to BODY_TOP (the shoulders, not the head line: aim at HEAD_C for
+ * the head), and above it the head, a ball HEAD_R round its middle at HEAD_C. BODY_H is how tall they
+ * stand, hair and all.
+ */
 export const BODY_R = 0.42;
 export const BODY_H = 1.75;
-export const HEAD_Y = 1.3;
+export const BODY_TOP = 1.0;
+export const HEAD_C = 1.32;
+export const HEAD_R = 0.34;
 /** Where the eyes are, above the feet: where a shot leaves from. */
 export const EYE_Y = 1.4;
+/**
+ * How much lower crouching puts your eyes, your head and the top of your body (m): enough that the
+ * whole head is under a barrier's top (HEAD_C - CROUCH + HEAD_R < BARRIER_H), as are the eyes.
+ */
+export const CROUCH = 0.38;
+
+/** Someone to be hit: where their feet are, and whether they're crouching. */
+export interface Body extends V3 {
+  crouch?: boolean;
+}
+
+/** Where `p`'s eyes are, crouching or not. */
+export const eyeY = (p: { y: number; crouch?: boolean }) => p.y + EYE_Y - (p.crouch ? CROUCH : 0);
+
+/**
+ * How wide a shot goes (radians), round where you're looking: from the hip standing still, more the
+ * faster you move (`move` at walking pace, WALK m/s) and in the air, less the more you're aiming down
+ * the sights (`ads`, which only halves what moving adds) and crouching (`crouch`), plus the bloom from
+ * firing (`perShot` a round, up to `maxBloom`, settling at `settle` a second). Everyone's the same:
+ * people (client/arena.ts) and bots.
+ */
+export const SPREAD = { hip: 0.012, move: 0.02, air: 0.045, ads: 0.15, crouch: 0.7, perShot: 0.006, maxBloom: 0.03, settle: 0.08 };
+/** How far each shot kicks the view up (radians), and sideways at most, and how quickly it settles. */
+export const KICK = { up: 0.012, side: 0.004, settle: 9 };
+/** Walking pace (m/s), what SPREAD.move is for: client/player.ts's WALK. */
+const WALK = 4.6;
+
+export type WeaponId = 'rifle' | 'smg';
+
+/**
+ * A gun: what a shot takes off anywhere and in the head, ms between shots, rounds and ms to reload;
+ * how wide it shoots from the hip (`hip`, times SPREAD's) and what aiming down its sights leaves of
+ * that (`ads`), how hard it kicks (times KICK), and the fastest you go (m/s) firing it and down its
+ * sights. Past `falloff.from` m its shots weaken, to `falloff.min` of themselves at `falloff.to`.
+ */
+export interface Weapon {
+  body: number;
+  head: number;
+  every: number;
+  mag: number;
+  reload: number;
+  hip: number;
+  ads: number;
+  kick: number;
+  pace: { firing: number; ads: number };
+  falloff?: { from: number; to: number; min: number };
+}
+
+/**
+ * Everyone's two guns, swapped with 1, 2 or Q (client/arena.ts): the rifle (RULES's numbers), steady
+ * down its sights and as good at any range; and the SMG, quicker and lighter, for close in: tighter
+ * from the hip and fine to run with, its sights not much help, weaker the further it goes. Up close
+ * they kill about as fast (300 ms anywhere, 200 in the head); at 30 m the SMG takes twice as long.
+ */
+export const WEAPONS: Record<WeaponId, Weapon> = {
+  rifle: { body: RULES.body, head: RULES.head, every: RULES.every, mag: RULES.mag, reload: RULES.reload, hip: 1, ads: SPREAD.ads, kick: 1, pace: { firing: WALK, ads: 2.8 } },
+  smg: { body: 17, head: 27, every: 65, mag: 35, reload: 1500, hip: 0.7, ads: 0.45, kick: 0.6, pace: { firing: 7.5, ads: 3.8 }, falloff: { from: 12, to: 30, min: 0.6 } },
+};
+/** How long (ms) swapping guns takes: no shots till it's done. */
+export const SWAP = 400;
+export const isWeapon = (w: unknown): w is WeaponId => w === 'rifle' || w === 'smg';
+
+/** What a shot from `w` does, in the head or not, from `dist` m away: whole points of health. */
+export function damageOf(w: Weapon, head: boolean, dist: number): number {
+  const f = w.falloff;
+  const k = f ? 1 - (1 - f.min) * Math.min(1, Math.max(0, (dist - f.from) / (f.to - f.from))) : 1;
+  return Math.round((head ? w.head : w.body) * k);
+}
+
+/** How wide a shot goes (radians): moving at `speed` (m/s), on the ground or not, `ads` (0 to 1) down the sights, with `bloom` from firing; crouching, steadier; with gun `w`. */
+export function spreadOf(speed: number, grounded: boolean, ads: number, bloom: number, crouch = false, w: Weapon = WEAPONS.rifle): number {
+  const still = (SPREAD.hip * w.hip + bloom + (grounded ? 0 : SPREAD.air)) * (1 - ads * (1 - w.ads));
+  return (still + SPREAD.move * w.hip * Math.min(1.6, speed / WALK) * (1 - ads * 0.5)) * (crouch ? SPREAD.crouch : 1);
+}
+
+/**
+ * When your next shot can go, holding the trigger down, after one that was due at `due` went at `now`
+ * (a frame late, likely): in its slot, so a late frame doesn't slow the rifle down. Unless it's late
+ * by more than half a gap (the trigger was let go a while, or the page stalled): then from now, so
+ * two shots never come closer than half a gap.
+ */
+export const nextShot = (due: number, now: number, every: number = RULES.every) => (now - due > every / 2 ? now : due) + every;
 
 export type ArenaPhase = 'warmup' | 'live' | 'over';
 
@@ -153,6 +255,10 @@ export interface ArenaPlayer {
   alive: boolean;
   /** When they're back in (epoch ms), while they're dead. */
   respawnAt?: number;
+  /** Safe from shots till then (epoch ms), just back in; gone once they fire. */
+  safeUntil?: number;
+  /** The gun in their hands (WEAPONS). */
+  w: WeaponId;
 }
 
 export interface KillLine {
@@ -171,6 +277,32 @@ export interface ArenaState {
   players: ArenaPlayer[];
   /** The last few kills, newest last. */
   feed: KillLine[];
+  /**
+   * In warm-up only, the practice targets (see targetAt): when each is back up after it's been shot
+   * down (epoch ms), or 0 while it's standing.
+   */
+  targets?: number[];
+}
+
+/**
+ * What became of a shot, as the office judged it (server/arena.ts) and tells everyone in the arena
+ * (arena.shot): the gun it came from (`w`), where it stopped, and who it hit, `hit` (a peer id) or the practice `target` (its
+ * index). Then whether in the `head`, the damage it did (`dmg`) and what they have left (`hp`), and
+ * whether that killed them (`kill`, with the shooter's `streak` counting it). `shield`: who it hit
+ * that was still safe (see ArenaPlayer.safeUntil), doing them no harm.
+ */
+export interface ShotResult {
+  /** The gun it came from. */
+  w: WeaponId;
+  end: V3;
+  hit?: string;
+  target?: number;
+  head?: boolean;
+  dmg?: number;
+  hp?: number;
+  kill?: boolean;
+  streak?: number;
+  shield?: string;
 }
 
 export function idleArena(): ArenaState {
@@ -214,13 +346,20 @@ export function rayWorld(o: V3, d: V3, range: number = RULES.range): number {
   return Math.max(0, t);
 }
 
-/**
- * Where the ray from `o` going `d` first touches someone standing with their feet at `p` (`r` round
- * them, a little more than they are for a laggy connection's sake): how far along, and whether it's
- * their head. Undefined if it misses them.
- */
-export function rayPerson(o: V3, d: V3, p: V3, r: number = BODY_R): { t: number; head: boolean } | undefined {
-  // Their upright cylinder, seen from above first.
+/** How far along the ray from `o` going `d` (a unit vector) it goes into the ball round `c`, or undefined if it misses. */
+function raySphere(o: V3, d: V3, c: V3, r: number): number | undefined {
+  const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;
+  const b = ox * d.x + oy * d.y + oz * d.z;
+  const disc = b * b - (ox * ox + oy * oy + oz * oz - r * r);
+  if (disc < 0) return undefined;
+  const s = Math.sqrt(disc);
+  if (-b + s < 0) return undefined;
+  return Math.max(0, -b - s);
+}
+
+/** How far along the ray it goes into the upright column `r` round `p`, from its feet up to `top`, or undefined if it misses. */
+function rayColumn(o: V3, d: V3, p: V3, r: number, top: number): number | undefined {
+  // Seen from above first.
   const ox = o.x - p.x, oz = o.z - p.z;
   const a = d.x * d.x + d.z * d.z;
   const b = 2 * (ox * d.x + oz * d.z);
@@ -238,16 +377,53 @@ export function rayPerson(o: V3, d: V3, p: V3, r: number = BODY_R): { t: number;
   }
   // Then the stretch of that inside their height.
   if (Math.abs(d.y) > 1e-9) {
-    let y0 = (p.y - o.y) / d.y, y1 = (p.y + BODY_H - o.y) / d.y;
+    let y0 = (p.y - o.y) / d.y, y1 = (top - o.y) / d.y;
     if (y0 > y1) [y0, y1] = [y1, y0];
     t0 = Math.max(t0, y0);
     t1 = Math.min(t1, y1);
-  } else if (o.y < p.y || o.y > p.y + BODY_H) return undefined;
+  } else if (o.y < p.y || o.y > top) return undefined;
   if (t0 > t1 || t1 < 0) return undefined;
-  const t = Math.max(0, t0);
-  // The head, if it goes in above the shoulders, or passes through up there.
-  const head = o.y + d.y * t >= p.y + HEAD_Y || o.y + d.y * ((t + t1) / 2) >= p.y + HEAD_Y;
-  return { t, head };
+  return Math.max(0, t0);
+}
+
+/**
+ * Where the ray from `o` going `d` (a unit vector) first touches someone with their feet at `p`: how
+ * far along, and whether that's their head (the ball, if it gets there before the body). `r` is how
+ * far round them their body counts (a little more than it is, for the moment the office has them a
+ * bit off where the shooter saw them). The head is only ever as big as it's drawn: grown, it would
+ * peek over cover a crouching head is under. Undefined if it misses them.
+ */
+export function rayPerson(o: V3, d: V3, p: Body, r: number = BODY_R): { t: number; head: boolean } | undefined {
+  const low = p.crouch ? CROUCH : 0;
+  const head = raySphere(o, d, { x: p.x, y: p.y + HEAD_C - low, z: p.z }, HEAD_R);
+  const body = rayColumn(o, d, p, r, p.y + BODY_TOP - low);
+  if (head !== undefined && (body === undefined || head <= body)) return { t: head, head: true };
+  return body === undefined ? undefined : { t: body, head: false };
+}
+
+// ---- Practice targets ------------------------------------------------------------------------------
+
+/**
+ * Cardboard figures for warm-up (fewer than RULES.players in, nobody to play), to shoot at alone: each
+ * slides back and forth along an open lane, from `a` to `b` (m from the yard's middle) at `speed`
+ * m/s. Shot down, one's back up after PRACTICE_DOWN seconds.
+ */
+const LANES: readonly { a: [number, number]; b: [number, number]; speed: number }[] = [
+  { a: [19, -9], b: [19, 7], speed: 2.4 },
+  { a: [-19, 9], b: [-19, -7], speed: 2.4 },
+  { a: [-8, 25], b: [8, 25], speed: 3 },
+  { a: [8, -25], b: [-8, -25], speed: 1.8 },
+];
+export const PRACTICE_TARGETS = LANES.length;
+export const PRACTICE_DOWN = 3;
+
+/** Where practice target `i` is at `now` (epoch ms, the office's clock): where its feet are. */
+export function targetAt(i: number, now: number): V3 {
+  const { a, b, speed } = LANES[i];
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const s = ((now / 1000) * speed) % (2 * len);
+  const k = (s < len ? s : 2 * len - s) / len;
+  return { x: ARENA_CENTER.x + a[0] + (b[0] - a[0]) * k, y: 0, z: ARENA_CENTER.z + a[1] + (b[1] - a[1]) * k };
 }
 
 /** Whether (x, z) is inside the arena's walls (with a little room for whoever's standing there). */

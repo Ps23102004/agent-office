@@ -23,8 +23,9 @@ export interface ArenaHudView {
   spread: number;
   /** Aiming down the sights (right mouse): the crosshair goes, the gun's sights do the job. */
   ads: boolean;
-  /** Who killed you, while you're dead. */
+  /** Who killed you, while you're dead, and the health they had left. */
   killedBy?: string;
+  killerHp?: number;
 }
 
 const text = (el: HTMLElement, value: string) => { if (el.textContent !== value) el.textContent = value; };
@@ -178,7 +179,7 @@ export class ArenaHUD {
 
     visible(this.death, v.killedBy !== undefined);
     if (v.killedBy !== undefined) {
-      text(this.deathText, `KILLED BY ${v.killedBy}`);
+      text(this.deathText, `KILLED BY ${v.killedBy}${v.killerHp !== undefined && v.killerHp > 0 ? ` · ${Math.ceil(v.killerHp)} HP LEFT` : ''}`);
       const left = me?.respawnAt === undefined ? 0 : Math.ceil((me.respawnAt - v.now) / 1000);
       text(this.respawn, left > 0 ? `Back in ${left}` : 'Respawning…');
     }
