@@ -9,6 +9,7 @@ import { Fleet, supercar } from './cars';
 import { loadModel, type ModelName } from './models';
 import type { Collider, Interactable } from './office';
 import { Decals, decalUV, detail, type Grain } from './surface';
+import { SKY_BODIES } from './sky';
 import { gradientMap, mergeColored, mesh, textPlane, toon, toonVertexUnique } from './toon';
 import type { CarDef } from '../../shared/garage';
 
@@ -252,14 +253,18 @@ function chainLink(): THREE.CanvasTexture {
   return linkTex;
 }
 
-/** Chain-link fencing, as one mesh: a panel from (ax, az) to (bx, bz) for each, `h` high, seen from either side. */
-function fencing(panels: { ax: number; az: number; bx: number; bz: number; h: number }[]): THREE.Mesh {
+/**
+ * Chain-link fencing, as one mesh: a panel from (ax, az) to (bx, bz) for each, `h` high, seen from
+ * either side, its wire starting `u` m along (0 if not said): a run of panels gives each where the last left off.
+ */
+function fencing(panels: { ax: number; az: number; bx: number; bz: number; h: number; u?: number }[]): THREE.Mesh {
   const pos: number[] = [], uv: number[] = [], norm: number[] = [];
   const tile = LINK * 8;
   for (const p of panels) {
     const len = Math.hypot(p.bx - p.ax, p.bz - p.az);
     const nx = (p.bz - p.az) / len, nz = -(p.bx - p.ax) / len;
-    const c = [[p.ax, 0, p.az, 0, 0], [p.bx, 0, p.bz, len, 0], [p.bx, p.h, p.bz, len, p.h], [p.ax, p.h, p.az, 0, p.h]];
+    const u = p.u ?? 0;
+    const c = [[p.ax, 0, p.az, u, 0], [p.bx, 0, p.bz, u + len, 0], [p.bx, p.h, p.bz, u + len, p.h], [p.ax, p.h, p.az, u, p.h]];
     for (const i of [0, 1, 2, 0, 2, 3]) {
       pos.push(c[i][0], c[i][1], c[i][2]);
       uv.push(c[i][3] / tile, c[i][4] / tile);
@@ -342,12 +347,15 @@ function horizon(): THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> {
         #include <colorspace_fragment>
       }`,
     side: THREE.DoubleSide,
+    // With what's see-through, after everything solid (so the depth buffer says where nothing is), but
+    // over the sun, moon and stars (sky.ts SKY_BODIES), which it hides as it should, and under the
+    // world's own see-through things (the catch fences), which go over it.
+    transparent: true,
     depthWrite: false,
   });
   mat.userData.outlineParameters = { visible: false };
   const m = new THREE.Mesh(geo, mat);
-  // After everything else that's solid, so the depth buffer says where nothing is.
-  m.renderOrder = 1000;
+  m.renderOrder = SKY_BODIES + 100;
   m.frustumCulled = false;
   const at = new THREE.Vector3();
   m.onBeforeRender = (_r, scene, camera) => {
@@ -602,13 +610,15 @@ export function buildCircuit(): Circuit {
   // Skid marks into the corners you brake for: pairs of tyres' streaks along the racing line, thinning out at their ends.
   const skid = decalUV('skid');
   const sr = rng(4242);
+  /** How far off the centre line a car's middle can be with both its tyres' streaks on the asphalt, inside the white lines. */
+  const mid = EDGE - 0.8 - 0.8;
   for (const c of corners) {
     if (!c.brake) continue;
     for (let n = 0; n < 4; n++) {
       const from = c.s0 - 85 + sr() * 30, len = 30 + sr() * 35, wander = (sr() - 0.5) * 2.4;
       for (const wheel of [-0.8, 0.8]) {
         // Where the streak is across the track `s` m round, so each piece starts where the last one ended.
-        const off = (s: number) => racingLine(s) + wander + wheel + Math.sin(s * 0.11 + n) * 0.15;
+        const off = (s: number) => THREE.MathUtils.clamp(racingLine(s) + wander + Math.sin(s * 0.11 + n) * 0.15, -mid, mid) + wheel;
         for (let s = from; s < from + len; s += 2) {
           const a = pointAt(s), b = pointAt(s + 2);
           const at = (p: typeof a, dd: number) => [p.x + p.tz * dd, 0, p.z - p.tx * dd];
@@ -621,7 +631,8 @@ export function buildCircuit(): Circuit {
       }
     }
   }
-  // The chequered start line, and the grid's boxes behind it: a bar across the front of each, its sides running back, its number.
+  // The chequered start line, and the grid's boxes behind it: a bar across the front of each, its sides running back, and its
+  // number just ahead of the bar, where the car parked in the box doesn't cover it (the car's middle is at np.s).
   for (let i = 0; i < 12; i++) {
     for (let j = 0; j < 2; j++) paint.band(-1 + j, j, -EDGE + i, -EDGE + i + 1, 0, (i + j) % 2 ? '#212529' : '#f8f9fa');
   }
@@ -630,7 +641,7 @@ export function buildCircuit(): Circuit {
     const np = nearestProgress(p.x, p.z);
     paint.band(np.s + 2.6, np.s + 2.9, np.d - 1.4, np.d + 1.4, 0, '#f8f9fa');
     for (const side of [-1, 1]) paint.band(np.s + 1.4, np.s + 2.9, np.d + side * 1.4 - 0.12, np.d + side * 1.4 + 0.12, 0, '#f8f9fa');
-    const num = pointAt(np.s + 1.6);
+    const num = pointAt(np.s + 3.6);
     marks.flat(decalUV('digit', slot), num.x + num.tz * np.d, 0, num.z - num.tx * np.d, 1.1, 1.1, Math.atan2(num.tx, num.tz));
   }
   group.add(
@@ -725,20 +736,35 @@ export function buildCircuit(): Circuit {
   const { stands, props } = layout();
   for (const s of stands) colliders.push({ minX: s.x - STAND, maxX: s.x + STAND, minZ: s.z - STAND, maxZ: s.z + STAND, top: 6.5 });
 
-  // ---- Fences: catch fencing along the barrier in front of each grandstand, and round the grounds (which
+  // ---- Fences: catch fencing along the barrier in front of the grandstands, and round the grounds (which
   // were only ever colliders). Chain-link on posts, all in one mesh.
-  const panels: { ax: number; az: number; bx: number; bz: number; h: number }[] = [];
+  const panels: { ax: number; az: number; bx: number; bz: number; h: number; u?: number }[] = [];
   const post = (x: number, z: number, h: number) => box(solid, 0.1, h, 0.1, '#6c757d', x, 0, z, 0, false);
+  // In panels about 4 m long at fixed places round the lap, each side's taken once however many stands
+  // it's in front of: stands side by side share one run, rather than each laying its own over the next's.
+  const count = Math.round(L / 4), panel = L / count;
+  const fenced = [new Set<number>(), new Set<number>()];
   for (const st of stands) {
     const np = nearestProgress(st.x, st.z);
-    const d = Math.sign(np.d) * (RAIL + 0.7);
-    for (let s = np.s - STAND - 1; s < np.s + STAND + 1; s += 4) {
-      const a = pointAt(s), b = pointAt(s + 4);
-      const ax = a.x + a.tz * d, az = a.z - a.tx * d, bx = b.x + b.tz * d, bz = b.z - b.tx * d;
-      panels.push({ ax, az, bx, bz, h: 4.2 });
-      post(ax, az, 4.3);
-    }
+    for (let k = Math.floor((np.s - STAND - 0.5) / panel); k <= Math.floor((np.s + STAND + 0.5) / panel); k++) fenced[np.d > 0 ? 1 : 0].add(((k % count) + count) % count);
   }
+  fenced.forEach((cells, left) => {
+    const d = (left ? 1 : -1) * (RAIL + 0.7);
+    const at = (s: number) => {
+      const p = pointAt(s);
+      return { x: p.x + p.tz * d, z: p.z - p.tx * d };
+    };
+    // In order round the lap, the wire carrying on from one panel to the next.
+    let u = 0;
+    for (const k of [...cells].sort((p, q) => p - q)) {
+      const a = at(k * panel), b = at((k + 1) * panel);
+      panels.push({ ax: a.x, az: a.z, bx: b.x, bz: b.z, h: 4.2, u });
+      u += Math.hypot(b.x - a.x, b.z - a.z);
+      post(a.x, a.z, 4.3);
+      // A post at the end of each run, too.
+      if (!cells.has((k + 1) % count)) post(b.x, b.z, 4.3);
+    }
+  });
   const edges: [number, number, number, number][] = [
     [far.minX, far.minZ, far.maxX, far.minZ],
     [far.maxX, far.minZ, far.maxX, far.maxZ],

@@ -59,6 +59,14 @@ test('the racing line stays on the asphalt, joins up over the start, and takes t
   }
 });
 
+test('the racing line eases across the track, never swerving from side to side between corners close together', () => {
+  const { length: L } = track();
+  for (let s = 0; s < L; s += 1) {
+    const across = Math.abs(racingLine(s + 1) - racingLine(s));
+    assert.ok(across < 0.2, `${across.toFixed(2)} m across in the metre from ${s}`);
+  }
+});
+
 test('the roads\' decals lie on the roads, clear of the crossings and of the garage lots laid over them', () => {
   const list = roadDecals();
   assert.ok(list.length > 200);

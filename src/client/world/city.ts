@@ -899,6 +899,19 @@ function streetTexture(): THREE.CanvasTexture {
         R('#383c46', s * (road - 0.18) - 0.09, a0, s * (road - 0.18) + 0.09, a1);
       }
     }
+    // Tactile paving where each zebra (below) meets the sidewalk: a yellow pad of raised dots across its end, in from the curb.
+    // The two at a corner make an L, the second stopping where the first is.
+    const flip = (s: number, a: number, b: number) => (s > 0 ? [a, b] : [-b, -a]);
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (const [ax, az, bx, bz] of [[road + 0.4, road + 0.3, road + 2.4, road + 1.1], [road + 0.3, road + 1.1, road + 1.1, road + 2.4]]) {
+          const [x0, x1] = flip(sx, ax, bx), [z0, z1] = flip(sz, az, bz);
+          R('#e9c46a', x0, z0, x1, z1);
+          g.fillStyle = 'rgba(110,80,20,0.4)';
+          for (let x = x0 + 0.125; x < x1; x += 0.25) for (let z = z0 + 0.125; z < z1; z += 0.25) g.fillRect(mid + x * px - 0.8, mid - z * px - 0.8, 1.6, 1.6);
+        }
+      }
+    }
     // Lane markings: a dashed yellow line down the middle, a white edge line each side, stopping short of the crossings.
     const dash = 2.6;
     for (let a = road + 5; a < H - 1; a += dash * 2) {

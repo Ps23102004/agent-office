@@ -6,6 +6,14 @@ import { TRACK, track } from './circuit.js';
 
 /** How far in from the edge of the asphalt the line runs at its widest (m). */
 const MARGIN = 1.8;
+/**
+ * The least straight between two corners (m) for the line to go out wide between them. Closer than
+ * that (a chicane, the esses, the complex) it runs from one apex straight to the next: going out
+ * wide for the one and in again for the other in a few metres would swerve across the track.
+ */
+const LINK = 150;
+/** How far before a corner the line turns in from out wide, and how far after it it's out wide again, at most (m). */
+const REACH = 70;
 
 let keys: { s: number; d: number }[] | null = null;
 
@@ -15,14 +23,18 @@ function lineKeys(): { s: number; d: number }[] {
   const { corners, length: L } = track();
   const wide = TRACK.width / 2 - MARGIN;
   const out: { s: number; d: number }[] = [];
-  for (const c of corners) {
+  corners.forEach((c, i) => {
     // A gentle kink hardly moves it; a corner of 60° or more takes the whole width.
     const k = Math.min(1, Math.abs(c.turn) / 60) * wide;
     // + is the driver's left: a right turn's inside is to the right.
     const inside = c.turn > 0 ? -k : k;
-    const reach = Math.min(60, 20 + c.r * 0.4);
-    out.push({ s: c.s0 - reach, d: -inside }, { s: (c.s0 + c.s1) / 2, d: inside }, { s: c.s1 + reach, d: -inside });
-  }
+    // The straights either side of it (round the lap's end for the first and last corners).
+    const prev = corners[(i - 1 + corners.length) % corners.length], next = corners[(i + 1) % corners.length];
+    const before = (c.s0 - prev.s1 + L) % L, after = (next.s0 - c.s1 + L) % L;
+    if (before >= LINK) out.push({ s: c.s0 - Math.min(REACH, before / 2.5), d: -inside });
+    out.push({ s: (c.s0 + c.s1) / 2, d: inside });
+    if (after >= LINK) out.push({ s: c.s1 + Math.min(REACH, after / 2.5), d: -inside });
+  });
   // Round the lap's end, so the line joins up over the start.
   const sorted = out.map((p) => ({ s: ((p.s % L) + L) % L, d: p.d })).sort((a, b) => a.s - b.s);
   return (keys = sorted);

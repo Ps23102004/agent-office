@@ -29,6 +29,12 @@ const DEG = Math.PI / 180;
  */
 export const HAZE_MAX = 300;
 /**
+ * Where the sun, the moon and the stars come among what's see-through: first, so everything else
+ * see-through goes over them (and the circuit's hills, which hide them, at this + 100). Halloween's
+ * sky goes under them, at this - 100.
+ */
+export const SKY_BODIES = -500;
+/**
  * The haze thins out with height over the street: past HAZE_CLEAR meters up, every HAZE_ABOVE
  * meters more you see as far again as down on the street (from the roof of six floors, 3.4 times).
  */
@@ -583,6 +589,16 @@ export class Sky {
     day.uniforms.opacity.value = 1;
     this.dayDome.renderOrder = -1000;
     this.dayDome.visible = true;
+    this.spookyDome.renderOrder = SKY_BODIES - 100;
+    // And at the very back of the depth buffer: they're only 160 m off, riding along with you, and
+    // whatever solid is further off than that (the circuit's woods and grass) still has to hide them.
+    for (const body of [this.stars, this.sunDisc, this.moonDisc]) {
+      body.renderOrder = SKY_BODIES;
+      body.material.onBeforeCompile = (shader, r) => {
+        THREE.Material.prototype.onBeforeCompile.call(body.material, shader, r);
+        shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z = gl_Position.w * 0.99999;');
+      };
+    }
     this.dome.add(this.dayDome, this.spookyDome, this.stars, this.sunDisc, this.moonDisc);
     scene.add(this.dome);
 
