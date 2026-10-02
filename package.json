@@ -18,6 +18,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "start": "node bin/agent-office.js",
+    "playtest": "node --import tsx scripts/playtest/run.mjs",
     "prepare": "npm run build"
   },
   "engines": {
