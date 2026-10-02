@@ -1,11 +1,13 @@
 // The arena: first a duel between two people (one stands still in the open, the other aims at them
 // and holds the trigger): the rifle's rate of fire, how many shots land from the hip at 15 m, that
 // damage and the kill add up, the kill feed and the respawn. Then, once the office has bots of its own
-// (store.arena.bots, from shared/bots.ts), a test player who stands their ground and shoots back at
-// whatever bot they can see, a while at each level: code checks the bots join, move, shoot, are never
-// hit through cover, and play to their level's band (BANDS: how often they land a shot, how soon they
-// find the test player), the levels ramping up from easy to insane; Jev reads the numbers in words and
-// says whether each level plays like a person of that standard. Without bots that part says it's skipped.
+// (store.arena.bots, from shared/bots.ts), a test player who stands their ground in the open and shoots
+// back at whatever bot they can see, a while at each level, each level a match of its own (new bots,
+// scores from 0; the test player back on their spot after each death): code checks the bots join,
+// move, shoot, are never hit through cover, and play to their level's band (BANDS: how often they land
+// a shot, how soon they find the test player), the levels ramping up from easy to insane; Jev reads the
+// numbers in words and says whether each level plays like a person of that standard. Without bots that
+// part says it's skipped.
 import { ARENA_BOXES, ARENA_CENTER, EYE_Y, RULES, inArena, rayWorld } from '../../src/shared/arena.ts';
 import { bucket } from './lib.mjs';
 import { toGarage, walkToArena } from './places.mjs';
@@ -19,20 +21,21 @@ const FILL = 4;
 const LIKE = { easy: 'a beginner', normal: 'an average player', hard: 'a skilled player', insane: 'a top player' };
 /**
  * What a person of each level manages in a real match, held as hard bands (code, not Jev). `acc`:
- * the share of all their shots that land, at least. People with a rifle in a moving match land
- * roughly 1 in 10 as beginners, 1 in 8 average, 1 in 6 skilled and 1 in 5 at the top; each floor is
- * that less 2.5 standard deviations of a 40 s sample's luck (0.02 each at 250 shots), so a level that
- * plays to its standard fails by chance about 1 run in 160. `firstHit`: seconds from the start
- * to their first hit on the test player, at most. Nobody lands more than MAX_ACC of their shots in a
- * moving match: that's an aimbot. And the levels ramp up: the top one hits the test player more often
+ * the share of all their shots that land, at least. The bots aim for 15-22% as beginners, 25-32%
+ * average, 35-45% skilled and 50-60% at the top (shared/bots.ts SKILL; this yard's people are big to
+ * hit); each floor is the bottom of that less 2.5 standard deviations of a 40 s match's luck (0.04 to
+ * 0.08: it's only 80 to 160 shots, in bursts), so a level that plays to its standard fails by chance
+ * about 1 run in 160. `firstHit`: seconds from the start to their first hit on the test player, at
+ * most. Nobody lands more than MAX_ACC of their shots in a moving match: that's an aimbot (the top
+ * level's 60% and its luck). And the levels ramp up: the top one hits the test player more often
  * than the bottom one, with a better aim, and no level is clearly easier than the one below it (its
  * hits on the test player more than 2 standard deviations of luck under that one's). In 40 s a level
  * a notch harder than the one below isn't reliably told from it, and the test player's deaths are too
  * few to tell levels apart: those are Jev's to read.
  */
 // ponytail: rough bands from people in shooters generally, not this game's own players; tune them once some have played.
-const BANDS = { easy: { acc: 0.05, firstHit: 20 }, normal: { acc: 0.075, firstHit: 12 }, hard: { acc: 0.115, firstHit: 8 }, insane: { acc: 0.15, firstHit: 6 } };
-const MAX_ACC = 0.6;
+const BANDS = { easy: { acc: 0.05, firstHit: 20 }, normal: { acc: 0.1, firstHit: 12 }, hard: { acc: 0.18, firstHit: 8 }, insane: { acc: 0.3, firstHit: 6 } };
+const MAX_ACC = 0.8;
 
 export default async function arena(t) {
   const a = await t.open({ name: 'Ann' });
@@ -105,17 +108,26 @@ export default async function arena(t) {
   // ---- Against the bots ----
   if (!hasBots) return t.skip('arena vs bots: bots not present (no store.arena.bots)');
   await b.context.close(); // Ann on her own with the bots
-  const levels = (await import('../../src/shared/bots.ts').catch(() => null))?.BOT_LEVELS ?? Object.keys(LIKE);
+  const shared = await import('../../src/shared/bots.ts').catch(() => null);
+  const levels = shared?.BOT_LEVELS ?? Object.keys(LIKE);
   const boxes = ARENA_BOXES.map((x) => [x.minX, x.maxX, x.y0, x.y1, x.minZ, x.maxZ]);
   const results = {};
+  const spot = openSpot();
   for (const level of levels) {
+    // Each level its own match: the last level's bots home first (the setting takes a change a second),
+    // so new ones come in at spawns, the scores start at 0 and nobody's near the kill limit.
+    if (await a.page.evaluate(() => window.__office.store.arena.players.some((p) => p.bot))) {
+      await a.page.evaluate((level) => window.__office.net.send({ t: 'arena.bots', fill: 1, level }), level);
+      await a.page.waitForFunction(() => !window.__office.store.arena.players.some((p) => p.bot), null, { timeout: 10_000 }).catch(() => {});
+      await a.page.waitForTimeout((shared?.BOTS.every ?? 1000) + 200);
+    }
+    await standAt(a.page, spot);
     await a.page.evaluate(([fill, level]) => window.__office.net.send({ t: 'arena.bots', fill, level }), [FILL, level]);
     const joined = await a.page.waitForFunction((n) => window.__office.store.arena.players.filter((p) => p.bot).length === n, FILL - 1, { timeout: 10_000 }).then(() => true, () => false);
     t.check(`${level}: ${FILL - 1} bots join to make it ${FILL}`, joined);
     if (!joined) continue;
-    await standAt(a.page, openSpot());
     await a.page.mouse.click(640, 360);
-    const r = await a.page.evaluate(play, { ms: PLAY_S * 1000, boxes });
+    const r = await a.page.evaluate(play, { ms: PLAY_S * 1000, boxes, spot });
     results[level] = r;
     await t.shot(a.page, `bots-${level}`);
     // Every shot that hit someone, the office's word: never through a container or a wall.
@@ -212,11 +224,11 @@ function aimAt(id) {
 }
 
 /**
- * The test player for `ms`: standing where they are, they pick the nearest bot they can see (`boxes`
- * are the yard's cover: [minX, maxX, y0, y1, minZ, maxZ]), turn to it over a quarter of a second,
- * and hold the trigger while it's on them. Resolves with what happened.
+ * The test player for `ms`: standing at `spot` (back there after each death), they pick the nearest
+ * bot they can see (`boxes` are the yard's cover: [minX, maxX, y0, y1, minZ, maxZ]), turn to it over
+ * a quarter of a second, and hold the trigger while it's on them. Resolves with what happened.
  */
-function play({ ms, boxes }) {
+function play({ ms, boxes, spot }) {
   const o = window.__office, me = o.store.you;
   const sees = (p, q) => {
     const d = [q.x - p.x, q.y - p.y, q.z - p.z], L = Math.hypot(...d);
@@ -281,6 +293,9 @@ function play({ ms, boxes }) {
         });
       }
       if (!stats(me)?.alive) return trigger(false);
+      // Back in at a spawn after being killed: back to their spot in the open.
+      const pos = o.player.pos;
+      if (Math.hypot(pos.x - spot.x, pos.z - spot.z) > 1) pos.set(spot.x, pos.y, spot.z);
       // The nearest bot in sight, alive.
       const eyeAt = o.camera.position;
       const p0 = { x: eyeAt.x, y: eyeAt.y, z: eyeAt.z };

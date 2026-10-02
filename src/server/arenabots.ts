@@ -12,8 +12,13 @@ import type { ArenaControl, ShotResult } from './arena.js';
 // the cover on a grid, and fires through the office's one shot judge (io.shoot → ArenaControl.fire),
 // with a person's spread and kick on top of its own aim error, so it can't do anything a page can't.
 // Every step it takes goes to the judge's trail (ArenaControl.moved), so people's shots at it are
-// judged where their pages showed it. It crouches to shoot when it stands to (if it still sees them
-// from down there), and has the SMG out close in and the rifle further off.
+// judged where their pages showed it. It plays like a person of its level (shared/bots.ts SKILL): it
+// stops to shoot (a counter-strafe) and strafes between bursts, sprays close in and taps further off,
+// with the SMG out close in and the rifle further off, crouching if it's good and still sees them from
+// down there; a good one fights from round a corner, ducking back out of sight between bursts; low, it
+// gets out of sight if it's a step or two from somewhere to; shot from out of sight, it turns to find
+// who did it. Its aim is a person's: a reaction, a turn, an error that settles the longer it's on
+// someone and grows the faster they cross its sights, the gun's spread and kick on top.
 
 /** How often (ms) the bots think: server.ts's timer, and the fake clock in tests/arenabots.test.ts. */
 export const TICK = 50;
@@ -31,6 +36,36 @@ const CROWN = HEAD_C + HEAD_R / 2;
 /** Closer than this (m) it wants the SMG, further than RIFLE_OUT the rifle; between, whichever it has out. */
 const SMG_IN = 10;
 const RIFLE_OUT = 16;
+/**
+ * Shots in a burst with gun `w` at `range` m, fewest to most: the SMG sprayed close in, the rifle in
+ * short bursts at middle range and tapped further off (its bloom and kick settling between); just the
+ * top of someone's head showing (`small`), tapped.
+ */
+function burstFor(w: WeaponId, range: number, small: boolean): [number, number] {
+  if (small) return [1, 2];
+  if (w === 'smg') return range < 8 ? [6, 10] : [4, 7];
+  return range < 12 ? [5, 8] : range < 25 ? [3, 5] : [1, 3];
+}
+/** Someone turning up within this (rad) of where it was already aiming: it reacts quicker (by REACT_PRE), its aim part settled. */
+const PREAIM = 0.25;
+export const REACT_PRE = 0.6;
+/** Breaking off for cover, it shoots back on the run only this close (m). */
+const RUN_FIRE = 15;
+/**
+ * Peeking (BotSkill.peek): how far (m) it'll step back out of someone's sight between bursts; how far
+ * it'll go to get beside something to do that from, the most such spots it tries (the nearest), and
+ * how far off they have to be for it to bother (closer in, it fights where it stands); and how long (ms)
+ * it stays on them out of sight before it gives up and goes looking.
+ */
+const PEEK_STEP = 3;
+const PEEK_FIND = 5;
+const PEEK_TRIES = 12;
+const PEEK_FAR = 15;
+const PEEK_LOST = 1500;
+/** Ducked back out of sight, how long (ms) it stays there before it steps out again. */
+const PEEK_HOLD = [250, 600] as const;
+/** Shot by someone it can't see, it turns to look for them this long (ms), even in a fight with someone else. */
+const HIT_TURN = 700;
 /** The gun it isn't holding. */
 const otherGun = (w: WeaponId): WeaponId => (w === 'rifle' ? 'smg' : 'rifle');
 /** How much lower someone's aim points are (m): crouching, or not. */
@@ -55,6 +90,8 @@ interface Seen {
   eyes: boolean;
   /** When it can first shoot at them, this time it's seen them: its reaction. */
   ready: number;
+  /** They turned up where it was already aiming (see PREAIM). */
+  pre?: boolean;
   /** How fast they're going, as it sees it (m/s). */
   vx: number;
   vz: number;
@@ -86,13 +123,28 @@ interface Bot {
    * swap. Its rounds and reloads, and the soonest the judge takes a shot, are the office's (ArenaControl.gun).
    */
   nextShot: number;
-  /** Shots left in this burst. */
+  /** Shots left in this burst, and whether it's firing this one on the move (see BotSkill.discipline). */
   burst: number;
+  sloppy: boolean;
+  /** When it last took a step: it stands BotSkill.settle before a burst. */
+  movedAt: number;
+  /** Whoever it's off looking for, hunting: one bot after each, the rest go their own way. */
+  prey?: string;
+  /**
+   * Taking this fight from round a corner (see BotSkill.peek): who it's decided that for (after its first
+   * burst at them), whether it does, and once it's found one, where it shoots from (`out`), the spot a
+   * step or two away out of their sight it ducks back to between bursts (`hide`), and where they were
+   * then (`from`).
+   */
+  peekFor?: string;
+  peeks?: boolean;
+  peek?: { out: Pt; hide: Pt; from: Pt };
   bloom: number;
   /** How far its aim has kicked up and not come back down yet. */
   kick: number;
-  /** Which way it's strafing, and till when. */
+  /** Which way it's strafing (or standing there, `stand`), and till when. */
   strafe: number;
+  stand: boolean;
   strafeAt: number;
   hurtAt: number;
   hurtBy?: string;
@@ -252,7 +304,7 @@ export class ArenaBots {
     const name = `🤖 ${BOT_NAMES.find((x) => !taken.has(`🤖 ${x}`)) ?? n}`;
     const s = this.arena.spawnFor(id);
     const peer: PeerInfo = { id, name, color: COLORS[n % COLORS.length], look: lookFromSeed(id), x: s.x, y: 0, z: s.z, rotY: s.rotY, pitch: 0, moving: false, voice: false, muted: true, sharing: false, floor: ARENA, bot: true };
-    const b: Bot = { peer, alive: false, mode: 'roam', path: [], until: 0, mem: new Map(), tracked: 0, side: 0, chased: 0, searched: 0, nextShot: 0, burst: 0, bloom: 0, kick: 0, strafe: 1, strafeAt: 0, hurtAt: 0, sent: { x: s.x, z: s.z, rotY: s.rotY, moving: false, pitch: 0, crouch: false } };
+    const b: Bot = { peer, alive: false, mode: 'roam', path: [], until: 0, mem: new Map(), tracked: 0, side: 0, chased: 0, searched: 0, nextShot: 0, burst: 0, sloppy: false, movedAt: 0, bloom: 0, kick: 0, strafe: 1, stand: false, strafeAt: 0, hurtAt: 0, sent: { x: s.x, z: s.z, rotY: s.rotY, moving: false, pitch: 0, crouch: false } };
     this.bots.set(id, b);
     this.arena.join(id, name, now);
     this.io.joined(peer);
@@ -276,6 +328,8 @@ export class ArenaBots {
     if (!b) return;
     b.hurtAt = now;
     b.hurtBy = by;
+    // It flinches: its aim's unsettled, as anyone's is when they're hit.
+    b.tracked /= 2;
     this.rumour(b, o, by, now);
   }
 
@@ -305,7 +359,7 @@ export class ArenaBots {
         b.peer.moving = b.peer.crouch = false;
       } else {
         // Just back in: a clean slate, wherever the office put it.
-        if (!b.alive) Object.assign(b, { alive: true, mode: 'roam', path: [], until: 0, target: undefined, tracked: 0, chased: now, burst: 0, bloom: 0, kick: 0, hurtAt: 0, hurtBy: undefined, mem: new Map() });
+        if (!b.alive) Object.assign(b, { alive: true, mode: 'roam', path: [], until: 0, target: undefined, prey: undefined, peekFor: undefined, peek: undefined, tracked: 0, chased: now, burst: 0, bloom: 0, kick: 0, hurtAt: 0, hurtBy: undefined, mem: new Map() });
         if (state.phase === 'over') b.peer.moving = b.peer.crouch = false;
         else {
           this.look(b, state.players, now, k, dt);
@@ -344,8 +398,10 @@ export class ArenaBots {
       const same = !!old && now - old.seen < 500;
       const vx = old?.eyes && dt > 0 ? (old.vx + (at.x - old.x) / dt) / 2 : 0;
       const vz = old?.eyes && dt > 0 ? (old.vz + (at.z - old.z) / dt) / 2 : 0;
-      const ready = same ? old.ready : now + k.reaction[0] + this.rand() * (k.reaction[1] - k.reaction[0]);
-      b.mem.set(p.id, { x: at.x, y: at.y, z: at.z, crouch: at.crouch, at: now, seen: now, eyes: true, ready, vx, vz });
+      // Somewhere it was already aiming (a corner it was watching): quicker on them.
+      const pre = same ? old.pre : Math.abs(angle(Math.atan2(dx, dz) - b.peer.rotY)) < PREAIM;
+      const ready = same ? old.ready : now + (k.reaction[0] + this.rand() * (k.reaction[1] - k.reaction[0])) * (pre ? REACT_PRE : 1);
+      b.mem.set(p.id, { x: at.x, y: at.y, z: at.z, crouch: at.crouch, at: now, seen: now, eyes: true, ready, pre, vx, vz });
     }
     for (const [id, s] of b.mem) if (now - s.at > FORGET) b.mem.delete(id);
   }
@@ -354,29 +410,47 @@ export class ArenaBots {
   private think(b: Bot, hp: number, now: number, k: BotSkill) {
     const gun = this.arena.gun(b.peer.id, now);
     const rounds = gun ? gun.ammo[gun.w] : 0, mag = gun ? WEAPONS[gun.w].mag : 0;
-    // Whoever's nearest, sticking with the one it's on, and turning on whoever just shot it.
+    // Whoever's nearest, sticking with the one it's on, and turning on whoever just shot it; rather
+    // someone it can shoot now than someone still safe, out of its reach, or only the top of their head
+    // showing over something low a long way off.
+    const eye = { x: b.peer.x, y: eyeY(b.peer), z: b.peer.z };
     let target: string | undefined, best = -Infinity;
     for (const [id, s] of b.mem) {
       if (!s.eyes) continue;
-      const v = 10 / Math.max(1, Math.hypot(s.x - b.peer.x, s.z - b.peer.z)) + (id === b.target ? 0.3 : 0) + (id === b.hurtBy && now - b.hurtAt < 3000 ? 0.5 : 0);
+      const d = Math.hypot(s.x - b.peer.x, s.z - b.peer.z);
+      const open = d <= k.reach && !this.arena.safe(id, now) && (d <= k.crown || clear(eye, { x: s.x, y: s.y + CHEST - low(s), z: s.z }));
+      const v = 10 / Math.max(1, d) + (open ? 1 : 0) + (id === b.target ? 0.3 : 0) + (id === b.hurtBy && now - b.hurtAt < 3000 ? 0.5 : 0);
       if (v > best) [best, target] = [v, id];
     }
-    if (target !== b.target) b.tracked = 0;
+    // On someone new: its aim starts from scratch, or part settled if it was already aiming there.
+    if (target !== b.target) b.tracked = target && b.mem.get(target)!.pre ? k.tau : 0;
     b.target = target;
     // Nothing to fight with only when neither gun has rounds to hand: one run dry or reloading, fire()
     // swaps to the other on the spot.
-    const weak = hp < k.cover || !gun || (gun.reloading ? 0 : gun.ammo[gun.w]) + gun.ammo[otherGun(gun.w)] === 0;
+    const dry = !gun || (gun.reloading ? 0 : gun.ammo[gun.w]) + gun.ammo[otherGun(gun.w)] === 0;
     if (target) {
-      if (weak && b.mode !== 'cover' && now - b.searched > 1000 && this.plan()) {
+      // Low, it ducks out of their sight if it's a step or two from somewhere to (running across open
+      // ground with them shooting is how you die); with nothing to shoot back with, it goes further.
+      if ((dry || hp < k.cover) && b.mode !== 'cover' && now - b.searched > 1000 && this.plan()) {
         b.searched = now;
-        if (this.toCover(b, b.mem.get(target)!, now)) return;
+        if (this.toCover(b, b.mem.get(target)!, now, dry ? 12 : PEEK_STEP)) return;
       }
       // On its way to cover it shoots back as it goes; got there and still seen, it fights.
       if (b.mode === 'cover' && b.path.length) return;
-      b.mode = 'engage';
-      b.path = [];
+      if (b.mode !== 'engage') [b.mode, b.path, b.until] = ['engage', [], 0];
+      // Taking this one from round a corner (decided after its first burst at them, see fire): somewhere
+      // to duck back to, found again if they've moved off.
+      const s = b.mem.get(target)!;
+      if (b.peek && (b.peekFor !== target || Math.hypot(b.peek.from[0] - s.x, b.peek.from[1] - s.z) > PEEK_STEP)) b.peek = undefined;
+      if (b.peeks && b.peekFor === target && !b.peek && this.plan()) b.peek = this.corner(b, s);
       return;
     }
+    // Ducked back out of their sight, it's still on them a moment.
+    if (b.mode === 'engage' && b.peek && b.peekFor && now - (b.mem.get(b.peekFor)?.seen ?? 0) < PEEK_LOST) {
+      b.target = b.peekFor;
+      return;
+    }
+    b.peek = undefined;
     // Nobody in sight. In cover, it waits till it's healed and reloaded.
     if (b.mode === 'cover' && now < b.until && (hp < 90 || rounds < mag)) {
       this.rearm(b, 1, now);
@@ -387,14 +461,17 @@ export class ArenaBots {
     // where it was shot from. It goes for a look (a peek first). Already on its way to look near there
     // (what it hears is only ever a few metres out), it keeps going; somewhere else, it sets off again,
     // though not more than twice a second: finding a peek and a way is the dearest thing it does.
-    let last: Seen | undefined;
-    for (const s of b.mem.values()) if (!last || s.at > last.at) last = s;
+    // Not someone another bot's already off after (unless they just shot it): they don't all rush one.
+    const hunted = (id: string) => [...this.bots.values()].some((o) => o !== b && o.alive && o.mode === 'hunt' && o.prey === id);
+    let last: Seen | undefined, prey: string | undefined;
+    for (const [id, s] of b.mem) if ((!last || s.at > last.at) && (!hunted(id) || (id === b.hurtBy && now - b.hurtAt < 3000))) [last, prey] = [s, id];
     if (last && last.at > b.chased) {
       const going = b.mode === 'hunt' && b.path.length > 0;
       const near = going && !!b.goal && Math.hypot(b.goal[0] - last.x, b.goal[1] - last.z) < 8;
       if (!going || (!near && now - b.chased >= 500)) {
         if (!this.plan()) return;
         b.chased = last.at;
+        b.prey = prey;
         return this.hunt(b, last, now);
       }
     }
@@ -432,10 +509,10 @@ export class ArenaBots {
     b.mode = 'roam';
   }
 
-  /** Behind the nearest cover (12 m at most) where `s` can't see it. False if there's none. */
-  private toCover(b: Bot, s: Seen, now: number): boolean {
+  /** Behind the nearest cover (`r` m at most) where `s` can't see it. False if there's none. */
+  private toCover(b: Bot, s: Seen, now: number, r: number): boolean {
     const eye = { x: s.x, y: eyeY(s), z: s.z };
-    const spot = nearest(arenaYard().cover, [b.peer.x, b.peer.z], 12, (c) => !sees(eye, { x: c[0], y: 0, z: c[1] }));
+    const spot = nearest(arenaYard().cover, [b.peer.x, b.peer.z], r, (c) => !sees(eye, { x: c[0], y: 0, z: c[1] }));
     if (!spot) return false;
     b.path = arenaYard().nav.route([b.peer.x, b.peer.z], spot).slice(1);
     b.mode = 'cover';
@@ -443,48 +520,102 @@ export class ArenaBots {
     return true;
   }
 
+  /**
+   * Where to fight `s` from round a corner: where it stands, or (them far enough off to be worth it) the
+   * nearest spot near it beside something taller than a head (PEEK_FIND, a straight walk away) that still
+   * sees them; and a step or two from there (PEEK_STEP, also straight) that they can't see, to duck back
+   * to between bursts. Undefined if there's nowhere.
+   */
+  private corner(b: Bot, s: Seen): { out: Pt; hide: Pt; from: Pt } | undefined {
+    const { nav, cover } = arenaYard();
+    const here: Pt = [b.peer.x, b.peer.z], eye = { x: s.x, y: eyeY(s), z: s.z }, at = { x: s.x, y: s.y + CHEST - low(s), z: s.z };
+    const walk = (a: Pt, c: Pt) => {
+      const n = Math.ceil(Math.hypot(c[0] - a[0], c[1] - a[1]) / 0.25);
+      for (let i = 1; i <= n; i++) if (!nav.walkable(a[0] + ((c[0] - a[0]) * i) / n, a[1] + ((c[1] - a[1]) * i) / n)) return false;
+      return true;
+    };
+    const hideBy = (out: Pt) => nearest(cover, out, PEEK_STEP, (c) => !sees(eye, { x: c[0], y: 0, z: c[1] }) && walk(out, c));
+    let hide = hideBy(here), out = here, tries = 0;
+    if (!hide && Math.hypot(s.x - here[0], s.z - here[1]) > PEEK_FAR) {
+      const o = nearest(cover, here, PEEK_FIND, (c) => tries++ < PEEK_TRIES && clear({ x: c[0], y: EYE_Y, z: c[1] }, at) && walk(here, c) && !!(hide = hideBy(c)));
+      if (!o) return undefined;
+      out = o;
+    }
+    return hide && { out, hide, from: [s.x, s.z] };
+  }
+
   /** The nearest spot to `from` (within `r` m) a bot standing there could see `at` from. */
   private vantage(from: Pt, at: V3, r: number): Pt | undefined {
     return nearest(arenaYard().peeks, from, r, (c) => clear({ x: c[0], y: EYE_Y, z: c[1] }, at));
   }
 
-  /** In a fight it strafes (or stands to shoot, if it's good), else it follows its way; it faces whoever it's after. */
+  /**
+   * In a fight, in reach, it stands still for a burst (crouched, if it's good and still sees them from
+   * down there) and strafes side to side between bursts (or stands there, see BotSkill.strafe); taking
+   * it from round a corner, it steps out for each burst and back out of sight between them; out of
+   * reach, it closes in. Else it follows its way, at a walk once it's nearly where it's looking for
+   * someone. It faces whoever it's after; hunting, where it last knew of them, so it's already aiming
+   * there if they're still about.
+   */
   private move(b: Bot, players: ArenaPlayer[], now: number, k: BotSkill, dt: number) {
     const p = b.peer;
     const { nav } = arenaYard();
     const seen = b.target ? b.mem.get(b.target) : undefined;
     let dx = 0, dz = 0, speed = 0, crouch = false;
-    if (b.mode === 'engage' && seen) {
-      const tx = seen.x - p.x, tz = seen.z - p.z, d = Math.hypot(tx, tz) || 1;
-      if (now >= b.strafeAt) {
-        b.strafe = this.rand() < 0.5 ? -1 : 1;
-        b.strafeAt = now + 400 + this.rand() * 800;
+    const range = seen ? Math.hypot(seen.x - p.x, seen.z - p.z) : Infinity;
+    // Out of its reach, or only the top of their head showing over something low too far off to shoot
+    // at (see fire): it closes in, which takes it round the side of whatever's in the way.
+    const far = !!seen && (range > k.reach || (range > k.crown && !clear({ x: p.x, y: eyeY(p), z: p.z }, { x: seen.x, y: seen.y + CHEST - low(seen), z: seen.z })));
+    if (b.mode === 'engage' && seen && far) {
+      // Closing in: a way to them, worked out again at most once a second (or as soon as it can, see plan).
+      if ((!b.path.length || now >= b.until) && this.plan()) {
+        b.path = nav.route([p.x, p.z], [seen.x, seen.z]).slice(1);
+        b.until = now + 1000;
       }
-      // Across their line, closing in from far off (where neither can hit much) and backing off from close up.
-      const along = d > 25 ? 1 : d < 6 ? -1 : 0;
+    } else if (b.mode === 'engage') b.path = [];
+    if (b.mode === 'engage' && seen && !b.path.length && b.peek) {
+      // Out for a burst, back out of their sight between them, at a walk.
+      const to = b.burst > 0 || now >= b.nextShot ? b.peek.out : b.peek.hide;
+      dx = to[0] - p.x;
+      dz = to[1] - p.z;
+      speed = WALK;
+    } else if (b.mode === 'engage' && seen && !b.path.length) {
+      const tx = seen.x - p.x, tz = seen.z - p.z, d = range || 1;
+      // Side to side, mostly the other way each time, as a person taps A and D; or, a while, flat-footed
+      // (see BotSkill.strafe).
+      if (now >= b.strafeAt) {
+        if (this.rand() < 0.8) b.strafe = -b.strafe;
+        b.stand = this.rand() >= k.strafe;
+        b.strafeAt = now + k.adad[0] + this.rand() * (k.adad[1] - k.adad[0]);
+      }
+      // Too close, it backs off a little as it goes.
+      const along = d < 4 ? -1 : 0;
       dx = (-tz / d) * b.strafe + (tx / d) * along;
       dz = (tx / d) * b.strafe + (tz / d) * along;
-      // A good player stands to shoot in range (crouched, if it still sees them from down there); from further off it keeps coming.
-      speed = k.plant && b.burst > 0 && !along ? 0 : WALK;
-      crouch = !speed && seen.eyes && sees({ x: p.x, y: p.y + EYE_Y - CROUCH, z: p.z }, seen);
+      // Stopped for a burst, unless it's one it fires on the move.
+      speed = (b.burst > 0 && !b.sloppy) || (b.stand && !along) ? 0 : WALK;
+      crouch = !speed && k.crouch && seen.eyes && sees({ x: p.x, y: p.y + EYE_Y - CROUCH, z: p.z }, seen);
     } else if (b.path.length) {
       dx = b.path[0][0] - p.x;
       dz = b.path[0][1] - p.z;
-      speed = RUN;
+      // Nearly where it's looking for someone, it slows to a walk, ready.
+      speed = b.mode === 'hunt' && b.goal && Math.hypot(b.goal[0] - p.x, b.goal[1] - p.z) < 15 ? WALK : RUN;
     }
     const len = Math.hypot(dx, dz);
     let moved = false;
     if (speed > 0 && len > 1e-6) {
-      const step = Math.min(speed * dt, b.mode === 'engage' ? Infinity : len);
+      const strafing = b.mode === 'engage' && !b.path.length && !b.peek;
+      const step = Math.min(speed * dt, strafing ? Infinity : len);
       const x = p.x + (dx / len) * step, z = p.z + (dz / len) * step;
       if (nav.walkable(x, z)) {
         p.x = x;
         p.z = z;
         moved = step > 0;
-      } else if (b.mode === 'engage') {
+      } else if (strafing) {
         b.strafe = -b.strafe;
         b.strafeAt = now + 600;
-      } else b.path = nav.route([p.x, p.z], b.path.at(-1)!).slice(1);
+      } else if (b.path.length) b.path = nav.route([p.x, p.z], b.path.at(-1)!).slice(1);
+      else b.peek = undefined;
     }
     if (b.path.length && Math.hypot(b.path[0][0] - p.x, b.path[0][1] - p.z) < 0.05) b.path.shift();
     // Out of anyone's way, without stepping into cover.
@@ -495,13 +626,18 @@ export class ArenaBots {
       const x = p.x + ((p.x - at.x) / d) * (0.8 - d) * 0.5, z = p.z + ((p.z - at.z) / d) * (0.8 - d) * 0.5;
       if (nav.walkable(x, z)) [p.x, p.z] = [x, z];
     }
-    // Facing: whoever it's fighting; else somewhere it just heard or was shot from; else the way it's going.
+    // Facing: whoever it's fighting, unless someone it can't see just shot it (it turns to find them, as
+    // anyone does hit from the side); else somewhere it just heard or was shot from; else, hunting, where
+    // it's looking for them, once that's near (pre-aimed, see PREAIM); else the way it's going.
     let face: number | undefined;
-    if (seen?.eyes) face = Math.atan2(seen.x - p.x, seen.z - p.z);
+    const by = b.hurtBy && b.hurtBy !== b.target && now - b.hurtAt < HIT_TURN ? b.mem.get(b.hurtBy) : undefined;
+    if (by && !by.eyes) face = Math.atan2(by.x - p.x, by.z - p.z);
+    else if (seen?.eyes) face = Math.atan2(seen.x - p.x, seen.z - p.z);
     else {
       let last: Seen | undefined;
       for (const s of b.mem.values()) if (now - s.at < 2500 && (!last || s.at > last.at)) last = s;
       if (last) face = Math.atan2(last.x - p.x, last.z - p.z);
+      else if (b.mode === 'hunt' && b.goal && Math.hypot(b.goal[0] - p.x, b.goal[1] - p.z) < 25) face = Math.atan2(b.goal[0] - p.x, b.goal[1] - p.z);
       else if (moved) face = Math.atan2(dx, dz);
     }
     if (face !== undefined) {
@@ -512,18 +648,23 @@ export class ArenaBots {
     // Its gun up or down at whoever it's fighting (everyone's page aims it by this), else level.
     p.pitch = seen?.eyes ? Math.atan2(seen.y + CHEST - low(seen) - eyeY(p), Math.hypot(seen.x - p.x, seen.z - p.z)) : 0;
     p.moving = moved;
+    if (moved) b.movedAt = now;
   }
 
   /**
-   * Fires at its target once it's had time to react and is facing them, in bursts, with its level's
-   * aim; with the gun for how far off they are (swapped between bursts), or the other one, if it has
-   * rounds, rather than reloading mid-fight.
+   * Fires at its target once it's had time to react, is facing them and they're in its reach: in bursts
+   * as long as the range calls for, stood still for each (or, its discipline slipping, on the move and
+   * twice as long), with its level's aim; with the gun for how far off they are (swapped between
+   * bursts), or the other one, if it has rounds, rather than reloading mid-fight.
    */
   private fire(b: Bot, now: number, k: BotSkill, dt: number) {
     b.bloom = Math.max(0, b.bloom - SPREAD.settle * dt);
     b.kick *= Math.exp(-KICK.settle * dt);
     const s = b.target ? b.mem.get(b.target) : undefined;
-    if (!s?.eyes) return;
+    if (!s?.eyes) {
+      b.burst = 0;
+      return;
+    }
     const p = b.peer;
     b.tracked += dt;
     // A strafe the other way throws its aim off again, as it would anyone's.
@@ -544,24 +685,38 @@ export class ArenaBots {
     if ((empty || (fits !== gun.w && !b.burst)) && gun.ammo[other] > 0 && this.swap(b, other, now)) return;
     if (empty) return this.reload(b, now);
     if (now < s.ready || now < gun.ready) return;
+    // Too far off to bother (it's closing in), or running for cover with them not close.
+    if (range > k.reach || (b.mode === 'cover' && p.moving && range > RUN_FIRE)) return;
     const w = WEAPONS[gun.w];
     const eye = { x: p.x, y: eyeY(p), z: p.z };
     // Stepped out of sight of them since it looked, someone else just killed them, or they're just back in
     // and still safe (its shots would do nothing): it holds its fire, still on them.
     const at = this.where(b.target!);
     if (!at || this.downed.has(b.target!) || !sees(eye, at) || this.arena.safe(b.target!, now)) return;
+    // Only their head showing over something low (a barrier, a crate): it aims at what shows of it, if
+    // they're near enough (BotSkill.crown).
+    const hidden = !clear(eye, { x: at.x, y: at.y + CHEST - low(at), z: at.z });
+    if (hidden && range > k.crown) return;
     // Where they were a moment ago: its eyes trail them.
     const ax = s.x - s.vx * k.trail, az = s.z - s.vz * k.trail;
     const h = Math.hypot(ax - eye.x, az - eye.z);
     let yaw = Math.atan2(ax - eye.x, az - eye.z);
     if (Math.abs(angle(yaw - p.rotY)) > 0.15) return; // still turning onto them
-    if (!b.burst) b.burst = k.burst[0] + Math.floor(this.rand() * (k.burst[1] - k.burst[0] + 1));
-    // Only their head showing over something low (a barrier, a crate), it aims at what shows of it.
-    const hidden = !clear(eye, { x: at.x, y: at.y + CHEST - low(at), z: at.z });
-    const aim = hidden ? CROWN : this.rand() < k.head ? HEAD : CHEST;
+    if (!b.burst) {
+      const [lo, hi] = burstFor(gun.w, range, hidden);
+      b.sloppy = b.mode !== 'engage' || this.rand() >= k.discipline;
+      b.burst = (lo + Math.floor(this.rand() * (hi - lo + 1))) * (b.sloppy ? 2 : 1);
+    }
+    // Stopping for it first: shots on the move go wide.
+    if (!b.sloppy && now - b.movedAt < k.settle) return;
+    // Settled on someone slow enough, the good ones go for the head.
+    const aim = hidden ? CROWN : b.tracked > k.tau && Math.hypot(s.vx, s.vz) < 2 && this.rand() < k.head ? HEAD : CHEST;
     let pitch = Math.atan2(s.y + aim - low(at) - eye.y, h);
-    // Its own error, settling the longer it tracks them, and the kick it hasn't pulled back down.
-    const sigma = k.sigmaMin + (k.sigma0 - k.sigmaMin) * Math.exp(-b.tracked / k.tau);
+    // Its own error, settling the longer it tracks them, and the kick it hasn't pulled back down. Following
+    // someone across its sights its hand wobbles as much again as its eyes trail them (see BotSkill.trail),
+    // so a strafe close in is as hard for it as for anyone.
+    const across = Math.abs(s.vx * (az - eye.z) - s.vz * (ax - eye.x)) / Math.max(1, h * h);
+    const sigma = k.sigmaMin + (k.sigma0 - k.sigmaMin) * Math.exp(-b.tracked / k.tau) + k.trail * across;
     yaw += this.gauss() * sigma;
     pitch += this.gauss() * sigma + b.kick;
     // Then the gun's cone, as anyone's (shared/arena.ts spreadOf): wider on the move and as it heats
@@ -579,7 +734,13 @@ export class ArenaBots {
     b.kick += KICK.up * w.kick * (p.crouch ? 0.75 : 1) * (1 - k.recoil);
     if (--b.burst <= 0) {
       b.burst = 0;
-      b.nextShot = Math.max(b.nextShot, now + k.pause[0] + this.rand() * (k.pause[1] - k.pause[0]));
+      // Its first burst at them from wherever it saw them; whether it takes the rest from round a corner
+      // (BotSkill.peek), decided once a fight.
+      if (b.peekFor !== b.target) [b.peekFor, b.peeks, b.peek] = [b.target, this.rand() < k.peek, undefined];
+      // Then it strafes a while, longer further off (its aim settling for the next taps); or, peeking,
+      // ducks back out of their sight and stays there a moment.
+      const back = b.peek ? (Math.hypot(b.peek.hide[0] - b.peek.out[0], b.peek.hide[1] - b.peek.out[1]) / WALK) * 1000 + PEEK_HOLD[0] + this.rand() * (PEEK_HOLD[1] - PEEK_HOLD[0]) : 0;
+      b.nextShot = Math.max(b.nextShot, now + back, now + (k.pause[0] + this.rand() * (k.pause[1] - k.pause[0])) * (range > 25 ? 1.5 : 1));
     }
   }
 
