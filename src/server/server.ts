@@ -1155,6 +1155,7 @@ export async function startServer(cfg: Config) {
     sendTo(client, { t: 'race', state: race.state() });
     if (inArena) {
       arena.join(id, name, Date.now());
+      bots.fill(Date.now());
       spawnIn(client);
       arenaChanged();
     }
@@ -1196,6 +1197,7 @@ export async function startServer(cfg: Config) {
       if (circuitCars.leave(id)) circuitCarsChanged();
       if (race.leave(id)) raceChanged();
       if (arena.leave(id)) arenaChanged();
+      bots.fill(Date.now());
       broadcast({ t: 'peer.leave', id });
       if (account) accountsChanged();
       floorsChanged();
@@ -1261,7 +1263,7 @@ export async function startServer(cfg: Config) {
   const everyone = () => [...[...clients.values()].map((c) => c.peer), ...bots.peers()];
   const bots = new ArenaBots(arena, arenaWhere, {
     shoot,
-    moved: (p) => toArena({ t: 'peer.move', id: p.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving }),
+    moved: (p) => toArena({ t: 'peer.move', id: p.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving, pitch: p.pitch }),
     joined: (peer) => {
       broadcast({ t: 'peer.join', peer });
       arenaChanged();
@@ -1284,7 +1286,7 @@ export async function startServer(cfg: Config) {
       sendTo(c, { t: 'arena.spawn', x: s.x, z: s.z, rotY: s.rotY });
       toNeighbors(c, { t: 'peer.move', id: c.id, x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
     }
-    // Bots in as people come in, out as they go.
+    // Bots in as people come in, out as they go (straight away where they do: this catches anything else).
     bots.fill(now);
     if (bots.size && !botTimer) botTimer = setInterval(() => bots.tick(Date.now()), 50);
     if (!bots.size && botTimer) {
@@ -1360,6 +1362,7 @@ export async function startServer(cfg: Config) {
     c.peer.floor = ARENA;
     sendTo(c, { t: 'floor.enter', peers: everyone(), ...arenaView() });
     arena.join(c.id, c.peer.name, Date.now());
+    bots.fill(Date.now());
     spawnIn(c);
     sendTo(c, { t: 'arena', state: arenaState() });
     arenaChanged();
@@ -1416,6 +1419,7 @@ export async function startServer(cfg: Config) {
     const circuitCarLeft = c.peer.floor === CIRCUIT && circuitCars.leave(c.id);
     const raced = race.leave(c.id);
     if (arena.leave(c.id)) arenaChanged();
+    bots.fill(Date.now());
     c.attached.clear();
     c.typingAt.clear();
     c.stale.clear();
@@ -1783,7 +1787,9 @@ export async function startServer(cfg: Config) {
         // Anyone in the arena; the last to change it wins, and everyone in there hears who did.
         if (c.peer.floor !== ARENA || !Number.isInteger(msg.fill) || !isBotLevel(msg.level)) break;
         const fill = Math.max(1, Math.min(BOTS.players, msg.fill));
-        bots.set(fill, msg.level, c.peer.name, Date.now());
+        // Nothing to change, nothing happens (no toast, no bots swapped); nor straight after the last change.
+        if (fill === bots.settings.fill && msg.level === bots.settings.level) break;
+        if (!bots.set(fill, msg.level, c.peer.name, Date.now())) return warn(c, 'The bots were only just changed: give it a moment');
         arenaChanged();
         toArena({ t: 'toast', text: fill > 1 ? `🤖 ${c.peer.name} set the arena to ${fill} players with ${msg.level} bots` : `🤖 ${c.peer.name} sent the bots home`, level: 'info' });
         break;

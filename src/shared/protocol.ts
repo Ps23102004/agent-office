@@ -322,6 +322,8 @@ export interface PeerInfo {
   lite?: boolean;
   /** One of the office's own players (shared/bots.ts): no voice, and not in the people lists. */
   bot?: boolean;
+  /** In the arena: how far they're looking up (radians, - down). */
+  pitch?: number;
 }
 
 /** A styled run of text on a terminal row: [text, fg, bg, flags]. */
@@ -1340,7 +1342,7 @@ export type ServerMsg =
   | { t: 'projectsDir'; state: ProjectsDirState }
   | { t: 'peer.join'; peer: PeerInfo }
   | { t: 'peer.update'; peer: PeerInfo }
-  | { t: 'peer.move'; id: string; x: number; y: number; z: number; rotY: number; moving: boolean }
+  | { t: 'peer.move'; id: string; x: number; y: number; z: number; rotY: number; moving: boolean; pitch?: number }
   | { t: 'peer.leave'; id: string }
   | { t: 'peer.act'; id: string; smoke?: boolean; golf?: boolean; drink?: DrinkId | null; throwing?: BarGame | null }
   /** Someone on your floor hit a golf ball off the tee (see the client's 'golf'). */

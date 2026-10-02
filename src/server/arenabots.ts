@@ -60,8 +60,9 @@ interface Bot {
   tracked: number;
   /** Which way across its sights the target last strafed (-1, 0, 1). */
   side: number;
-  /** The newest thing it knew of when it last set off to look (Seen.at). */
+  /** The newest thing it knew of when it last set off to look (Seen.at), and where that was. */
   chased: number;
+  goal?: Pt;
   /** When it last looked for cover. */
   searched: number;
   ammo: number;
@@ -77,8 +78,8 @@ interface Bot {
   strafeAt: number;
   hurtAt: number;
   hurtBy?: string;
-  /** What everyone last heard of where it is. */
-  sent: { x: number; z: number; rotY: number; moving: boolean };
+  /** What everyone last heard of where it is, and which way it's looking. */
+  sent: { x: number; z: number; rotY: number; moving: boolean; pitch: number };
 }
 
 /** What the bots need of the office. */
@@ -108,8 +109,10 @@ export function sees(o: V3, p: V3): boolean {
 
 /**
  * The nearest of `cells` to `from`, within `r` m, that's `ok`: nearest first, so it's usually the
- * first ray or two. ponytail: a scan of the whole grid for the ones in reach (well under a
- * millisecond), only as a bot sets off somewhere; a spatial index if that ever shows up.
+ * first ray or two. ponytail: a scan of the whole grid for the ones in reach, and a ray for each till
+ * one's ok: a few ms when nothing near is (someone it can't see from anywhere close). Only as a bot
+ * sets off somewhere, and that's at most twice a second (see think); a spatial index, or rays from
+ * a coarser grid, if that ever shows up.
  */
 function nearest(cells: Pt[], from: Pt, r: number, ok: (c: Pt) => boolean): Pt | undefined {
   const near: [number, Pt][] = [];
@@ -158,6 +161,8 @@ export class ArenaBots {
   private bots = new Map<string, Bot>();
   private count = 0;
   private ticked = 0;
+  /** When someone last changed the setting. */
+  private changed = -Infinity;
   /** Whoever a bot killed this tick, after the tick looked who was alive. */
   private downed = new Set<string>();
 
@@ -181,10 +186,17 @@ export class ArenaBots {
     return [...this.bots.values()].map((b) => b.peer);
   }
 
-  /** Someone in the arena changed the setting: how many players in all, and how good the bots are. */
-  set(fill: number, level: BotLevel, by: string, now: number) {
+  /**
+   * Someone in the arena changed the setting: how many players in all, and how good the bots are. Not
+   * within a second of the last change (each one tells the whole arena, and swaps bots in and out for
+   * everyone): says whether it took.
+   */
+  set(fill: number, level: BotLevel, by: string, now: number): boolean {
+    if (now - this.changed < BOTS.every) return false;
+    this.changed = now;
     this.settings = { fill, level, by };
     this.fill(now);
+    return true;
   }
 
   /**
@@ -206,8 +218,8 @@ export class ArenaBots {
     const taken = new Set([...this.bots.values()].map((b) => b.peer.name));
     const name = `🤖 ${BOT_NAMES.find((x) => !taken.has(`🤖 ${x}`)) ?? n}`;
     const s = this.arena.spawnFor(id);
-    const peer: PeerInfo = { id, name, color: COLORS[n % COLORS.length], look: lookFromSeed(id), x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false, voice: false, muted: true, sharing: false, floor: ARENA, bot: true };
-    const b: Bot = { peer, alive: false, mode: 'roam', path: [], until: 0, mem: new Map(), tracked: 0, side: 0, chased: 0, searched: 0, ammo: RULES.mag, reloadAt: 0, nextShot: 0, burst: 0, bloom: 0, kick: 0, strafe: 1, strafeAt: 0, hurtAt: 0, sent: { x: s.x, z: s.z, rotY: s.rotY, moving: false } };
+    const peer: PeerInfo = { id, name, color: COLORS[n % COLORS.length], look: lookFromSeed(id), x: s.x, y: 0, z: s.z, rotY: s.rotY, pitch: 0, moving: false, voice: false, muted: true, sharing: false, floor: ARENA, bot: true };
+    const b: Bot = { peer, alive: false, mode: 'roam', path: [], until: 0, mem: new Map(), tracked: 0, side: 0, chased: 0, searched: 0, ammo: RULES.mag, reloadAt: 0, nextShot: 0, burst: 0, bloom: 0, kick: 0, strafe: 1, strafeAt: 0, hurtAt: 0, sent: { x: s.x, z: s.z, rotY: s.rotY, moving: false, pitch: 0 } };
     this.bots.set(id, b);
     this.arena.join(id, name, now);
     this.io.joined(peer);
@@ -219,26 +231,27 @@ export class ArenaBots {
     this.io.left(id);
   }
 
-  /** A shot from `o` by `by`: bots in earshot know roughly where from (a few metres out). */
+  /** A shot from `o` by `by`: bots in earshot know roughly where from. */
   heard(o: V3, by: string, now: number) {
     const k = SKILL[this.settings.level];
-    for (const b of this.bots.values()) {
-      if (b.peer.id === by || !b.alive || Math.hypot(o.x - b.peer.x, o.z - b.peer.z) > k.hear) continue;
-      const old = b.mem.get(by);
-      if (old?.eyes) continue;
-      const r = 2 + this.rand() * 2, a = this.rand() * Math.PI * 2;
-      b.mem.set(by, { x: o.x + Math.cos(a) * r, y: Math.max(0, o.y - EYE_Y), z: o.z + Math.sin(a) * r, at: now, seen: old?.seen ?? 0, eyes: false, ready: old?.ready ?? 0, vx: 0, vz: 0 });
-    }
+    for (const b of this.bots.values()) if (b.peer.id !== by && b.alive && Math.hypot(o.x - b.peer.x, o.z - b.peer.z) <= k.hear) this.rumour(b, o, by, now);
   }
 
-  /** Bot `id` was hit by a shot `by` fired from `o`: it knows which way it came from, as a person does. */
+  /** Bot `id` was hit by a shot `by` fired from `o`: it knows roughly where from, as a person does from which way it hurt. */
   hurt(id: string, o: V3, by: string, now: number) {
     const b = this.bots.get(id);
     if (!b) return;
     b.hurtAt = now;
     b.hurtBy = by;
+    this.rumour(b, o, by, now);
+  }
+
+  /** `b` knows `by` fired from about `o`: a few metres out, not the very spot. Nothing new if it can see them. */
+  private rumour(b: Bot, o: V3, by: string, now: number) {
     const old = b.mem.get(by);
-    if (!old?.eyes) b.mem.set(by, { x: o.x, y: Math.max(0, o.y - EYE_Y), z: o.z, at: now, seen: old?.seen ?? 0, eyes: false, ready: old?.ready ?? 0, vx: 0, vz: 0 });
+    if (old?.eyes) return;
+    const r = 2 + this.rand() * 2, a = this.rand() * Math.PI * 2;
+    b.mem.set(by, { x: o.x + Math.cos(a) * r, y: Math.max(0, o.y - EYE_Y), z: o.z + Math.sin(a) * r, at: now, seen: old?.seen ?? 0, eyes: false, ready: old?.ready ?? 0, vx: 0, vz: 0 });
   }
 
   /** Every bot sees, decides, moves and fires. */
@@ -264,9 +277,9 @@ export class ArenaBots {
           this.fire(b, now, k, dt);
         }
       }
-      const p = b.peer, s = b.sent;
-      if (Math.abs(p.x - s.x) + Math.abs(p.z - s.z) > 0.01 || Math.abs(angle(p.rotY - s.rotY)) > 0.02 || p.moving !== s.moving) {
-        b.sent = { x: p.x, z: p.z, rotY: p.rotY, moving: p.moving };
+      const p = b.peer, s = b.sent, pitch = p.pitch ?? 0;
+      if (Math.abs(p.x - s.x) + Math.abs(p.z - s.z) > 0.01 || Math.abs(angle(p.rotY - s.rotY)) > 0.02 || Math.abs(pitch - s.pitch) > 0.03 || p.moving !== s.moving) {
+        b.sent = { x: p.x, z: p.z, rotY: p.rotY, moving: p.moving, pitch };
         this.io.moved(p);
       }
     }
@@ -332,12 +345,18 @@ export class ArenaBots {
     }
     if (b.ammo < 15) this.reload(b, now);
     // Anything newer than it last went to look at: where it lost sight of someone, a shot it heard,
-    // where it was shot from. It goes for a look (a peek first).
+    // where it was shot from. It goes for a look (a peek first). Already on its way to look near there
+    // (what it hears is only ever a few metres out), it keeps going; somewhere else, it sets off again,
+    // though not more than twice a second: finding a peek and a way is the dearest thing it does.
     let last: Seen | undefined;
     for (const s of b.mem.values()) if (!last || s.at > last.at) last = s;
     if (last && last.at > b.chased) {
-      b.chased = last.at;
-      return this.hunt(b, last, now);
+      const going = b.mode === 'hunt' && b.path.length > 0;
+      const near = going && !!b.goal && Math.hypot(b.goal[0] - last.x, b.goal[1] - last.z) < 8;
+      if (!going || (!near && now - b.chased >= 500)) {
+        b.chased = last.at;
+        return this.hunt(b, last, now);
+      }
     }
     if (b.mode === 'hunt' && b.path.length && now < b.until) return;
     if (b.mode !== 'roam' || !b.path.length) this.roam(b);
@@ -351,6 +370,7 @@ export class ArenaBots {
     const peek = this.vantage(here, { x: s.x, y: s.y + CHEST, z: s.z }, s.y > 2 ? 20 : 10);
     b.path = peek ? [...nav.route(here, peek).slice(1), ...nav.route(peek, spot).slice(1)] : nav.route(here, spot).slice(1);
     b.mode = 'hunt';
+    b.goal = spot;
     b.until = now + 6000 + this.rand() * 2000;
   }
 
@@ -438,6 +458,8 @@ export class ArenaBots {
       const turn = k.turn * dt;
       p.rotY = angle(p.rotY + Math.max(-turn, Math.min(turn, angle(face - p.rotY))));
     }
+    // Its rifle up or down at whoever it's fighting (everyone's page aims it by this), else level.
+    p.pitch = seen?.eyes ? Math.atan2(seen.y + CHEST - (p.y + EYE_Y), Math.hypot(seen.x - p.x, seen.z - p.z)) : 0;
     p.moving = moved;
   }
 
@@ -456,16 +478,19 @@ export class ArenaBots {
     if (now < s.ready || b.reloadAt || now < b.nextShot) return;
     if (b.ammo <= 0) return this.reload(b, now);
     const eye = { x: p.x, y: p.y + EYE_Y, z: p.z };
-    // Stepped out of sight of them since it looked, or someone else just killed them: it holds its fire.
+    // Stepped out of sight of them since it looked, someone else just killed them, or they're just back in
+    // and still safe (its shots would do nothing): it holds its fire, still on them.
     const at = this.where(b.target!);
-    if (!at || this.downed.has(b.target!) || !sees(eye, at)) return;
+    if (!at || this.downed.has(b.target!) || !sees(eye, at) || this.arena.safe(b.target!, now)) return;
     // Where they were a moment ago: its eyes trail them.
     const ax = s.x - s.vx * k.trail, az = s.z - s.vz * k.trail;
     const h = Math.hypot(ax - eye.x, az - eye.z);
     let yaw = Math.atan2(ax - eye.x, az - eye.z);
     if (Math.abs(angle(yaw - p.rotY)) > 0.15) return; // still turning onto them
     if (!b.burst) b.burst = k.burst[0] + Math.floor(this.rand() * (k.burst[1] - k.burst[0] + 1));
-    let pitch = Math.atan2(s.y + (this.rand() < k.head ? HEAD : CHEST) - eye.y, h);
+    // Only their head showing over something low (a barrier, a crate), that's what it aims at.
+    const head = this.rand() < k.head || !clear(eye, { x: at.x, y: at.y + CHEST, z: at.z });
+    let pitch = Math.atan2(s.y + (head ? HEAD : CHEST) - eye.y, h);
     // Its own error, settling the longer it tracks them, and the kick it hasn't pulled back down.
     const sigma = k.sigmaMin + (k.sigma0 - k.sigmaMin) * Math.exp(-b.tracked / k.tau);
     yaw += this.gauss() * sigma;

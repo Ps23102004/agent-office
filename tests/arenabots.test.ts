@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ARENA, ARENA_BOXES, ARENA_CENTER as C, BODY_R, EYE_Y, RULES, SPAWNS, type V3 } from '../src/shared/arena.js';
+import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, EYE_Y, RULES, SPAWNS, type V3 } from '../src/shared/arena.js';
 import { BOT_LEVELS, SKILL, isBot, type BotLevel } from '../src/shared/bots.js';
 import { rng } from '../src/shared/city.js';
 import { ArenaControl } from '../src/server/arena.js';
@@ -11,13 +11,13 @@ import { ArenaBots, arenaYard, sees } from '../src/server/arenabots.js';
  * as server.ts does it: one shot path through ArenaControl.fire that the bots hear, bots back in where
  * the arena's tick says. A fake clock and a seeded random, so it plays out the same every time.
  */
-function yard(people: Record<string, V3>, opts: { fill?: number; level?: BotLevel; seed?: number } = {}) {
+function yard(people: Record<string, V3>, opts: { fill?: number; level?: BotLevel; seed?: number; justIn?: boolean } = {}) {
   let now = 1_000_000;
   let bots!: ArenaBots;
   const where = (id: string) => people[id] ?? bots.peer(id);
   const arena = new ArenaControl(where);
-  // In a while already: nobody's still safe from shots.
-  for (const id of Object.keys(people)) arena.join(id, id.toUpperCase(), now - 5000);
+  // In a while already, so nobody's still safe from shots; unless they've `justIn`.
+  for (const id of Object.keys(people)) arena.join(id, id.toUpperCase(), opts.justIn ? now : now - 5000);
   const shots: { by: string; o: V3; d: V3; at: number; hit?: string; refused?: boolean; inSight: boolean }[] = [];
   const moved: string[] = [];
   const shoot = (id: string, o: V3, d: V3, at: number) => {
@@ -70,16 +70,20 @@ test('bots fill a match up for someone alone, make way as people come, and go wh
   m.arena.join('b', 'B', m.now);
   m.bots.fill(m.now);
   assert.equal(m.bots.size, 2);
-  // Asked for 6 at hard: four bots.
-  m.bots.set(6, 'hard', 'B', m.now);
+  // Asked for 6 at hard: four bots. Not again within the second, though (each change swaps bots for everyone).
+  let t = m.now + 1000;
+  assert.ok(m.bots.set(6, 'hard', 'B', t));
   assert.equal(m.bots.size, 4);
   assert.deepEqual(m.bots.settings, { fill: 6, level: 'hard', by: 'B' });
+  assert.ok(!m.bots.set(1, 'easy', 'A', t + 999));
+  assert.deepEqual(m.bots.settings, { fill: 6, level: 'hard', by: 'B' });
+  assert.equal(m.bots.size, 4);
   // Never more than 8 in all; 1 sends them home.
-  m.bots.set(20, 'hard', 'B', m.now);
+  m.bots.set(20, 'hard', 'B', (t += 1000));
   assert.equal(m.arena.state().players.length, 8);
-  m.bots.set(1, 'hard', 'B', m.now);
+  m.bots.set(1, 'hard', 'B', (t += 1000));
   assert.equal(m.bots.size, 0);
-  m.bots.set(4, 'normal', 'B', m.now);
+  m.bots.set(4, 'normal', 'B', (t += 1000));
   // Everyone leaves: so do the bots, and it's warm-up.
   m.arena.leave('a', m.now);
   m.arena.leave('b', m.now);
@@ -181,7 +185,7 @@ test('each level aims as well as it should against someone strafing 15 m off, an
     kills.sort((a, b) => a - b);
     return { level, rate: hits / shots, kill: kills[15] };
   });
-  // Measured (60 duels each): easy ~38% and 2.6 s to the kill, normal ~57% / 1.1 s, hard ~77% / 0.65 s, insane ~88% / 0.5 s.
+  // Measured (these 30 duels each): easy 38% and 2.85 s to the kill, normal 56% / 1.1 s, hard 77% / 0.7 s, insane 90% / 0.55 s.
   const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.25, 0.5, 1500, 4000], normal: [0.45, 0.7, 700, 1600], hard: [0.65, 0.88, 450, 900], insane: [0.8, 0.97, 300, 700] };
   for (const r of rows) {
     const [lo, hi, k0, k1] = bands[r.level];
@@ -208,6 +212,70 @@ test('a shot heard turns a bot to look, only within its hearing', () => {
   assert.ok(Math.abs(play('normal', true).rotY) < 0.5, 'turned to look');
   // Easy hears 25 m: it carries on exactly as if there'd been no shot.
   assert.deepEqual(play('easy', true), play('easy', false));
+});
+
+test('a bot goes for the head of someone behind something low, and holds fire at someone still safe', () => {
+  // Standing still just behind the barrier across the east lane (1.15 m: head and shoulders over it), a
+  // bot 15 m off in the open. Aiming at the chest, hard put about a third of its shots into the barrier.
+  let shots = 0, hits = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    const a: V3 = { x: C.x + 23, y: 0, z: C.z + 10 };
+    const m = yard({ a }, { fill: 2, level: 'hard', seed });
+    const bot = m.bots.peers()[0];
+    Object.assign(bot, { x: a.x - 15, z: a.z, rotY: Math.PI / 2 });
+    m.run(3000);
+    const fired = m.shots.filter((s) => s.by === bot.id);
+    shots += fired.length;
+    hits += fired.filter((s) => s.hit === 'a').length;
+  }
+  assert.ok(hits / shots > 0.45, `hard hits ${((hits / shots) * 100).toFixed(0)}% over the barrier`);
+  // Someone just in, in plain sight: nothing till their safe moment's up, then it's straight on them.
+  const a: V3 = { x: C.x - 20, y: 0, z: C.z + 16 };
+  const m = yard({ a }, { fill: 2, level: 'insane', justIn: true });
+  const bot = m.bots.peers()[0];
+  Object.assign(bot, { x: a.x, z: a.z - 15, rotY: 0 });
+  const t0 = m.now;
+  m.run(2500);
+  const fired = m.shots.filter((s) => s.by === bot.id);
+  assert.ok(fired.length > 0 && fired[0].at >= t0 + RULES.safe * 1000, `first shot ${fired[0]?.at - t0} ms after they came in`);
+  assert.ok(fired[0].at < t0 + RULES.safe * 1000 + 300, 'and straight after');
+});
+
+test('a bot looks up at someone up on a container, and its rifle goes back level after', () => {
+  // On top of the middle container (2.6 m), the bot on the ground 9 m off.
+  const a: V3 = { x: C.x, y: 2.6, z: C.z + 1.3 };
+  const m = yard({ a }, { fill: 2, level: 'hard' });
+  const bot = m.bots.peers()[0];
+  Object.assign(bot, { x: C.x, z: C.z - 8, rotY: 0 });
+  let up = 0;
+  m.run(1500, () => (up = Math.max(up, bot.pitch ?? 0)));
+  assert.ok(up > 0.15, `looked up ${up.toFixed(2)} rad`);
+  // Gone (killed, or out of sight): level again.
+  m.arena.leave('a', m.now);
+  m.run(200);
+  assert.equal(bot.pitch, 0);
+});
+
+test('a bot that hears someone it can never see firing away keeps on its way, not finding a new one every shot', () => {
+  // Behind the yard's east wall (somewhere no spot in it sees), firing into the air ten times a second.
+  // Before, the bot worked out a peek and a way for every shot: about 75 ways in these 10 s.
+  const a: V3 = { x: C.x + ARENA_HALF + 1.5, y: 0, z: C.z + 10 };
+  const m = yard({ a }, { fill: 2, level: 'insane' });
+  const { nav } = arenaYard();
+  const route = nav.route;
+  let routes = 0;
+  nav.route = (from, to) => (routes++, route.call(nav, from, to));
+  try {
+    m.run(10_000, (now) => {
+      if (now % 100 === 0 && !m.shoot('a', { x: a.x, y: EYE_Y, z: a.z }, { x: 0, y: 1, z: 0.01 }, now)) m.arena.reload('a', now);
+    });
+  } finally {
+    nav.route = route;
+  }
+  const bot = m.bots.peers()[0];
+  assert.ok(routes <= 10, `${routes} ways worked out`);
+  // And it did go to look: across the yard, to the east wall.
+  assert.ok(bot.x > C.x + 15, `got to ${(bot.x - C.x).toFixed(0)} m east`);
 });
 
 test('seven bots think in well under a millisecond or two a tick', () => {

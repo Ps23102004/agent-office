@@ -52,6 +52,11 @@ export class ArenaControl {
     return this.arena.players.some((p) => p.id === id);
   }
 
+  /** Whether shots at `id` still do them no harm: just (back) in, and not fired since. */
+  safe(id: string, now: number): boolean {
+    return now < (this.guns.get(id)?.safeUntil ?? 0);
+  }
+
   /** `id` came into the arena: in, alive, and safe for a moment. */
   join(id: string, name: string, now: number) {
     if (this.has(id)) return;
