@@ -46,9 +46,13 @@ function burstFor(w: WeaponId, range: number, small: boolean): [number, number] 
   if (w === 'smg') return range < 8 ? [6, 10] : [4, 7];
   return range < 12 ? [5, 8] : range < 25 ? [3, 5] : [1, 3];
 }
-/** Someone turning up within this (rad) of where it was already aiming: it reacts quicker (by REACT_PRE), its aim part settled. */
+/**
+ * Someone turning up within this (rad) of where it was already aiming: it reacts quicker (by REACT_PRE),
+ * its aim part settled; never quicker than REACT_MIN (ms), a person's quickest.
+ */
 const PREAIM = 0.25;
 export const REACT_PRE = 0.6;
+const REACT_MIN = 150;
 /** Breaking off for cover, it shoots back on the run only this close (m). */
 const RUN_FIRE = 15;
 /**
@@ -400,10 +404,11 @@ export class ArenaBots {
       const vz = old?.eyes && dt > 0 ? (old.vz + (at.z - old.z) / dt) / 2 : 0;
       // Somewhere it was already aiming (a corner it was watching): quicker on them.
       const pre = same ? old.pre : Math.abs(angle(Math.atan2(dx, dz) - b.peer.rotY)) < PREAIM;
-      const ready = same ? old.ready : now + (k.reaction[0] + this.rand() * (k.reaction[1] - k.reaction[0])) * (pre ? REACT_PRE : 1);
+      const ready = same ? old.ready : now + Math.max(REACT_MIN, (k.reaction[0] + this.rand() * (k.reaction[1] - k.reaction[0])) * (pre ? REACT_PRE : 1));
       b.mem.set(p.id, { x: at.x, y: at.y, z: at.z, crouch: at.crouch, at: now, seen: now, eyes: true, ready, pre, vx, vz });
     }
-    for (const [id, s] of b.mem) if (now - s.at > FORGET) b.mem.delete(id);
+    // Long ago, or gone from the arena (left: never seen to die or go out of sight).
+    for (const [id, s] of b.mem) if (now - s.at > FORGET || !players.some((p) => p.id === id)) b.mem.delete(id);
   }
 
   /** What to do: fight whoever it sees (or get to cover), else go and look where it last knew of someone, else wander. */
@@ -425,6 +430,9 @@ export class ArenaBots {
     // On someone new: its aim starts from scratch, or part settled if it was already aiming there.
     if (target !== b.target) b.tracked = target && b.mem.get(target)!.pre ? k.tau : 0;
     b.target = target;
+    // Someone it hasn't reacted to yet, out of a fight: it carries on as it was. Its first move on seeing
+    // someone takes a person's reaction too, not just its first shot.
+    if (target && b.mode !== 'engage' && now < b.mem.get(target)!.ready) return;
     // Nothing to fight with only when neither gun has rounds to hand: one run dry or reloading, fire()
     // swaps to the other on the spot.
     const dry = !gun || (gun.reloading ? 0 : gun.ammo[gun.w]) + gun.ammo[otherGun(gun.w)] === 0;
@@ -632,8 +640,11 @@ export class ArenaBots {
     let face: number | undefined;
     const by = b.hurtBy && b.hurtBy !== b.target && now - b.hurtAt < HIT_TURN ? b.mem.get(b.hurtBy) : undefined;
     if (by && !by.eyes) face = Math.atan2(by.x - p.x, by.z - p.z);
-    else if (seen?.eyes) face = Math.atan2(seen.x - p.x, seen.z - p.z);
-    else {
+    else if (seen?.eyes && now >= seen.ready) face = Math.atan2(seen.x - p.x, seen.z - p.z);
+    else if (seen?.eyes) {
+      // Not reacted to them yet: no turn their way till it has.
+      if (moved) face = Math.atan2(dx, dz);
+    } else {
       let last: Seen | undefined;
       for (const s of b.mem.values()) if (now - s.at < 2500 && (!last || s.at > last.at)) last = s;
       if (last) face = Math.atan2(last.x - p.x, last.z - p.z);

@@ -188,23 +188,42 @@ test('each level aims as well as it should against someone strafing 15 m off, an
       shots += d.shots;
       hits += d.hits;
       kills.push(d.kill);
-      // Already facing them as they come into sight: a quicker reaction (REACT_PRE), but a reaction.
-      assert.ok(d.first >= SKILL[level].reaction[0] * REACT_PRE, `${level} fired ${d.first} ms after seeing them`);
+      // Already facing them as they come into sight: a quicker reaction (REACT_PRE), but a reaction, and
+      // never under a person's quickest (150 ms).
+      assert.ok(d.first >= Math.max(150, SKILL[level].reaction[0] * REACT_PRE), `${level} fired ${d.first} ms after seeing them`);
     }
     kills.sort((a, b) => a - b);
-    return { level, rate: hits / shots, kill: kills[15] };
+    return { level, rate: hits / shots, kill: kills[15], killed: kills.filter((k) => k < Infinity).length };
   });
-  // Measured (these 30 duels each): easy 14% and over 5 s to the kill (most not dead by then), normal
-  // 35% / 1.95 s, hard 52% / 1.2 s, insane 87% / 0.7 s. A walking strafe this slow is about as easy as a
-  // moving target gets: in a match (scripts/playtest/arena.mjs) they land 15-22%, 25-32%, 35-45% and
+  // Measured (these 30 duels each): easy 16% and 4.5 s to the kill (18 of them dead within the 5 s),
+  // normal 28% / 2.65 s, hard 41% / 1.6 s, insane 87% / 0.7 s. A walking strafe this slow is about as easy
+  // as a moving target gets: in a match (scripts/playtest/arena.mjs) they land 15-22%, 25-32%, 35-45% and
   // 50-60% of all their shots.
-  const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.08, 0.22, 3000, Infinity], normal: [0.22, 0.42, 1500, 3200], hard: [0.42, 0.68, 800, 1700], insane: [0.78, 0.97, 450, 950] };
+  const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.08, 0.24, 3000, Infinity], normal: [0.2, 0.37, 1800, 3600], hard: [0.32, 0.54, 1000, 2200], insane: [0.78, 0.97, 450, 950] };
   for (const r of rows) {
     const [lo, hi, k0, k1] = bands[r.level];
     assert.ok(r.rate >= lo && r.rate <= hi, `${r.level} hits ${(r.rate * 100).toFixed(0)}%`);
     assert.ok(r.kill >= k0 && r.kill <= k1, `${r.level} kills in ${r.kill} ms`);
   }
+  // A beginner is slow to the kill, but gets there: a third of these duels at least.
+  assert.ok(rows[0].killed >= 10, `easy killed in ${rows[0].killed} of 30`);
   for (let i = 1; i < rows.length; i++) assert.ok(rows[i].rate > rows[i - 1].rate && rows[i].kill <= rows[i - 1].kill, `${rows[i].level} beats ${rows[i - 1].level}`);
+});
+
+test('a bot takes its reaction before it does anything about someone it sees: no turn, no step, no shot', () => {
+  // Someone in plain sight up the open west lane, 15 m off, half a radian off where the bot's facing.
+  const a: V3 = { x: C.x - 20, y: 0, z: C.z + 7 };
+  const m = yard({ a }, { fill: 2, level: 'hard' });
+  const bot = m.bots.peers()[0];
+  Object.assign(bot, { x: a.x, z: a.z - 15, rotY: 0.5 });
+  m.run(SKILL.hard.reaction[0] - TICK);
+  assert.deepEqual([bot.x, bot.z, bot.rotY], [a.x, a.z - 15, 0.5], 'still as it was');
+  assert.equal(m.shots.length, 0);
+  // Then it turns on them and fights (they're kept on their feet).
+  m.run(1000, () => (standing(m.arena, 'a').hp = RULES.hp));
+  const off = Math.abs(Math.atan2(Math.sin(Math.atan2(a.x - bot.x, a.z - bot.z) - bot.rotY), Math.cos(Math.atan2(a.x - bot.x, a.z - bot.z) - bot.rotY)));
+  assert.ok(off < 0.15, `faces them (${off.toFixed(2)} rad off)`);
+  assert.ok(m.shots.some((s) => s.by === bot.id));
 });
 
 test('a shot heard turns a bot to look, only within its hearing', () => {

@@ -32,7 +32,10 @@ export const BOT_NAMES = ['Rex', 'Nova', 'Bolt', 'Vex', 'Juno', 'Kilo', 'Ash', '
 
 /** What a bot at one level is like. Angles in radians, times in ms unless they say otherwise. */
 export interface BotSkill {
-  /** From first seeing someone to its first shot at them (less, someone turning up where it was already aiming: see server/arenabots.ts PREAIM). */
+  /**
+   * From first seeing someone to doing anything about them: its first turn, step or shot their way (less,
+   * someone turning up where it was already aiming, but never under 150 ms: see server/arenabots.ts PREAIM).
+   */
   reaction: readonly [number, number];
   /** Its aim's error (standard deviation, each way) as it starts on someone, the best it settles to, and how fast (s). */
   sigma0: number;
@@ -93,8 +96,8 @@ const DEG = Math.PI / 180;
  * against someone strafing 15 m off: tests/arenabots.test.ts.
  */
 export const SKILL: Record<BotLevel, BotSkill> = {
-  easy: { reaction: [600, 850], sigma0: 0.09, sigmaMin: 0.032, tau: 0.9, trail: 0.12, turn: 4, fov: 45 * DEG, hear: 55, reach: 30, crown: 10, settle: 200, discipline: 0.4, pause: [500, 800], adad: [500, 1000], strafe: 0.3, peek: 0, recoil: 0.3, head: 0, cover: 25, crouch: false },
-  normal: { reaction: [330, 450], sigma0: 0.05, sigmaMin: 0.016, tau: 0.5, trail: 0.1, turn: 6, fov: 50 * DEG, hear: 60, reach: 38, crown: 14, settle: 150, discipline: 0.7, pause: [350, 600], adad: [350, 750], strafe: 0.6, peek: 0.2, recoil: 0.6, head: 0.1, cover: 35, crouch: false },
-  hard: { reaction: [220, 290], sigma0: 0.032, sigmaMin: 0.012, tau: 0.3, trail: 0.06, turn: 8, fov: 55 * DEG, hear: 65, reach: 42, crown: 18, settle: 100, discipline: 0.92, pause: [150, 300], adad: [250, 550], strafe: 0.9, peek: 0.6, recoil: 0.85, head: 0.3, cover: 40, crouch: true },
-  insane: { reaction: [160, 210], sigma0: 0.024, sigmaMin: 0.007, tau: 0.2, trail: 0.03, turn: 10, fov: 60 * DEG, hear: 75, reach: 55, crown: 22, settle: 50, discipline: 1, pause: [80, 180], adad: [200, 450], strafe: 1, peek: 0.8, recoil: 0.95, head: 0.45, cover: 40, crouch: true },
+  easy: { reaction: [600, 850], sigma0: 0.09, sigmaMin: 0.035, tau: 0.9, trail: 0.12, turn: 4, fov: 45 * DEG, hear: 55, reach: 30, crown: 10, settle: 200, discipline: 0.4, pause: [500, 800], adad: [500, 1000], strafe: 0.3, peek: 0, recoil: 0.3, head: 0, cover: 25, crouch: false },
+  normal: { reaction: [330, 450], sigma0: 0.056, sigmaMin: 0.022, tau: 0.5, trail: 0.1, turn: 6, fov: 50 * DEG, hear: 60, reach: 38, crown: 14, settle: 150, discipline: 0.7, pause: [350, 600], adad: [350, 750], strafe: 0.5, peek: 0.2, recoil: 0.6, head: 0.1, cover: 35, crouch: false },
+  hard: { reaction: [250, 320], sigma0: 0.032, sigmaMin: 0.013, tau: 0.3, trail: 0.09, turn: 8, fov: 55 * DEG, hear: 65, reach: 42, crown: 18, settle: 100, discipline: 0.92, pause: [250, 450], adad: [250, 550], strafe: 0.9, peek: 0.9, recoil: 0.85, head: 0.3, cover: 50, crouch: true },
+  insane: { reaction: [160, 210], sigma0: 0.024, sigmaMin: 0.007, tau: 0.2, trail: 0.03, turn: 10, fov: 60 * DEG, hear: 75, reach: 55, crown: 27, settle: 50, discipline: 1, pause: [80, 180], adad: [200, 450], strafe: 1, peek: 0.9, recoil: 0.95, head: 0.45, cover: 40, crouch: true },
 };

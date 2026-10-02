@@ -2,40 +2,43 @@
 // and holds the trigger): the rifle's rate of fire, how many shots land from the hip at 15 m, that
 // damage and the kill add up, the kill feed and the respawn. Then, once the office has bots of its own
 // (store.arena.bots, from shared/bots.ts), a test player who stands their ground in the open and shoots
-// back at whatever bot they can see, a while at each level, each level a match of its own (new bots,
-// scores from 0; the test player back on their spot after each death): code checks the bots join,
-// move, shoot, are never hit through cover, and play to their level's band (BANDS: how often they land
-// a shot, how soon they find the test player), the levels ramping up from easy to insane; Jev reads the
-// numbers in words and says whether each level plays like a person of that standard. Without bots that
-// part says it's skipped.
-import { ARENA_BOXES, ARENA_CENTER, EYE_Y, RULES, inArena, rayWorld } from '../../src/shared/arena.ts';
+// back at whatever bot they can see, a few rounds at each level, each round a match of its own (new
+// bots, scores from 0, the test player on their feet and past their safe moment; back on their spot
+// after each death): code checks the bots join, move, shoot, are never hit through cover, and play to
+// their level's band (BANDS: how often they land a shot, how soon they first hit the test player), the
+// levels ramping up from easy to insane; Jev reads the numbers in words and says whether each level
+// plays like a person of that standard. Without bots that part says it's skipped.
+import { ARENA_BOXES, ARENA_CENTER, EYE_Y, RULES, WEAPONS, inArena, rayWorld } from '../../src/shared/arena.ts';
 import { bucket } from './lib.mjs';
 import { toGarage, walkToArena } from './places.mjs';
 
 export const title = 'Shooting: the rifle, a duel, and bots that play like people';
 
-/** Seconds the test player spends against each level of bots, and how many bots (players in all, less one). */
-const PLAY_S = 40;
+/**
+ * Seconds a round, rounds a level, and how many bots (players in all, less one). One 40 s match is only
+ * 70 to 165 bot shots and a handful of kills: a level's luck in it is as big as the step to the next
+ * level, so each level is eight of them, added up (about 26 minutes in all).
+ */
+const PLAY_S = 45;
+const ROUNDS = 8;
 const FILL = 4;
 /** What each level should play like (shared/bots.ts says so of its own levels). */
 const LIKE = { easy: 'a beginner', normal: 'an average player', hard: 'a skilled player', insane: 'a top player' };
 /**
- * What a person of each level manages in a real match, held as hard bands (code, not Jev). `acc`:
- * the share of all their shots that land, at least. The bots aim for 15-22% as beginners, 25-32%
- * average, 35-45% skilled and 50-60% at the top (shared/bots.ts SKILL; this yard's people are big to
- * hit); each floor is the bottom of that less 2.5 standard deviations of a 40 s match's luck (0.04 to
- * 0.08: it's only 80 to 160 shots, in bursts), so a level that plays to its standard fails by chance
- * about 1 run in 160. `firstHit`: seconds from the start to their first hit on the test player, at
- * most. Nobody lands more than MAX_ACC of their shots in a moving match: that's an aimbot (the top
- * level's 60% and its luck). And the levels ramp up: the top one hits the test player more often
- * than the bottom one, with a better aim, and no level is clearly easier than the one below it (its
- * hits on the test player more than 2 standard deviations of luck under that one's). In 40 s a level
- * a notch harder than the one below isn't reliably told from it, and the test player's deaths are too
- * few to tell levels apart: those are Jev's to read.
+ * What a person of each level manages in a real match (shared/bots.ts SKILL aims each level at it; this
+ * yard's people are big to hit), held as hard bands (code, not Jev). `acc`: the share of all their
+ * shots that land, 15-22% for a beginner, 25-32% average, 35-45% skilled and 50-60% at the top, each
+ * widened by 2.5 standard deviations of the luck of ROUNDS rounds (0.013 to 0.025: 900 to 1250 shots,
+ * in bursts), so a level that plays to its standard fails by chance about 1 run in 80; the top one's
+ * ceiling is the aimbot line, nobody lands more in a moving match. `firstHit`: seconds from a round's
+ * start to their first hit on the test player, at most (the middle round's). The levels ramp up: each
+ * lands its first hit on the test player sooner than the one below, kills them more often, and is
+ * killed by them less (each by more than its luck: tell the levels apart, or they're one level).
  */
 // ponytail: rough bands from people in shooters generally, not this game's own players; tune them once some have played.
-const BANDS = { easy: { acc: 0.05, firstHit: 20 }, normal: { acc: 0.1, firstHit: 12 }, hard: { acc: 0.18, firstHit: 8 }, insane: { acc: 0.3, firstHit: 6 } };
-const MAX_ACC = 0.8;
+const BANDS = { easy: { acc: [0.11, 0.26], firstHit: 6 }, normal: { acc: [0.21, 0.36], firstHit: 4 }, hard: { acc: [0.28, 0.52], firstHit: 3 }, insane: { acc: [0.42, 0.68], firstHit: 2 } };
+/** The bands each level aims for (BANDS without the luck), for the report. */
+const AIM = { easy: [0.15, 0.22], normal: [0.25, 0.32], hard: [0.35, 0.45], insane: [0.5, 0.6] };
 
 export default async function arena(t) {
   const a = await t.open({ name: 'Ann' });
@@ -114,46 +117,104 @@ export default async function arena(t) {
   const results = {};
   const spot = openSpot();
   for (const level of levels) {
-    // Each level its own match: the last level's bots home first (the setting takes a change a second),
-    // so new ones come in at spawns, the scores start at 0 and nobody's near the kill limit.
-    if (await a.page.evaluate(() => window.__office.store.arena.players.some((p) => p.bot))) {
-      await a.page.evaluate((level) => window.__office.net.send({ t: 'arena.bots', fill: 1, level }), level);
-      await a.page.waitForFunction(() => !window.__office.store.arena.players.some((p) => p.bot), null, { timeout: 10_000 }).catch(() => {});
-      await a.page.waitForTimeout((shared?.BOTS.every ?? 1000) + 200);
+    const rounds = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      // Each round its own match: the last one's bots home first (the setting takes a change a second),
+      // so new ones come in at spawns, the scores start at 0 and nobody's near the kill limit.
+      if (await a.page.evaluate(() => window.__office.store.arena.players.some((p) => p.bot))) {
+        await a.page.evaluate((level) => window.__office.net.send({ t: 'arena.bots', fill: 1, level }), level);
+        await a.page.waitForFunction(() => !window.__office.store.arena.players.some((p) => p.bot), null, { timeout: 10_000 }).catch(() => {});
+        await a.page.waitForTimeout((shared?.BOTS.every ?? 1000) + 200);
+      }
+      // On their feet and past their safe moment: killed late in the last round, they'd start this one
+      // dead or safe from shots, and the bots' first hit would come late for nothing the bots did.
+      const ready = () => {
+        const s = window.__office.store, me = s.arena.players.find((p) => p.id === s.you);
+        return me?.alive && !(me.safeUntil > s.officeNow());
+      };
+      await a.page.waitForFunction(ready, null, { timeout: (RULES.respawn + RULES.safe + 5) * 1000 }).catch(() => {});
+      await standAt(a.page, spot);
+      if (!(await a.page.evaluate(() => window.__office.player.locked))) await a.page.mouse.click(640, 360);
+      await a.page.waitForTimeout(300); // the office has them there before the bots come in
+      // The round's clock starts as they come in (the page's clock, which its shots go by; the match's
+      // news of them comes up to a quarter of a second later).
+      const t0 = await a.page.evaluate(([fill, level]) => {
+        const n = window.__joins.length;
+        window.__office.net.send({ t: 'arena.bots', fill, level });
+        return new Promise((done) => {
+          const t = setInterval(() => {
+            if (window.__joins.length - n < fill - 1) return;
+            clearInterval(t);
+            done(window.__joins[n]);
+          }, 10);
+          setTimeout(() => (clearInterval(t), done(null)), 10_000);
+        });
+      }, [FILL, level]);
+      if (t0 === null) break;
+      rounds.push(await a.page.evaluate(play, { ms: PLAY_S * 1000, boxes, spot, t0 }));
     }
-    await standAt(a.page, spot);
-    await a.page.evaluate(([fill, level]) => window.__office.net.send({ t: 'arena.bots', fill, level }), [FILL, level]);
-    const joined = await a.page.waitForFunction((n) => window.__office.store.arena.players.filter((p) => p.bot).length === n, FILL - 1, { timeout: 10_000 }).then(() => true, () => false);
-    t.check(`${level}: ${FILL - 1} bots join to make it ${FILL}`, joined);
-    if (!joined) continue;
-    await a.page.mouse.click(640, 360);
-    const r = await a.page.evaluate(play, { ms: PLAY_S * 1000, boxes, spot });
-    results[level] = r;
+    t.check(`${level}: ${FILL - 1} bots join to make it ${FILL}, every round`, rounds.length === ROUNDS, { rounds: rounds.length });
+    if (!rounds.length) continue;
     await t.shot(a.page, `bots-${level}`);
+    const sum = (k) => rounds.reduce((n, r) => n + r[k], 0);
+    const r2 = (n) => Math.round(n * 100) / 100;
+    // A round without a hit on the test player counts as the whole round; the middle round's is the
+    // level's (one round where the bots that see her first are busy with each other doesn't drag it out).
+    const firsts = rounds.map((r) => r.firstHitS ?? PLAY_S);
+    const sorted = [...firsts].sort((x, y) => x - y);
+    const moves = rounds.flatMap((x) => x.bots.map((b) => b.moved));
+    const r = {
+      rounds: rounds.length,
+      botShots: sum('botShots'),
+      botAccuracy: r2(sum('botHits') / Math.max(1, sum('botShots'))),
+      botHitsOnMe: sum('botHitsOnMe'),
+      firstHitS: r2((sorted[(sorted.length - 1) >> 1] + sorted[sorted.length >> 1]) / 2),
+      firstHits: firsts,
+      myShots: sum('myShots'),
+      myAccuracy: r2(sum('myHits') / Math.max(1, sum('myShots'))),
+      myKills: sum('myKills'),
+      myDeaths: sum('myDeaths'),
+      // Metres each bot moved in a round, on average, and the least any did.
+      moved: Math.round(moves.reduce((n, m) => n + m, 0) / moves.length),
+      leastMoved: Math.min(...moves),
+    };
+    results[level] = r;
     // Every shot that hit someone, the office's word: never through a container or a wall.
-    const through = r.hits.filter((s) => {
+    const through = rounds.flatMap((x) => x.hits).filter((s) => {
       const L = Math.hypot(s.end.x - s.o.x, s.end.y - s.o.y, s.end.z - s.o.z);
       return L > 0.1 && rayWorld(s.o, { x: (s.end.x - s.o.x) / L, y: (s.end.y - s.o.y) / L, z: (s.end.z - s.o.z) / L }) < L - 0.1;
     });
-    t.check(`${level}: every bot moves about (10 m or more in ${PLAY_S} s)`, r.bots.every((x) => x.moved >= 10), r.bots);
+    t.check(`${level}: every bot moves about (10 m or more in each ${PLAY_S} s round)`, r.leastMoved >= 10, rounds.map((x) => x.bots));
     t.check(`${level}: the bots shoot, and land shots on the test player`, r.botShots > 0 && r.botHitsOnMe > 0, { botShots: r.botShots, botHitsOnMe: r.botHitsOnMe });
     t.check(`${level}: nobody is hit through cover`, !through.length, through.slice(0, 3));
     const band = BANDS[level];
-    t.check(`${level}: the bots land ${band ? `${band.acc * 100}%` : '?'} to ${MAX_ACC * 100}% of their shots, as people of that level do`, band && r.botAccuracy >= band.acc && r.botAccuracy <= MAX_ACC, band ? { botAccuracy: r.botAccuracy, botShots: r.botShots } : `no BANDS for ${level}: add one`);
-    t.check(`${level}: a bot first hits the test player within ${band?.firstHit ?? '?'} s`, band && r.firstHitS !== null && r.firstHitS <= band.firstHit, { firstHitS: r.firstHitS });
-    delete r.hits;
+    t.check(`${level}: the bots land ${band ? `${band.acc[0] * 100}% to ${band.acc[1] * 100}%` : '?'} of their shots, as people of that level do`, band && r.botAccuracy >= band.acc[0] && r.botAccuracy <= band.acc[1], band ? { botAccuracy: r.botAccuracy, botShots: r.botShots } : `no BANDS for ${level}: add one`);
+    t.check(`${level}: a bot first hits the test player within ${band?.firstHit ?? '?'} s of a round's start (the middle round)`, band && r.firstHitS <= band.firstHit, { firstHitS: r.firstHitS, firstHits: r.firstHits });
   }
   t.metric('bots', results);
-  // The ramp (hits are counts, so their luck is about their square root).
-  const ladder = Object.entries(results).map(([level, r]) => ({ level, hits: r.botHitsOnMe, accuracy: r.botAccuracy, deaths: r.myDeaths }));
-  for (const [i, x] of ladder.entries()) if (i) t.check(`${x.level} is no easier than ${ladder[i - 1].level} (hits on the test player not 2 SD of luck under)`, x.hits >= ladder[i - 1].hits - 2 * Math.sqrt(x.hits + ladder[i - 1].hits), ladder);
+  // The ramp: each level a step up from the one below, by more than luck (kills are counts, so their
+  // luck is about their square root).
+  const ladder = Object.entries(results).map(([level, r]) => ({ level, first: r.firstHitS, kills: r.myDeaths, deaths: r.myKills, accuracy: r.botAccuracy }));
+  for (const [i, x] of ladder.entries()) {
+    if (!i) continue;
+    const y = ladder[i - 1];
+    t.check(`${x.level} is no easier than ${y.level}: it kills the test player no less often, and isn't killed by them more (not 2 SD of luck the wrong way)`, x.kills >= y.kills - 2 * Math.sqrt(x.kills + y.kills) && x.deaths <= y.deaths + 2 * Math.sqrt(x.deaths + y.deaths), ladder);
+  }
   if (ladder.length > 1) {
     const [lo, hi] = [ladder[0], ladder.at(-1)];
-    t.check(`${hi.level} is harder than ${lo.level}: more hits on the test player, and a better aim`, hi.hits > lo.hits && hi.accuracy > lo.accuracy, ladder);
+    t.check(`${hi.level} is harder than ${lo.level}: a better aim, sooner on the test player, more kills on them and fewer deaths to them`, hi.accuracy > lo.accuracy && hi.first < lo.first && hi.kills > lo.kills && hi.deaths < lo.deaths, ladder);
   }
-  const words = (r) => `In ${PLAY_S} s the test player hit ${Math.round(r.myAccuracy * 100)}% of their ${r.myShots} shots; the bots fired ${r.botShots} shots and hit ${Math.round(r.botAccuracy * 100)}% of them (${bucket(r.botAccuracy, [0.15, 0.3, 0.5, 0.7], ['wild', 'poor', 'fair', 'good', 'deadly'])}); they first hit the test player ${r.firstHitS === null ? 'never' : `${r.firstHitS} s in`}, killed them ${r.myDeaths} times and were killed ${r.myKills} times by them; each moved about ${Math.round(r.bots.reduce((s, x) => s + x.moved, 0) / r.bots.length)} m.`;
+  // What the levels are meant to be (AIM, and each a step up from the one below, strictly): a note, not a check (luck).
+  const strictly = (k, up) => ladder.every((x, i) => !i || (up ? x[k] > ladder[i - 1][k] : x[k] < ladder[i - 1][k]));
+  t.metric('aim', {
+    bands: Object.fromEntries(ladder.map((x) => [x.level, x.accuracy >= AIM[x.level][0] && x.accuracy <= AIM[x.level][1]])),
+    firstHitFalls: strictly('first', false),
+    killsRise: strictly('kills', true),
+    deathsFall: strictly('deaths', false),
+  });
+  const words = (r) => `Over ${r.rounds} rounds of ${PLAY_S} s (each a new match) the test player hit ${Math.round(r.myAccuracy * 100)}% of their ${r.myShots} shots; the bots fired ${r.botShots} shots and hit ${Math.round(r.botAccuracy * 100)}% of them (${bucket(r.botAccuracy, [0.15, 0.3, 0.5, 0.7], ['wild', 'poor', 'fair', 'good', 'deadly'])}); they first hit the test player ${r.firstHitS} s into a round (the middle round's), killed them ${r.myDeaths} times and were killed ${r.myKills} times by them; each moved about ${r.moved} m a round.`;
   const state = {
-    game: 'A first-person arena shooter: rifles, 25 damage a body shot and 50 a head shot, 100 health, a container yard with cover.',
+    game: `A first-person arena shooter: a rifle (${WEAPONS.rifle.body} damage a body shot, ${WEAPONS.rifle.head} a head shot) and an SMG for close in (${WEAPONS.smg.body} and ${WEAPONS.smg.head}), ${RULES.hp} health, a container yard with cover.`,
     test_player: `A scripted test player who stands their ground in the open and shoots back at the nearest bot in sight after a quarter-second reaction, with a person's unsteady aim, while ${FILL - 1} bots play against them (and each other).`,
     levels: Object.fromEntries(Object.entries(results).map(([k, r]) => [k, words(r)])),
   };
@@ -201,11 +262,15 @@ async function standAt(page, p) {
 
 // ---- In the page ----
 
-/** Logs every shot the office tells this page about: who fired, what it hit, from where to where. */
+/** Logs every shot the office tells this page about (who fired, what it hit, from where to where), and when bots come in. */
 async function armShots(page) {
   await page.evaluate(() => {
     window.__shots = [];
-    window.__office.net.onMessage((m) => m.t === 'arena.shot' && window.__shots.push({ t: performance.now(), by: m.by, hit: m.hit, head: !!m.head, kill: !!m.kill, o: m.o, end: m.end }));
+    window.__joins = [];
+    window.__office.net.onMessage((m) => {
+      if (m.t === 'arena.shot') window.__shots.push({ t: performance.now(), by: m.by, hit: m.hit, head: !!m.head, kill: !!m.kill, o: m.o, end: m.end });
+      if (m.t === 'peer.join' && m.peer.bot) window.__joins.push(performance.now());
+    });
   });
   await page.addScriptTag({ content: `window.aimAt = ${aimAt.toString()};` });
 }
@@ -224,11 +289,12 @@ function aimAt(id) {
 }
 
 /**
- * The test player for `ms`: standing at `spot` (back there after each death), they pick the nearest
- * bot they can see (`boxes` are the yard's cover: [minX, maxX, y0, y1, minZ, maxZ]), turn to it over
- * a quarter of a second, and hold the trigger while it's on them. Resolves with what happened.
+ * The test player for `ms` from `t0` (the page's clock): standing at `spot` (back there after each
+ * death), they pick the nearest bot they can see (`boxes` are the yard's cover: [minX, maxX, y0, y1,
+ * minZ, maxZ]), turn to it over a quarter of a second, and hold the trigger while it's on them.
+ * Resolves with what happened.
  */
-function play({ ms, boxes, spot }) {
+function play({ ms, boxes, spot, t0 }) {
   const o = window.__office, me = o.store.you;
   const sees = (p, q) => {
     const d = [q.x - p.x, q.y - p.y, q.z - p.z], L = Math.hypot(...d);
@@ -249,7 +315,7 @@ function play({ ms, boxes, spot }) {
     return true;
   };
   const stats = (id) => o.store.arena.players.find((p) => p.id === id);
-  const t0 = performance.now(), from = window.__shots.length;
+  const from = window.__shots.findLastIndex((s) => s.t < t0) + 1;
   const trail = new Map();
   let target = null, since = 0, firing = false, wobble = { yaw: 0, pitch: 0, at: 0 };
   // A person's hand: aim off by about 0.025 rad (37 cm at 15 m), a fresh error every 200 ms.
@@ -281,11 +347,11 @@ function play({ ms, boxes, spot }) {
         const r = (n) => Math.round(n * 100) / 100;
         return resolve({
           botShots: byBots.length,
-          botAccuracy: r(byBots.filter((s) => s.hit).length / Math.max(1, byBots.length)),
+          botHits: byBots.filter((s) => s.hit).length,
           botHitsOnMe: onMe.length,
           firstHitS: onMe.length ? r((onMe[0].t - t0) / 1000) : null,
           myShots: mine.length,
-          myAccuracy: r(mine.filter((s) => s.hit).length / Math.max(1, mine.length)),
+          myHits: mine.filter((s) => s.hit).length,
           myKills: mine.filter((s) => s.kill).length,
           myDeaths: onMe.filter((s) => s.kill).length,
           bots: bots.map((p) => ({ name: p.name, moved: Math.round(trail.get(p.id)?.moved ?? 0), kills: shots.filter((s) => s.by === p.id && s.kill).length, deaths: shots.filter((s) => s.hit === p.id && s.kill).length })),
