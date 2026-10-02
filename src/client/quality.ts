@@ -57,3 +57,9 @@ export function decorTicker(): (dt: number) => number {
 
 /** Whether a frame at `now` (ms) is too soon after the last one drawn to keep to `fps`. A little slack, for a screen whose refresh doesn't divide evenly. */
 export const tooSoon = (now: number, last: number, fps: number) => now - last < 1000 / fps - 2;
+
+/**
+ * How long (ms) after the last shadow redraw something moving may redraw them again. A car fast enough
+ * to outrun its shadow gets them up to 30 times a second, never more, and on battery no sooner at all.
+ */
+export const shadowMoveGap = (q: Quality, carFast: boolean) => (carFast && q.fps > 30 ? Math.min(q.shadowMoveEvery, 33) : q.shadowMoveEvery);

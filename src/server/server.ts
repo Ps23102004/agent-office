@@ -1309,9 +1309,13 @@ export async function startServer(cfg: Config) {
     const { changed, spawned } = arena.tick(now);
     for (const s of spawned) {
       const c = clients.get(s.id);
-      // A bot back in tells everyone where on its next tick.
-      Object.assign(c?.peer ?? bots.peer(s.id) ?? {}, { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
-      if (!c) continue;
+      const at = { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false };
+      Object.assign(c?.peer ?? bots.peer(s.id) ?? {}, at);
+      // A bot back in: where, before the arena says it's alive (its own next tick could be 50 ms off).
+      if (!c) {
+        if (bots.peer(s.id)) toArena({ t: 'peer.move', id: s.id, ...at });
+        continue;
+      }
       sendTo(c, { t: 'arena.spawn', x: s.x, z: s.z, rotY: s.rotY });
       toNeighbors(c, { t: 'peer.move', id: c.id, x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
     }

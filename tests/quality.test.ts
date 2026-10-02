@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decorTicker, pixelRatioFor, QUALITY, quality, setGraphics, tooSoon } from '../src/client/quality.js';
+import { decorTicker, pixelRatioFor, QUALITY, quality, setGraphics, shadowMoveGap, tooSoon } from '../src/client/quality.js';
 
 // The Graphics setting's levels (quality.ts): how sharp, how fast, and how much moves.
 
@@ -55,4 +55,11 @@ test('service discovery is every 4 s while a worker works, and every 15 s otherw
 test('a level redraws shadows for movement no faster than its own minimum', () => {
   assert.ok(QUALITY.battery.shadowMoveEvery >= 100 && QUALITY.battery.shadowMoveEvery < QUALITY.battery.shadowEvery);
   assert.ok(QUALITY.balanced.shadowMoveEvery >= 50 && QUALITY.balanced.shadowMoveEvery < QUALITY.balanced.shadowEvery);
+});
+
+test('a car outrunning its shadow redraws it more often, but never every frame, and not at all sooner on battery', () => {
+  assert.equal(shadowMoveGap(QUALITY.battery, true), QUALITY.battery.shadowMoveEvery);
+  assert.equal(shadowMoveGap(QUALITY.balanced, true), 33);
+  assert.equal(shadowMoveGap(QUALITY.balanced, false), QUALITY.balanced.shadowMoveEvery);
+  assert.equal(shadowMoveGap(QUALITY.full, true), 0);
 });

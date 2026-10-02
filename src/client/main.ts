@@ -123,7 +123,7 @@ import './ui/title.css';
 import { SlowFrames } from './framerate';
 import { readPad } from './gamepad';
 import { offerLite, touchOnly } from './ui/litesuggest';
-import { decorTicker, pixelRatioFor, quality, setGraphics, tooSoon } from './quality';
+import { decorTicker, pixelRatioFor, quality, setGraphics, shadowMoveGap, tooSoon } from './quality';
 import { openDeskLabel, openExpand } from './ui/floorplan';
 
 // The loading screen stays up until there's an office to see (see boot and whoami at the end).
@@ -4491,8 +4491,10 @@ function renderHangHint(el: HTMLElement) {
 let crossKey = '';
 const finePointer = window.matchMedia('(pointer: fine)').matches;
 function renderCrosshair() {
-  const show = player.view === 'first' && !modalOpen() && !golf.active && !thrower.active;
-  const free = show && finePointer && player.canLock && !player.locked;
+  const base = player.view === 'first' && !modalOpen() && !golf.active && !thrower.active;
+  const free = base && finePointer && player.canLock && !player.locked;
+  // The arena draws its own crosshair (gone down the sights or dead): this one only to say click in.
+  const show = base && (!atArena || free);
   const k = `${show}|${!!target}|${free}|${relookOnKey}`;
   if (k === crossKey) return;
   crossKey = k;
@@ -5480,6 +5482,10 @@ function frame(ts?: number) {
     if (ride) {
       pos.copy(r.target);
       r.person.root.rotation.y = ride.rotY;
+    } else if (pos.distanceToSquared(r.target) > 16) {
+      // Further than anyone walks between two words of where they are: back in after dying, or moved. Straight there.
+      pos.copy(r.target);
+      r.person.root.rotation.y = at.rotY;
     } else {
       pos.lerp(r.target, Math.min(1, dt * 12));
       let diff = at.rotY - r.person.root.rotation.y;
@@ -5647,8 +5653,8 @@ function refreshShadows(now: number) {
   const sunMoved = shadowNow.dot(shadowSun) <= 0.9999;
   const due = now - shadowsAt >= quality.shadowEvery;
   // Someone moving redraws them, but not faster than the level allows: a car at speed is always on the move.
-  // A car that would outrun its shadow in that time, though (yours, someone else's, a racer's), as often as it's moved.
-  const somethingMoved = now - shadowsAt >= (carOutrunsShadow() ? 0 : quality.shadowMoveEvery) && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
+  // A car that would outrun its shadow in that time, though (yours, someone else's, a racer's), more often (see shadowMoveGap).
+  const somethingMoved = now - shadowsAt >= shadowMoveGap(quality, carOutrunsShadow()) && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
   if (!sunMoved && !due && !somethingMoved) return;
   shadowSun.copy(shadowNow);
   shadowMe.copy(player.pos);
