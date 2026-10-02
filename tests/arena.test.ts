@@ -94,7 +94,7 @@ function match(spots: Record<string, V3>) {
   };
 }
 
-test('a match: two in makes it live; four body shots kill, a head shot is two; the dead come back', () => {
+test('a match: two in makes it live; four body shots kill, head shots three; the dead come back', () => {
   const m = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
   assert.equal(m.a.state().phase, 'live');
   // Safe for a moment after coming in.
@@ -114,9 +114,9 @@ test('a match: two in makes it live; four body shots kill, a head shot is two; t
   assert.deepEqual(back.spawned.map((x) => x.id), ['b']);
   s = m.a.state();
   assert.ok(s.players.find((p) => p.id === 'b')!.alive);
-  // Head shots: two.
+  // Head shots: three.
   m.wait(RULES.safe * 1000);
-  assert.ok(m.shoot('a', 'b', 0.6)?.head);
+  for (let i = 0; i < 2; i++) assert.ok(m.shoot('a', 'b', 0.6)?.head);
   assert.ok(m.shoot('a', 'b', 0.6)?.kill);
 });
 
@@ -219,7 +219,7 @@ test('shots say what they did: damage and health left, the streak on a kill; som
   assert.deepEqual([first?.hit, first?.dmg, first?.hp, first?.head], ['b', RULES.body, RULES.hp - RULES.body, false]);
   const head = m.shoot('a', 'b', 0.6);
   assert.deepEqual([head?.dmg, head?.hp, head?.head], [RULES.head, RULES.hp - RULES.body - RULES.head, true]);
-  const kill = m.shoot('a', 'b');
+  const kill = m.shoot('a', 'b', 0.6);
   assert.ok(kill?.kill);
   assert.equal(kill.hp, 0);
   assert.equal(kill.streak, 1, 'the streak counting this kill, before the state catches up');

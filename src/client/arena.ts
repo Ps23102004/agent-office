@@ -53,7 +53,8 @@ const DEAD_FOV = 40;
 const HIP = new THREE.Vector3(0.17, -0.2, -0.52);
 /** The rifle's size in your hands. */
 const GUN_SCALE = 0.75;
-const ADS = new THREE.Vector3(0, -SIGHT_Y * GUN_SCALE, -0.38);
+// Close to the eye, as a cheek on the stock: the stock and the back of the rifle drop out of the bottom of the view.
+const ADS = new THREE.Vector3(0, -SIGHT_Y * GUN_SCALE, -0.25);
 /** The fastest you go (m/s) aiming down the sights, and firing from the hip: no running with the trigger down. */
 const PACE = { ads: 2.8, firing: 4.6 };
 /** Someone killed falls over in this long (s), and is gone from sight this long after (s), till they're back in. */
@@ -69,10 +70,16 @@ const right = new THREE.Vector3();
 const upAxis = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
-/** A muzzle flash: a little star of light, its own material so it can be shown and hidden on its own. */
+/** A muzzle flash: a little four-pointed star of light, its own material so it can be shown and hidden on its own. */
 function muzzleFlash(size: number): THREE.Mesh {
+  const star = new THREE.Shape();
+  for (let i = 0; i < 8; i++) {
+    const r = (i % 2 ? 0.12 : 0.5) * size, a = (i * Math.PI) / 4;
+    if (i) star.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    else star.moveTo(r, 0);
+  }
   const m = new THREE.Mesh(
-    new THREE.PlaneGeometry(size, size),
+    new THREE.ShapeGeometry(star),
     new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
   );
   m.visible = false;
@@ -96,7 +103,7 @@ export class ArenaPlay {
   /** Your shots this visit, and what they did: for accuracy and headshots on a results screen. */
   readonly stats = { shots: 0, hits: 0, heads: 0, kills: 0, damage: 0 };
   private gun = rifle();
-  private flash = muzzleFlash(0.16);
+  private flash = muzzleFlash(0.24);
   private active = false;
   private firing = false;
   private aiming = false;
@@ -482,12 +489,14 @@ export class ArenaPlay {
       if (!held) {
         const gun = rifle();
         gun.group.scale.setScalar(HELD_SCALE);
-        const flash = muzzleFlash(0.22);
+        const flash = muzzleFlash(0.3);
         gun.muzzle.add(flash);
         held = { group: gun.group, muzzle: gun.muzzle, flash, flashT: 0 };
         this.held.set(pl.id, held);
       }
       them.holdRifle(held.group);
+      // Killed, they let go of it.
+      held.group.visible = pl.alive;
       held.flashT -= dt;
       held.flash.visible = held.flashT > 0;
       if (held.flash.visible) held.flash.rotation.z = t * 40;

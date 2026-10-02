@@ -248,7 +248,7 @@ export function buildArena(): ArenaWorld {
 }
 
 /** How high over the rifle's grip its sight's dot is (m, before it's scaled): where your eye goes, aiming down the sights. */
-export const SIGHT_Y = 0.16;
+export const SIGHT_Y = 0.19;
 
 /**
  * A rifle, its muzzle pointing along -z (as in camera space; turn it round to point a character's +z),
@@ -266,7 +266,7 @@ export function rifle(): { group: THREE.Group; muzzle: THREE.Object3D } {
   block(parts, 0.04, 0.11, 0.05, tan, 0, -0.08, 0.02); // grip
   block(parts, 0.05, 0.08, 0.2, tan, 0, 0.01, 0.17); // stock
   block(parts, 0.03, 0.012, 0.12, light, 0, 0.11, -0.12); // sight rail
-  block(parts, 0.012, 0.03, 0.014, metal, 0, 0.116, -0.15); // the sight's post
+  block(parts, 0.008, 0.044, 0.012, metal, 0, 0.122, -0.15); // the sight's post, up to its ring: high, so the rifle sits low under your eye
   const group = mergeColored(parts);
   const ring = mesh(new THREE.TorusGeometry(0.024, 0.0032, 6, 28), toon(metal), 0, SIGHT_Y, -0.15, false);
   const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 12), new THREE.MeshBasicMaterial({ color: '#ff2d2d', toneMapped: false }));

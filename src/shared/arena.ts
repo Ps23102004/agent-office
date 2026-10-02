@@ -112,10 +112,13 @@ export const CITY_ARENA_GATE: Gate = { x: 72, z: -66, rotY: Math.PI / 2, width: 
 // ---- The rules ------------------------------------------------------------------------------------
 
 export const RULES = {
-  /** Health, and what a shot takes off it: anywhere, or in the head. */
+  /**
+   * Health, and what a shot takes off it: anywhere, or in the head. A Person's head is big (a ball as
+   * wide as their shoulders), so a headshot's worth less than double: three to kill, or four anywhere.
+   */
   hp: 100,
   body: 25,
-  head: 50,
+  head: 40,
   /** Rounds in the rifle, ms between shots, and ms to reload. */
   mag: 30,
   every: 100,
