@@ -1136,12 +1136,17 @@ function throughGate() {
   if (driver.driving) net.send({ t: 'car.drive', car, ...pose });
 }
 
-/** At the circuit the sun's shadows are drawn round you, wherever you are on it; elsewhere, round the office. */
+/**
+ * At the circuit, the arena and down on the street the sun's shadows are drawn round you (at the ground
+ * you're on), wherever you've got to; up in the office, round the office.
+ */
 function followSun() {
-  const x = away() ? Math.round(player.pos.x / 8) * 8 : 0;
-  const z = away() ? Math.round(player.pos.z / 8) * 8 : 0;
-  if (sun.target.position.x === x && sun.target.position.z === z) return;
-  sun.target.position.set(x, 0, z);
+  const out = away() || downstairs();
+  const x = out ? Math.round(player.pos.x / 8) * 8 : 0;
+  const y = out && !away() ? player.street : 0;
+  const z = out ? Math.round(player.pos.z / 8) * 8 : 0;
+  if (sun.target.position.x === x && sun.target.position.y === y && sun.target.position.z === z) return;
+  sun.target.position.set(x, y, z);
   sun.target.updateMatrixWorld();
 }
 
@@ -5227,7 +5232,8 @@ function frame(ts?: number) {
 
   walkTick(now);
   meetTick();
-  // The cars first, so whoever's riding in one sits in it where it's got to.
+  // The cars first, so whoever's riding in one sits in it where it's got to (their headlights on after dark).
+  fleet().lamps = sky.lampsOn;
   fleet().update(dt, store.cars, store.carsAt, now, driver.active ? { car: driver.car!, driving: driver.driving } : null, camera.position);
   // The street's traffic and people, while you're down here: they brake for (and jump out of the way of) your car.
   player.city = inOffice() && !upTop && !away(); // W3: the city's solids are for the office's street world only
@@ -5547,7 +5553,8 @@ function refreshShadows(now: number) {
   const sunMoved = shadowNow.dot(shadowSun) <= 0.9999;
   const due = now - shadowsAt >= quality.shadowEvery;
   // Someone moving redraws them, but not faster than the level allows: a car at speed is always on the move.
-  const somethingMoved = now - shadowsAt >= quality.shadowMoveEvery && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
+  // Your own car's redrawn every frame, though, or its shadow's left metres behind it at speed.
+  const somethingMoved = now - shadowsAt >= (driver.driving ? 0 : quality.shadowMoveEvery) && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
   if (!sunMoved && !due && !somethingMoved) return;
   shadowSun.copy(shadowNow);
   shadowMe.copy(player.pos);

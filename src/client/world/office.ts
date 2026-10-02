@@ -1552,8 +1552,9 @@ export function buildOffice(): Office {
   buildGarage(ground, groundColliders);
   // The cars move, so their boxes follow them (and the street) themselves rather than setLevel.
   // (W6: what the cars bump into includes the café's and the bar's doorways: see vehicleSolids.)
+  // They're drawn where the street is (setStreet), so not in `ground`, which setLevel moves down too.
   const cars = new Fleet(colliders, interactables, CARS, vehicleSolids);
-  ground.add(cars.group);
+  group.add(cars.group);
   // The clouds stay up in the sky, however far down the street is.
   buildStreet(ground, groundColliders, night, group);
   // Traffic on the city's streets and people on its sidewalks (world/streetlife.ts).

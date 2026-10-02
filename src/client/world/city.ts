@@ -868,8 +868,10 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
   const groundMat = new THREE.MeshToonMaterial({ map: streetTexture(), gradientMap: gradient, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
-  group.add(new THREE.Mesh(groundGeo, groundMat));
-  group.add(buildIsland(night));
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  // Cars' and people's shadows on the road (main.ts keeps the sun's shadows round you down here).
+  ground.receiveShadow = true;
+  group.add(ground, buildIsland(night));
 
   // Walls: a material per paint, and the shop fronts' atlas.
   const paintMats = new Map<number, THREE.MeshToonMaterial>();

@@ -279,19 +279,22 @@ export function neighbourBoxes(): { minX: number; maxX: number; minZ: number; ma
  * sidewalks and street lamps, trees and neighbours' buildings, and in `sky` some clouds.
  */
 export function buildStreet(group: THREE.Group, colliders: Collider[], night: NightParts, sky: THREE.Group) {
-  // The city's own streets, sidewalks and blocks all round (world/city.ts), the ground a hair under the
-  // lots laid on it here, so they win. It's drawn at full size here; the roof sees it from far above.
+  // The city's own streets, sidewalks and blocks all round (world/city.ts), its ground right at street
+  // level, where the wheels and feet are: the lots laid on it here win by its depth offset (city.ts
+  // groundMat), not by being a few centimetres up, which left every car floating over the road. It's
+  // drawn at full size here; the roof sees it from far above.
   const city = buildStreetCity(night);
-  city.position.y = G - 0.03;
+  city.position.y = G;
   group.add(city);
   // What you stand on anywhere out there, the lot and the road and the grass alike, out over the
   // island's beach (walk into the sea and you're put back on it: main.ts).
   colliders.push({ minX: -700, maxX: 700, minZ: -700, maxZ: 700, bottom: G - 1, top: G });
 
-  // The lot in front of the garage, out to the sidewalk, and the one down its east side.
+  // The lot in front of the garage, out to the sidewalk, and the one down its east side: at street level
+  // too (the same plain grey, so where they overlap it doesn't matter which wins).
   for (const [b, y] of [
-    [LOT, G - 0.01],
-    [SIDE_LOT, G - 0.012],
+    [LOT, G],
+    [SIDE_LOT, G],
   ] as const) {
     group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, y, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
   }
