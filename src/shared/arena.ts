@@ -49,8 +49,8 @@ const BARRIER_H = 1.3;
 /**
  * Half the yard (from its middle, m): the other half is the same turned round (x, z → -x, -z), so
  * nobody's side is better. A two-container block in the middle with crates to climb it, a pinwheel of
- * containers round it, low barriers across the lanes, crates piled in the corners and a stack of two
- * containers on each side wall. Crates are 1.2 m: jump at one and you climb up (see client/player.ts
+ * containers round it, low barriers across the lanes, short containers further out, crates piled in
+ * the corners and a stack of two containers on each side wall. Crates are 1.2 m: jump at one and you climb up (see client/player.ts
  * MANTLE), then up again onto a container.
  */
 const HALF: readonly ArenaBox[] = [
@@ -69,6 +69,10 @@ const HALF: readonly ArenaBox[] = [
   box(29, 0, CW, 12, CH, 'container', 0, CH),
   box(18, 18, 1.2, 1.2, 1.2, 'crate'),
   box(-2, -20, 1.2, 1.2, 1.2, 'crate'),
+  // Two short (20-foot) containers out in the ring round the middle, across its long lanes: from 40%
+  // of the yard's spots seeing each other to 31%.
+  box(12, 20, CW, 6, CH, 'container', 2),
+  box(20, -12, 6, CW, CH, 'container', 0),
 ];
 
 /** The four walls round the yard, a metre thick. */
@@ -175,10 +179,52 @@ export const KICK = { up: 0.012, side: 0.004, settle: 9 };
 /** Walking pace (m/s), what SPREAD.move is for: client/player.ts's WALK. */
 const WALK = 4.6;
 
-/** How wide a shot goes (radians): moving at `speed` (m/s), on the ground or not, `ads` (0 to 1) down the sights, with `bloom` from firing; crouching, steadier. */
-export function spreadOf(speed: number, grounded: boolean, ads: number, bloom: number, crouch = false): number {
-  const still = (SPREAD.hip + bloom + (grounded ? 0 : SPREAD.air)) * (1 - ads * (1 - SPREAD.ads));
-  return (still + SPREAD.move * Math.min(1.6, speed / WALK) * (1 - ads * 0.5)) * (crouch ? SPREAD.crouch : 1);
+export type WeaponId = 'rifle' | 'smg';
+
+/**
+ * A gun: what a shot takes off anywhere and in the head, ms between shots, rounds and ms to reload;
+ * how wide it shoots from the hip (`hip`, times SPREAD's) and what aiming down its sights leaves of
+ * that (`ads`), how hard it kicks (times KICK), and the fastest you go (m/s) firing it and down its
+ * sights. Past `falloff.from` m its shots weaken, to `falloff.min` of themselves at `falloff.to`.
+ */
+export interface Weapon {
+  body: number;
+  head: number;
+  every: number;
+  mag: number;
+  reload: number;
+  hip: number;
+  ads: number;
+  kick: number;
+  pace: { firing: number; ads: number };
+  falloff?: { from: number; to: number; min: number };
+}
+
+/**
+ * Everyone's two guns, swapped with 1, 2 or Q (client/arena.ts): the rifle (RULES's numbers), steady
+ * down its sights and as good at any range; and the SMG, quicker and lighter, for close in: tighter
+ * from the hip and fine to run with, its sights not much help, weaker the further it goes. Up close
+ * they kill about as fast (300 ms anywhere, 200 in the head); at 30 m the SMG takes twice as long.
+ */
+export const WEAPONS: Record<WeaponId, Weapon> = {
+  rifle: { body: RULES.body, head: RULES.head, every: RULES.every, mag: RULES.mag, reload: RULES.reload, hip: 1, ads: SPREAD.ads, kick: 1, pace: { firing: WALK, ads: 2.8 } },
+  smg: { body: 17, head: 27, every: 65, mag: 35, reload: 1500, hip: 0.7, ads: 0.45, kick: 0.6, pace: { firing: 7.5, ads: 3.8 }, falloff: { from: 12, to: 30, min: 0.6 } },
+};
+/** How long (ms) swapping guns takes: no shots till it's done. */
+export const SWAP = 400;
+export const isWeapon = (w: unknown): w is WeaponId => w === 'rifle' || w === 'smg';
+
+/** What a shot from `w` does, in the head or not, from `dist` m away: whole points of health. */
+export function damageOf(w: Weapon, head: boolean, dist: number): number {
+  const f = w.falloff;
+  const k = f ? 1 - (1 - f.min) * Math.min(1, Math.max(0, (dist - f.from) / (f.to - f.from))) : 1;
+  return Math.round((head ? w.head : w.body) * k);
+}
+
+/** How wide a shot goes (radians): moving at `speed` (m/s), on the ground or not, `ads` (0 to 1) down the sights, with `bloom` from firing; crouching, steadier; with gun `w`. */
+export function spreadOf(speed: number, grounded: boolean, ads: number, bloom: number, crouch = false, w: Weapon = WEAPONS.rifle): number {
+  const still = (SPREAD.hip * w.hip + bloom + (grounded ? 0 : SPREAD.air)) * (1 - ads * (1 - w.ads));
+  return (still + SPREAD.move * w.hip * Math.min(1.6, speed / WALK) * (1 - ads * 0.5)) * (crouch ? SPREAD.crouch : 1);
 }
 
 /**
@@ -204,6 +250,8 @@ export interface ArenaPlayer {
   respawnAt?: number;
   /** Safe from shots till then (epoch ms), just back in; gone once they fire. */
   safeUntil?: number;
+  /** The gun in their hands (WEAPONS). */
+  w: WeaponId;
 }
 
 export interface KillLine {
@@ -231,12 +279,14 @@ export interface ArenaState {
 
 /**
  * What became of a shot, as the office judged it (server/arena.ts) and tells everyone in the arena
- * (arena.shot): where it stopped, and who it hit, `hit` (a peer id) or the practice `target` (its
+ * (arena.shot): the gun it came from (`w`), where it stopped, and who it hit, `hit` (a peer id) or the practice `target` (its
  * index). Then whether in the `head`, the damage it did (`dmg`) and what they have left (`hp`), and
  * whether that killed them (`kill`, with the shooter's `streak` counting it). `shield`: who it hit
  * that was still safe (see ArenaPlayer.safeUntil), doing them no harm.
  */
 export interface ShotResult {
+  /** The gun it came from. */
+  w: WeaponId;
   end: V3;
   hit?: string;
   target?: number;

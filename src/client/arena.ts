@@ -1,21 +1,23 @@
 import * as THREE from 'three';
-import { ARENA, KICK, PRACTICE_TARGETS, RULES, SPREAD, nextShot, spreadOf, targetAt, type ShotResult, type V3 } from '../shared/arena';
+import { ARENA, KICK, PRACTICE_TARGETS, RULES, SPREAD, SWAP, WEAPONS, nextShot, spreadOf, targetAt, type ShotResult, type V3, type WeaponId } from '../shared/arena';
 import type { ClientMsg } from '../shared/protocol';
 import type { PlayerController } from './player';
 import type { OfficeSound } from './sound';
 import { store } from './state';
 import { ArenaHUD } from './ui/arena';
-import { SIGHT_Y, rifle, type ArenaWorld } from './world/arena';
+import { SIGHT_Y, gun, type ArenaWorld, type GunModel } from './world/arena';
 import type { Person } from './world/character';
 import type { Hands } from './world/hands';
 import { mesh, toon } from './world/toon';
 
-// Playing in the arena (shared/arena.ts): your rifle in first person, held down to fire (the office
+// Playing in the arena (shared/arena.ts): your gun in first person, held down to fire (the office
 // judges what each shot hits: server/arena.ts), the right button to aim down the sights, R to
-// reload, C to crouch (and slide, from a run), Space at a ledge to climb up, Tab for the scoreboard.
+// reload, 1, 2, Q or the wheel to swap between the rifle and the SMG, C to crouch (and slide, from a
+// run), Space at a ledge to climb up, Tab for the scoreboard.
 // Shots kick the view up and spread wider the faster you move, in the air, firing on. Killed, you
 // watch whoever did it until the office puts you back in. Everyone else holds their rifle where they
 // look, crouches, flashes when hit and falls when killed. main.ts wires it in.
+// Guns are WEAPONS: what they do and how fast (shared/arena.ts), and how they look (world/arena.ts gun).
 
 export interface ArenaWiring {
   send(msg: ClientMsg): void;
@@ -39,28 +41,28 @@ export interface ArenaWiring {
  * - `shielded`: you hit `victim` while they were still safe, just back in: no harm done.
  * - `hurt`: you were hit, `dmg` by `by`, from `angle` (radians from where you look, + to the right), with `hp` left.
  * - `died`: killed by `by` (`name`), who has `hp` left.
+ * - `weapon`: you swapped to gun `w` (shared/arena.ts WEAPONS).
  */
 export type ArenaEvent =
   | { t: 'hit'; victim?: string; target?: number; dmg: number; hp: number; head: boolean; kill: boolean }
   | { t: 'shielded'; victim: string }
   | { t: 'hurt'; by: string; dmg: number; hp: number; head: boolean; angle: number }
-  | { t: 'died'; by: string; name: string; hp: number };
+  | { t: 'died'; by: string; name: string; hp: number }
+  | { t: 'weapon'; w: WeaponId };
 
 /** The view's width (degrees) aiming down the sights, and watching whoever killed you. */
 const ADS_FOV = 48;
 const DEAD_FOV = 40;
-/** Where the rifle sits in front of you, from the hip and aiming down its sights (the sight's dot on the middle of the view). */
+/** Where the gun sits in front of you, from the hip and aiming down its sights (the sight's dot on the middle of the view). */
 const HIP = new THREE.Vector3(0.17, -0.2, -0.52);
-/** The rifle's size in your hands. */
+/** The gun's size in your hands. */
 const GUN_SCALE = 0.75;
 // Close to the eye, as a cheek on the stock: the stock and the back of the rifle drop out of the bottom of the view.
 const ADS = new THREE.Vector3(0, -SIGHT_Y * GUN_SCALE, -0.25);
-/** The fastest you go (m/s) aiming down the sights, and firing from the hip: no running with the trigger down. */
-const PACE = { ads: 2.8, firing: 4.6 };
 /** Someone killed falls over in this long (s), and is gone from sight this long after (s), till they're back in. */
 const FALL = 0.45;
 const GONE = 2.4;
-/** The rifle in everyone else's hands, a touch bigger than yours. */
+/** The gun in everyone else's hands, a touch bigger than yours. */
 const HELD_SCALE = 1.1;
 
 const v = new THREE.Vector3();
@@ -102,13 +104,17 @@ export class ArenaPlay {
   readonly hud = new ArenaHUD();
   /** Your shots this visit, and what they did: for accuracy and headshots on a results screen. */
   readonly stats = { shots: 0, hits: 0, heads: 0, kills: 0, damage: 0 };
-  private gun = rifle();
-  private flash = muzzleFlash(0.24);
+  /** Your two guns, the one in your hands (`weapon`), and the rounds left in each. */
+  private guns = { rifle: this.model('rifle'), smg: this.model('smg') };
+  private weapon: WeaponId = 'rifle';
+  private ammo: Record<WeaponId, number> = { rifle: WEAPONS.rifle.mag, smg: WEAPONS.smg.mag };
+  /** When the gun you swapped to is up and ready (performance.now), while it's coming up; and when you last swapped. */
+  private swapAt = 0;
+  private swappedAt = 0;
   private active = false;
   private firing = false;
   private aiming = false;
   private adsK = 0;
-  private ammo: number = RULES.mag;
   private reloadAt = 0;
   private nextShot = 0;
   private bloom = 0;
@@ -126,8 +132,8 @@ export class ArenaPlay {
   private viewWas: ReturnType<() => PlayerController['view']> | null = null;
   /** Kills in quick succession, for the medals. */
   private recent: number[] = [];
-  /** Guns in everyone else's hands, by peer id, with their muzzles and flashes. */
-  private held = new Map<string, { group: THREE.Group; muzzle: THREE.Object3D; flash: THREE.Mesh; flashT: number }>();
+  /** Everyone else's guns, by peer id: the one in their hands (`w`), each they've held, with its flash, and how long that's left. */
+  private held = new Map<string, { w: WeaponId; models: Partial<Record<WeaponId, GunModel & { flash: THREE.Mesh }>>; flashT: number }>();
   /** When each of the others was killed (performance.now), while they're down. */
   private down = new Map<string, number>();
   /** Those who've fired since they came back in: no longer safe, whatever the office said last. */
@@ -140,10 +146,7 @@ export class ArenaPlay {
   private targets: { root: THREE.Group; fall: number }[] = [];
 
   constructor(private w: ArenaWiring) {
-    this.gun.group.visible = false;
-    this.gun.group.scale.setScalar(GUN_SCALE);
-    w.hands.scene.add(this.gun.group);
-    this.gun.muzzle.add(this.flash);
+    for (const g of Object.values(this.guns)) w.hands.scene.add(g.group);
     window.addEventListener('mousedown', (e) => this.mouse(e, true), true);
     window.addEventListener('mouseup', (e) => this.mouse(e, false), true);
     window.addEventListener('contextmenu', (e) => this.active && w.locked() && e.preventDefault());
@@ -152,6 +155,23 @@ export class ArenaPlay {
       this.aiming = false;
       this.hud.scoreboard(false);
     });
+    // The wheel swaps guns too: one swap at a time, however many notches (or a trackpad's stream of them).
+    window.addEventListener('wheel', (e) => this.active && this.w.locked() && e.deltaY !== 0 && !this.swapAt && this.swap(this.weapon === 'rifle' ? 'smg' : 'rifle'), { passive: true });
+  }
+
+  /** One of your guns, in the hands' scene, hidden, with its flash. */
+  private model(w: WeaponId): GunModel & { flash: THREE.Mesh } {
+    const g = gun(w);
+    g.group.visible = false;
+    g.group.scale.setScalar(GUN_SCALE);
+    const flash = muzzleFlash(0.24);
+    g.muzzle.add(flash);
+    return { ...g, flash };
+  }
+
+  /** The gun in your hands. */
+  private get gun() {
+    return this.guns[this.weapon];
   }
 
   /** You're in the arena (or not): the rifle in your hands, first person, the arena's moves, and the HUD. */
@@ -160,6 +180,10 @@ export class ArenaPlay {
     this.active = on;
     this.firing = this.aiming = false;
     this.adsK = this.kick = this.recoilZ = this.bloom = this.deadK = 0;
+    // The office hands everyone the rifle as they come in.
+    this.weapon = 'rifle';
+    this.swapAt = 0;
+    for (const g of Object.values(this.guns)) g.group.visible = false;
     this.gun.group.visible = on;
     const p = this.w.player;
     this.w.hands.gunPose = on ? { right: new THREE.Vector3(), left: new THREE.Vector3() } : null;
@@ -169,7 +193,7 @@ export class ArenaPlay {
     this.hud.show(on);
     this.hud.scoreboard(false);
     if (on) {
-      this.ammo = RULES.mag;
+      this.ammo = { rifle: WEAPONS.rifle.mag, smg: WEAPONS.smg.mag };
       this.reloadAt = 0;
       this.killer = this.killedBy = undefined;
       Object.assign(this.stats, { shots: 0, hits: 0, heads: 0, kills: 0, damage: 0 });
@@ -203,7 +227,7 @@ export class ArenaPlay {
     }
   }
 
-  /** The arena's keys: R reloads, Tab holds up the scoreboard, C crouches (player.ts reads it). True if it was one of them. */
+  /** The arena's keys: R reloads, 1 and 2 (or Q, back and forth) swap guns, Tab holds up the scoreboard, C crouches (player.ts reads it). True if it was one of them. */
   key(e: KeyboardEvent, down: boolean): boolean {
     if (!this.active) return false;
     if (e.code === 'Tab') {
@@ -215,14 +239,34 @@ export class ArenaPlay {
       this.reload();
       return true;
     }
+    const to = e.code === 'Digit1' ? 'rifle' : e.code === 'Digit2' ? 'smg' : e.code === 'KeyQ' ? (this.weapon === 'rifle' ? 'smg' : 'rifle') : null;
+    if (to) {
+      if (down && !e.repeat) this.swap(to);
+      return true;
+    }
     return e.code === 'KeyC';
   }
 
   private reload() {
-    if (this.reloadAt || this.ammo >= RULES.mag || !this.alive()) return;
-    this.reloadAt = performance.now() + RULES.reload;
+    const gun = WEAPONS[this.weapon];
+    if (this.reloadAt || this.ammo[this.weapon] >= gun.mag || !this.alive() || this.swapAt) return;
+    this.reloadAt = performance.now() + gun.reload;
     this.w.send({ t: 'arena.reload' });
     this.w.sound.gun('reload');
+  }
+
+  /** To gun `w`: whatever reload was under way is dropped, and it takes SWAP ms to come up. */
+  private swap(w: WeaponId) {
+    if (w === this.weapon || !this.alive()) return;
+    this.gun.group.visible = false;
+    this.weapon = w;
+    this.gun.group.visible = true;
+    this.reloadAt = 0;
+    this.swappedAt = performance.now();
+    this.swapAt = this.swappedAt + SWAP;
+    this.w.send({ t: 'arena.weapon', w });
+    this.w.sound.gun('empty');
+    this.event({ t: 'weapon', w });
   }
 
   /** The view's width: narrower aiming down the sights, and closing in on whoever killed you. */
@@ -240,17 +284,25 @@ export class ArenaPlay {
     const alive = this.alive();
     // Back in some way other than arena.spawn (a reconnect while dead): on your feet again.
     if (alive && this.killer !== undefined) this.revive();
+    // The office didn't take a swap (you'd just been killed, say): the gun it says you have, a while after.
+    const was = store.arena.players.find((x) => x.id === store.you)?.w;
+    if (was && was !== this.weapon && now - this.swappedAt > 1500) {
+      this.gun.group.visible = false;
+      this.weapon = was;
+    }
+    const gun = WEAPONS[this.weapon];
     if (this.reloadAt && now >= this.reloadAt) {
       this.reloadAt = 0;
-      this.ammo = RULES.mag;
+      this.ammo[this.weapon] = gun.mag;
     }
-    this.adsK += ((this.aiming && alive && !this.reloadAt && !p.climbing ? 1 : 0) - this.adsK) * Math.min(1, dt * 14);
+    if (this.swapAt && now >= this.swapAt) this.swapAt = 0;
+    this.adsK += ((this.aiming && alive && !this.reloadAt && !this.swapAt && !p.climbing ? 1 : 0) - this.adsK) * Math.min(1, dt * 14);
     this.bloom = Math.max(0, this.bloom - dt * SPREAD.settle);
     // How fast you're going, over the ground: walking spreads shots less than running.
     if (dt > 0) this.speed += (Math.hypot(p.pos.x - this.last.x, p.pos.z - this.last.z) / dt - this.speed) * Math.min(1, dt * 12);
     this.last.copy(p.pos);
-    // Down the sights you creep; with the trigger down you walk.
-    p.speedCap = !alive ? Infinity : this.adsK > 0.5 ? PACE.ads : this.firing ? PACE.firing : Infinity;
+    // Down the sights you creep; with the rifle's trigger down you walk.
+    p.speedCap = !alive ? Infinity : this.adsK > 0.5 ? gun.pace.ads : this.firing ? gun.pace.firing : Infinity;
     // The kick comes back down.
     const back = this.kick * Math.min(1, dt * KICK.settle);
     this.kick -= back;
@@ -258,9 +310,9 @@ export class ArenaPlay {
     this.recoilZ += (0 - this.recoilZ) * Math.min(1, dt * 18);
 
     if (this.firing && alive && this.w.locked() && !p.climbing) {
-      if (this.reloadAt) {
-        /* Reloading: wait. */
-      } else if (this.ammo <= 0) {
+      if (this.reloadAt || this.swapAt) {
+        /* Reloading, or the gun's still coming up: wait. */
+      } else if (this.ammo[this.weapon] <= 0) {
         if (now >= this.nextShot) {
           this.w.sound.gun('empty');
           this.nextShot = now + 250;
@@ -276,23 +328,25 @@ export class ArenaPlay {
     v.x += Math.sin(p.walkPhase) * 0.008 * bob;
     v.y += Math.abs(Math.cos(p.walkPhase)) * 0.008 * bob + (p.grounded ? 0 : 0.02);
     v.z += this.recoilZ;
-    // Lowered while reloading, and while you climb.
-    const r = this.reloadAt ? Math.sin(Math.min(1, 1 - (this.reloadAt - now) / RULES.reload) * Math.PI) : p.climbing ? 0.6 : 0;
-    v.y -= r * 0.12;
+    // Lowered while reloading, and while you climb; just swapped to, coming up from below.
+    const r = this.reloadAt ? Math.sin(Math.min(1, 1 - (this.reloadAt - now) / gun.reload) * Math.PI) : p.climbing ? 0.6 : 0;
+    const up = this.swapAt ? (this.swapAt - now) / SWAP : 0;
+    v.y -= r * 0.12 + up * 0.25;
     g.position.copy(v);
-    g.rotation.set(r * 0.6 + this.recoilZ * 1.5, 0, r * 0.3);
-    // Hands on it: the right at the grip, the left under the handguard.
+    g.rotation.set(r * 0.6 + this.recoilZ * 1.5 - up * 0.6, 0, r * 0.3);
+    // Hands on it: the right at the grip, the left under the front.
     const pose = this.w.hands.gunPose;
     if (pose) {
-      pose.right.set(0.0, -0.09, 0.03).multiplyScalar(GUN_SCALE).applyEuler(g.rotation).add(g.position);
-      pose.left.set(0.0, -0.03, -0.4).multiplyScalar(GUN_SCALE).applyEuler(g.rotation).add(g.position);
+      pose.right.copy(this.gun.hands.right).multiplyScalar(GUN_SCALE).applyEuler(g.rotation).add(g.position);
+      pose.left.copy(this.gun.hands.left).multiplyScalar(GUN_SCALE).applyEuler(g.rotation).add(g.position);
     }
     // Dead, nothing in your hands at all.
     g.visible = alive;
     this.w.hands.scene.visible = alive;
     this.flashT -= dt;
-    this.flash.visible = this.flashT > 0;
-    if (this.flash.visible) this.flash.rotation.z = t * 40;
+    const flash = this.gun.flash;
+    flash.visible = this.flashT > 0;
+    if (flash.visible) flash.rotation.z = t * 40;
     this.deathCam(dt, alive);
 
     const me = store.arena.players.find((x) => x.id === store.you);
@@ -301,9 +355,9 @@ export class ArenaPlay {
       you: store.you,
       state: store.arena,
       now: store.officeNow(),
-      ammo: this.ammo,
-      mag: RULES.mag,
-      reloading: this.reloadAt ? Math.min(1, 1 - (this.reloadAt - now) / RULES.reload) : null,
+      ammo: this.ammo[this.weapon],
+      mag: gun.mag,
+      reloading: this.reloadAt ? Math.min(1, 1 - (this.reloadAt - now) / gun.reload) : null,
       hp: me?.hp ?? RULES.hp,
       spread: 10 + this.spread() * 900,
       ads: this.adsK > 0.6,
@@ -317,13 +371,14 @@ export class ArenaPlay {
   /** How wide your next shot goes (radians), going as you are. */
   private spread(): number {
     const p = this.w.player;
-    return spreadOf(this.speed, p.grounded, this.adsK, this.bloom, p.crouching);
+    return spreadOf(this.speed, p.grounded, this.adsK, this.bloom, p.crouching, WEAPONS[this.weapon]);
   }
 
   private fire(now: number) {
     const p = this.w.player;
-    this.nextShot = nextShot(this.nextShot, now);
-    this.ammo--;
+    const gun = WEAPONS[this.weapon];
+    this.nextShot = nextShot(this.nextShot, now, gun.every);
+    this.ammo[this.weapon]--;
     this.stats.shots++;
     const s = this.spread();
     this.w.camera.getWorldPosition(eye);
@@ -336,13 +391,13 @@ export class ArenaPlay {
     const o: V3 = { x: eye.x, y: eye.y, z: eye.z };
     this.w.send({ t: 'arena.fire', o, d: { x: dir.x, y: dir.y, z: dir.z } });
     this.bloom = Math.min(SPREAD.maxBloom, this.bloom + SPREAD.perShot);
-    const kick = KICK.up * (1 - this.adsK * 0.4) * (p.crouching ? 0.75 : 1);
+    const kick = KICK.up * gun.kick * (1 - this.adsK * 0.4) * (p.crouching ? 0.75 : 1);
     p.lookPitch += kick;
     this.kick += kick * 0.7;
-    p.camYaw += (Math.random() - 0.5) * KICK.side;
-    this.recoilZ = 0.05 * (1 - this.adsK * 0.5);
+    p.camYaw += (Math.random() - 0.5) * KICK.side * gun.kick;
+    this.recoilZ = 0.05 * gun.kick * (1 - this.adsK * 0.5);
     this.flashT = 0.04;
-    this.w.sound.gun('shot');
+    this.w.sound.gun('shot', undefined, this.weapon === 'smg');
   }
 
   /** Where your rifle's muzzle is, out in the world. */
@@ -361,15 +416,15 @@ export class ArenaPlay {
     // The streak starts from the gun's muzzle: yours in your hands, theirs in theirs.
     let o = m.o;
     if (mine) o = this.muzzle();
-    else if (theirs) {
-      theirs.muzzle.getWorldPosition(v);
+    else if (theirs?.models[theirs.w]) {
+      theirs.models[theirs.w]!.muzzle.getWorldPosition(v);
       o = { x: v.x, y: v.y, z: v.z };
       theirs.flashT = 0.05;
     }
     const struck = m.hit !== undefined || m.target !== undefined;
     this.w.world().shot(o, m.end, m.shield ? 'shield' : struck ? (m.head ? 'head' : 'body') : undefined);
     if (!mine) {
-      this.w.sound.gun('shot', m.o);
+      this.w.sound.gun('shot', m.o, m.w === 'smg');
       this.unsafe.add(m.by);
     }
     // Their health as the office has it now, not at its next word.
@@ -454,8 +509,8 @@ export class ArenaPlay {
   spawned(at: { x: number; z: number; rotY: number }) {
     if (!this.active) return;
     this.revive();
-    this.ammo = RULES.mag;
-    this.reloadAt = 0;
+    this.ammo = { rifle: WEAPONS.rifle.mag, smg: WEAPONS.smg.mag };
+    this.reloadAt = this.swapAt = 0;
     this.nextShot = 0;
     this.w.placeAt({ x: at.x, y: 0, z: at.z, rotY: at.rotY });
     this.last.copy(this.w.player.pos);
@@ -486,20 +541,22 @@ export class ArenaPlay {
       if (!them) continue;
       const peer = store.peers.get(pl.id);
       let held = this.held.get(pl.id);
-      if (!held) {
-        const gun = rifle();
-        gun.group.scale.setScalar(HELD_SCALE);
+      if (!held) this.held.set(pl.id, (held = { w: pl.w, models: {}, flashT: 0 }));
+      held.w = pl.w ?? 'rifle';
+      let m = held.models[held.w];
+      if (!m) {
+        const g = gun(held.w);
+        g.group.scale.setScalar(HELD_SCALE);
         const flash = muzzleFlash(0.3);
-        gun.muzzle.add(flash);
-        held = { group: gun.group, muzzle: gun.muzzle, flash, flashT: 0 };
-        this.held.set(pl.id, held);
+        g.muzzle.add(flash);
+        m = held.models[held.w] = { ...g, flash };
       }
-      them.holdRifle(held.group);
+      them.holdRifle(m.group);
       // Killed, they let go of it.
-      held.group.visible = pl.alive;
+      m.group.visible = pl.alive;
       held.flashT -= dt;
-      held.flash.visible = held.flashT > 0;
-      if (held.flash.visible) held.flash.rotation.z = t * 40;
+      m.flash.visible = held.flashT > 0;
+      if (m.flash.visible) m.flash.rotation.z = t * 40;
       const ease = Math.min(1, dt * 12);
       them.aimPitch += ((peer?.pitch ?? 0) - them.aimPitch) * ease;
       them.crouchK += ((peer?.crouch ? 1 : 0) - them.crouchK) * ease;
@@ -541,6 +598,14 @@ export class ArenaPlay {
     }
     this.shells.get(id)?.removeFromParent();
     this.shells.delete(id);
+    // Their guns' own geometry, sight dots and flashes go (the toon paints are shared).
+    for (const m of Object.values(this.held.get(id)?.models ?? {})) {
+      m.group.traverse((o) => {
+        const { geometry, material } = o as THREE.Mesh;
+        geometry?.dispose();
+        if (material && !(material instanceof THREE.MeshToonMaterial)) (material as THREE.Material).dispose();
+      });
+    }
     this.held.delete(id);
     this.down.delete(id);
     this.unsafe.delete(id);

@@ -15,6 +15,9 @@ import {
   PRACTICE_TARGETS,
   RULES,
   SPAWNS,
+  SWAP,
+  WEAPONS,
+  damageOf,
   nextShot,
   rayBox,
   rayPerson,
@@ -316,7 +319,7 @@ test('practice targets: in warm-up alone, shot down in four, back up after a whi
 });
 
 test('coming back in: a spawn out of everyone\'s sight, even when the furthest one is in it', () => {
-  const spots: Record<string, V3> = { a: { x: C.x - 30, y: 0, z: C.z - 30 }, c: { x: C.x - 30, y: 0, z: C.z + 12 } };
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, c: { x: C.x - 30, y: 0, z: C.z + 14 } };
   const a = new ArenaControl((id) => spots[id]);
   for (const id of ['a', 'b', 'c']) a.join(id, id, 0);
   const sees = (from: V3, s: { x: number; z: number }) => {
@@ -329,4 +332,48 @@ test('coming back in: a spawn out of everyone\'s sight, even when the furthest o
   assert.ok(sees(spots.a, furthest) || sees(spots.c, furthest), 'the furthest spawn is in sight');
   const s = a.spawnFor('b');
   assert.ok(!sees(spots.a, s) && !sees(spots.c, s), `spawn ${s.x - C.x}, ${s.z - C.z} out of sight`);
+});
+
+test('two guns: a swap takes a moment and drops the reload; the SMG fires faster from its own magazine and weakens with range', () => {
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 12, y: 0, z: C.z - 30 } };
+  const a = new ArenaControl((id) => spots[id]);
+  let now = 4_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  now += RULES.safe * 1000;
+  const o = { x: spots.a.x, y: EYE_Y, z: spots.a.z };
+  const at = (id: string) => ({ x: spots[id].x - o.x, y: 0.75 - EYE_Y, z: spots[id].z - o.z });
+  const down = { x: 0, y: -1, z: 0.1 };
+  assert.equal(a.fire('a', o, down, now)?.w, 'rifle');
+  // Half the rifle's mag gone, a reload started, then a swap: no shots till it's up, and the reload's off.
+  for (let i = 1; i < 15; i++) a.fire('a', o, down, (now += WEAPONS.rifle.every));
+  assert.ok(a.reload('a', now));
+  assert.ok(a.weapon('a', 'smg', now));
+  assert.equal(a.state().players.find((p) => p.id === 'a')!.w, 'smg');
+  assert.equal(a.weapon('a', 'smg', now), false, 'already in hand');
+  assert.equal(a.fire('a', o, down, now + SWAP / 2), undefined, 'still coming up');
+  now += SWAP;
+  // Then the SMG's quicker rate: a shot 65 ms after the last is fine, as the rifle's 100 ms gap isn't needed.
+  let shots = 0;
+  for (let i = 0; i < 20; i++) if (a.fire('a', o, down, (now += WEAPONS.smg.every))) shots++;
+  assert.equal(shots, 20);
+  // Its own magazine: 35 rounds, the rifle's 15 left alone.
+  for (let i = 0; i < 15; i++) a.fire('a', o, down, (now += WEAPONS.smg.every));
+  assert.equal(a.fire('a', o, down, (now += WEAPONS.smg.every)), undefined, 'the SMG is empty');
+  assert.ok(a.weapon('a', 'rifle', now));
+  now += SWAP;
+  let left = 0;
+  while (a.fire('a', o, down, (now += WEAPONS.rifle.every))) left++;
+  assert.equal(left, WEAPONS.rifle.mag - 15, 'the rifle kept its rounds');
+  // A hit from 8 m does the SMG's full damage; at range less, never under its floor; the rifle's the same at any range.
+  a.weapon('a', 'smg', now);
+  now += SWAP;
+  assert.ok(a.reload('a', now), 'the empty SMG reloads');
+  now += WEAPONS.smg.reload;
+  const hit = a.fire('a', o, at('b'), now);
+  assert.deepEqual([hit?.hit, hit?.dmg, hit?.w], ['b', WEAPONS.smg.body, 'smg']);
+  assert.equal(damageOf(WEAPONS.smg, false, 8), 17);
+  assert.equal(damageOf(WEAPONS.smg, false, 21), Math.round(17 * 0.8));
+  assert.equal(damageOf(WEAPONS.smg, false, 60), Math.round(17 * 0.6));
+  assert.equal(damageOf(WEAPONS.rifle, true, 60), RULES.head);
 });

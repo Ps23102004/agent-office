@@ -54,7 +54,7 @@ import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
 import { ArenaControl } from './arena.js';
-import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF } from '../shared/arena.js';
+import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF, isWeapon } from '../shared/arena.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
 
 const MIME: Record<string, string> = {
@@ -1750,6 +1750,9 @@ export async function startServer(cfg: Config) {
       }
       case 'arena.reload':
         if (c.peer.floor === ARENA) arena.reload(c.id, Date.now());
+        break;
+      case 'arena.weapon':
+        if (c.peer.floor === ARENA && isWeapon(msg.w) && arena.weapon(c.id, msg.w, Date.now())) arenaChanged();
         break;
       case 'race.leave':
         if (race.leave(c.id)) raceChanged();

@@ -4,6 +4,9 @@ import {
   PRACTICE_TARGETS,
   RULES,
   SPAWNS,
+  SWAP,
+  WEAPONS,
+  damageOf,
   eyeY,
   idleArena,
   rayPerson,
@@ -14,6 +17,7 @@ import {
   type Body,
   type ShotResult,
   type V3,
+  type WeaponId,
 } from '../shared/arena.js';
 
 export type { ShotResult } from '../shared/arena.js';
@@ -33,15 +37,19 @@ const VIEW_LAG = 100;
 const MAX_REWIND = 300;
 /** How long (ms) the office keeps where everyone's been. */
 const TRAIL = 1000;
-/** Slack (ms) for shots and reloads bunched up on their way: the average rate still can't beat RULES.every. */
-const JITTER = RULES.every / 2;
+/** Slack (ms) for shots and reloads bunched up on their way, half a gap between shots: the average rate still can't beat the gun's. */
+const jitter = (w: WeaponId) => WEAPONS[w].every / 2;
 /** How far (m) the eyes a shot leaves from can be off where the office has them, up or down: a step, a bob, a moment's lag. */
 const REACH_Y = 0.7;
 /** Kills kept in the feed. */
 const FEED = 6;
 
+/** Full guns, both of them. */
+const fullMags = (): Record<WeaponId, number> => ({ rifle: WEAPONS.rifle.mag, smg: WEAPONS.smg.mag });
+
 interface Gun {
-  ammo: number;
+  /** Rounds left in each gun (the one in their hands is ArenaPlayer.w). */
+  ammo: Record<WeaponId, number>;
   /** When the next shot can go (epoch ms): after the last one, or the reload. */
   ready: number;
   /** When the reload's done, while reloading. */
@@ -86,8 +94,8 @@ export class ArenaControl {
   /** `id` came into the arena: in, alive, and safe for a moment. */
   join(id: string, name: string, now: number) {
     if (this.has(id)) return;
-    this.arena.players.push({ id, name, kills: 0, deaths: 0, streak: 0, hp: RULES.hp, alive: true, safeUntil: now + RULES.safe * 1000 });
-    this.guns.set(id, { ammo: RULES.mag, ready: now, hurtAt: 0 });
+    this.arena.players.push({ id, name, kills: 0, deaths: 0, streak: 0, hp: RULES.hp, alive: true, safeUntil: now + RULES.safe * 1000, w: 'rifle' });
+    this.guns.set(id, { ammo: fullMags(), ready: now, hurtAt: 0 });
     this.settle(now);
   }
 
@@ -128,12 +136,28 @@ export class ArenaControl {
     return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, crouch: k < 0.5 ? a.crouch : b.crouch };
   }
 
-  /** `id` starts reloading. */
+  /** `id` starts reloading the gun in their hands. */
   reload(id: string, now: number): boolean {
     const g = this.guns.get(id);
-    if (!g || g.reloadAt !== undefined || g.ammo >= RULES.mag) return false;
-    g.reloadAt = now + RULES.reload;
+    const w = this.arena.players.find((p) => p.id === id)?.w;
+    if (!g || !w || g.reloadAt !== undefined || g.ammo[w] >= WEAPONS[w].mag) return false;
+    g.reloadAt = now + WEAPONS[w].reload;
     g.ready = Math.max(g.ready, g.reloadAt);
+    return true;
+  }
+
+  /**
+   * `id` swaps to gun `w`: a reload under way is dropped (the rounds stay as they were), and there's no
+   * firing for SWAP ms. Says whether they did (everyone should hear: it's in their hands).
+   */
+  weapon(id: string, w: WeaponId, now: number): boolean {
+    const me = this.arena.players.find((p) => p.id === id);
+    const g = this.guns.get(id);
+    if (!me || !g || !me.alive || me.w === w || !WEAPONS[w]) return false;
+    me.w = w;
+    delete g.reloadAt;
+    // Longer than any gun's gap between shots, so it never fires sooner than it could have.
+    g.ready = now + SWAP;
     return true;
   }
 
@@ -144,16 +168,18 @@ export class ArenaControl {
    * moment ago. A bot leaves it out: it sees everyone where they are.
    */
   fire(id: string, o: V3, d: V3, now: number, rtt?: number): ShotResult | undefined {
-    // Only the reload: respawns, healing and the match clock are the timer's (tick), which tells everyone.
     const g = this.guns.get(id);
-    if (g?.reloadAt !== undefined && now >= g.reloadAt - JITTER) {
-      g.ammo = RULES.mag;
-      delete g.reloadAt;
-    }
     const me = this.arena.players.find((p) => p.id === id);
     const at = this.where(id);
-    if (!me || !g || !at || !me.alive || this.arena.phase === 'over') return undefined;
-    if (g.reloadAt !== undefined || g.ammo <= 0 || now < g.ready - JITTER) return undefined;
+    if (!me || !g || !at) return undefined;
+    const w = me.w, gun = WEAPONS[w];
+    // Only the reload: respawns, healing and the match clock are the timer's (tick), which tells everyone.
+    if (g.reloadAt !== undefined && now >= g.reloadAt - jitter(w)) {
+      g.ammo[w] = gun.mag;
+      delete g.reloadAt;
+    }
+    if (!me.alive || this.arena.phase === 'over') return undefined;
+    if (g.reloadAt !== undefined || g.ammo[w] <= 0 || now < g.ready - jitter(w)) return undefined;
     const len = Math.hypot(d.x, d.y, d.z);
     if (!(len > 0.5) || ![o.x, o.y, o.z].every(Number.isFinite)) return undefined;
     const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
@@ -162,9 +188,9 @@ export class ArenaControl {
     // Not round a corner or over cover from behind it: the eyes have to see where the shot leaves from.
     const gap = Math.hypot(o.x - eye.x, o.y - eye.y, o.z - eye.z);
     if (gap > 0.05 && rayWorld(eye, { x: (o.x - eye.x) / gap, y: (o.y - eye.y) / gap, z: (o.z - eye.z) / gap }, gap) < gap - 0.05) return undefined;
-    g.ammo--;
+    g.ammo[w]--;
     // From the last shot's slot, not when this one got here: a late one doesn't push the next back.
-    g.ready = Math.max(g.ready, now - JITTER) + RULES.every;
+    g.ready = Math.max(g.ready, now - jitter(w)) + gun.every;
     // Firing gives up being safe.
     delete me.safeUntil;
     const back = rtt === undefined ? 0 : Math.min(MAX_REWIND, Math.max(0, rtt) + VIEW_LAG);
@@ -185,24 +211,24 @@ export class ArenaControl {
       }
     }
     const end = { x: o.x + dir.x * t, y: o.y + dir.y * t, z: o.z + dir.z * t };
-    if (!near) return { end };
+    if (!near) return { w, end };
     const { head } = near;
-    const dmg = head ? RULES.head : RULES.body;
+    const dmg = damageOf(gun, head, t);
     if (near.target !== undefined) {
       const i = near.target;
       this.targetHp[i] -= dmg;
-      if (this.targetHp[i] > 0) return { end, target: i, head, dmg, hp: this.targetHp[i] };
+      if (this.targetHp[i] > 0) return { w, end, target: i, head, dmg, hp: this.targetHp[i] };
       this.targetHp[i] = RULES.hp;
       this.targetsDown[i] = now + PRACTICE_DOWN * 1000;
-      return { end, target: i, head, dmg, hp: 0, kill: true };
+      return { w, end, target: i, head, dmg, hp: 0, kill: true };
     }
     const victim = this.arena.players.find((p) => p.id === near.id)!;
-    if (now < (victim.safeUntil ?? 0)) return { end, shield: victim.id };
+    if (now < (victim.safeUntil ?? 0)) return { w, end, shield: victim.id };
     victim.hp = Math.max(0, victim.hp - dmg);
     this.guns.get(victim.id)!.hurtAt = now;
-    if (victim.hp > 0) return { end, hit: victim.id, head, dmg, hp: victim.hp };
+    if (victim.hp > 0) return { w, end, hit: victim.id, head, dmg, hp: victim.hp };
     this.killed(me, victim, head, now);
-    return { end, hit: victim.id, head, dmg, hp: 0, kill: true, streak: me.streak };
+    return { w, end, hit: victim.id, head, dmg, hp: 0, kill: true, streak: me.streak };
   }
 
   /**
@@ -219,14 +245,14 @@ export class ArenaControl {
     for (const p of a.players) {
       const g = this.guns.get(p.id)!;
       if (g.reloadAt !== undefined && now >= g.reloadAt) {
-        g.ammo = RULES.mag;
+        g.ammo[p.w] = WEAPONS[p.w].mag;
         delete g.reloadAt;
       }
       if (!p.alive && now >= (p.respawnAt ?? 0) && a.phase !== 'over') {
         const s = this.spawnFor(p.id);
         Object.assign(p, { alive: true, hp: RULES.hp, safeUntil: now + RULES.safe * 1000 });
         delete p.respawnAt;
-        Object.assign(g, { ammo: RULES.mag, ready: now, hurtAt: 0 });
+        Object.assign(g, { ammo: fullMags(), ready: now, hurtAt: 0 });
         delete g.reloadAt;
         this.trails.delete(p.id);
         spawned.push({ id: p.id, ...s });

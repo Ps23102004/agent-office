@@ -14,7 +14,7 @@ import type { CustomMap } from './maps/index.js';
 import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { RaceState } from './race.js';
-import type { ArenaState, ShotResult, V3 } from './arena.js';
+import type { ArenaState, ShotResult, V3, WeaponId } from './arena.js';
 import type { MeetPin, MeetSpotId } from './meet.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
@@ -1285,6 +1285,8 @@ export type ClientMsg =
   | { t: 'arena.fire'; o: V3; d: V3 }
   /** In the arena: reload. */
   | { t: 'arena.reload' }
+  /** In the arena: you swapped guns (shared/arena.ts WEAPONS). */
+  | { t: 'arena.weapon'; w: WeaponId }
   /** Post a meeting spot to the office chat (shared/meet.ts): on or under your floor where it's one of those. */
   | { t: 'meet.post'; spot: MeetSpotId }
   /** Driving, offer the empty seat beside you to `to` (a peer id) nearby on your floor: they're seated only once they say yes. */

@@ -945,11 +945,11 @@ export class OfficeSound {
   // ---- The arena ----------------------------------------------------------------------------------
 
   /**
-   * The arena's rifle and what comes of it (client/arena.ts): a shot (yours, or someone's `at` where
-   * they are), the reload's clicks, an empty click, the tick of a hit (the head's higher, a kill's a
-   * double), and the thud of being hit.
+   * The arena's guns and what comes of them (client/arena.ts): a shot (yours, or someone's `at` where
+   * they are; the SMG's, `light`, snappier and higher), the reload's clicks, an empty click, the tick
+   * of a hit (the head's higher, a kill's a double), and the thud of being hit.
    */
-  gun(kind: 'shot' | 'reload' | 'empty' | 'hit' | 'head' | 'kill' | 'hurt', at?: Pos) {
+  gun(kind: 'shot' | 'reload' | 'empty' | 'hit' | 'head' | 'kill' | 'hurt', at?: Pos, light = false) {
     const ctx = this.ctx;
     if (!ctx) return;
     this.count(`gun-${kind}`);
@@ -963,18 +963,19 @@ export class OfficeSound {
     if (kind === 'shot') {
       const crack = this.noise(this.buf.white);
       const tone = biquad(ctx, 'lowpass', 5200, 0.8);
-      tone.frequency.setValueAtTime(5200, t0);
-      tone.frequency.exponentialRampToValueAtTime(700, t0 + 0.16);
+      tone.frequency.setValueAtTime(light ? 7000 : 5200, t0);
+      tone.frequency.exponentialRampToValueAtTime(light ? 1100 : 700, t0 + (light ? 0.09 : 0.16));
       const g = ctx.createGain();
+      const k = light ? 0.75 : 1;
       envelope(g.gain, t0, [
-        [0.002, at ? 0.55 : 0.7],
-        [0.05, at ? 0.18 : 0.25],
-        [0.2, 0],
+        [0.002, (at ? 0.55 : 0.7) * k],
+        [light ? 0.03 : 0.05, (at ? 0.18 : 0.25) * k],
+        [light ? 0.12 : 0.2, 0],
       ]);
       crack.connect(tone).connect(g).connect(out);
       crack.start(t0);
       crack.stop(t0 + 0.25);
-      this.blip(out, t0, 140, 0.4, 0.14, at ? 0.35 : 0.5);
+      this.blip(out, t0, light ? 210 : 140, 0.4, light ? 0.08 : 0.14, (at ? 0.35 : 0.5) * k);
     } else if (kind === 'reload') {
       this.blip(out, t0, 1800, 0.7, 0.04, 0.12, 'square');
       this.blip(out, t0 + 0.55, 900, 0.6, 0.05, 0.14, 'square');
