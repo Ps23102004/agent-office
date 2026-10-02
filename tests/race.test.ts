@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CENTER, CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, PADDOCK, TRACK, checkpoint, circuitGround, crossed, gridPose, inGate, nearestProgress, onTrack, pointAt, pastLine, resetSpots, surfaceAt, track, GRASS_TOP } from '../src/shared/circuit.js';
-import { RACE_PLAZA, cityPaved, citySolids } from '../src/shared/city.js';
+import { CENTER, CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, PADDOCK, TRACK, besideGate, checkpoint, circuitGround, crossed, gridPose, inGate, nearestProgress, onTrack, pointAt, pastLine, resetSpots, surfaceAt, track, GRASS_TOP } from '../src/shared/circuit.js';
+import { RACE_PLAZA, cityPaved, citySolids, vehicleSolids } from '../src/shared/city.js';
+import { CITY_ARENA_GATE } from '../src/shared/arena.js';
+import { SPECS, carFits, carPoint } from '../src/shared/garage.js';
 import { RACE } from '../src/shared/race.js';
 import { RaceControl } from '../src/server/race.js';
 import { Garage } from '../src/server/garage.js';
@@ -169,6 +171,23 @@ test('the city gate is on an open, paved plaza off the street', () => {
   assert.deepEqual(citySolids(g.x, g.z, 12), [], 'no building or tree in the way');
   assert.ok(inGate(g, g.x, g.z) && !inGate(g, g.out.x, g.out.z), 'you come out clear of it');
   assert.ok(inGate(CIRCUIT_GATE, CIRCUIT_GATE.x, CIRCUIT_GATE.z) && !inGate(CIRCUIT_GATE, CIRCUIT_GATE.out.x, CIRCUIT_GATE.out.z));
+});
+
+test('a car driven into any gate waits beside it, every bit of it clear of the way through', () => {
+  for (const g of [CITY_GATE, CITY_ARENA_GATE, CIRCUIT_GATE]) {
+    const where = g === CIRCUIT_GATE ? circuitGround : undefined;
+    for (const kind of Object.keys(SPECS) as (keyof typeof SPECS)[]) {
+      const p = besideGate(g).find((p) => carFits(p, vehicleSolids(p.x, p.z, 8), kind, where));
+      assert.ok(p, `room for a ${kind} beside the gate at ${g.x}, ${g.z}`);
+      const { length, width } = SPECS[kind];
+      for (const [lx, lz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
+        // Across the gate's line of travel, past the opening's edge: not in it, nor in front of it.
+        const c = carPoint(p, (lx * width) / 2, (lz * length) / 2);
+        const across = (c.x - g.x) * Math.cos(g.rotY) - (c.z - g.z) * Math.sin(g.rotY);
+        assert.ok(Math.abs(across) > g.width / 2, `a ${kind}'s corner in the way through the gate at ${g.x}, ${g.z}`);
+      }
+    }
+  }
 });
 
 test('the circuit cars go where the circuit says, not the city', () => {

@@ -82,6 +82,9 @@ export function missedCheckpoint(from: { x: number; z: number }, to: { x: number
   if (ahead < 0 || d(ahead) > 3) ahead = next;
   for (let i = 0; i < CHECKPOINTS; i++) {
     if (!crossed(i, from, to)) continue;
+    // The line you were last counted through: off the grid over the start line (the office counts
+    // it as the lights go out), or rolling back over it. Nothing missed.
+    if (d(i) === CHECKPOINTS - 1) continue;
     if (d(i) > d(ahead)) return ahead;
     if (d(i + 1) > d(ahead)) ahead = (i + 1) % CHECKPOINTS;
   }

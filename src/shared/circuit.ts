@@ -388,6 +388,17 @@ export function inGate(g: Gate, x: number, z: number): boolean {
   return Math.abs(across) < g.width / 2 - 0.4 && Math.abs(along) < 1.6;
 }
 
+/**
+ * Where a car driven into gate `g` waits while you're away, nearest first: 2 m short of its `out`
+ * side, 2 m and then 6 m clear of the opening's edge either side, facing through it. Out of the way
+ * of the next one through.
+ */
+export function besideGate(g: Gate): { x: number; z: number; rotY: number }[] {
+  const s = Math.sin(g.rotY), c = Math.cos(g.rotY);
+  const d = g.width / 2 + 2;
+  return [-d, d, -d - 4, d + 4].map((a) => ({ x: g.out.x + s * 2 + c * a, z: g.out.z + c * 2 - s * a, rotY: g.rotY }));
+}
+
 /** The circuit's cars, waiting nose-out in front of the pit garages. Racer.car is an index into these. */
 export const CIRCUIT_CARS: readonly CarDef[] = (
   [

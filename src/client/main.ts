@@ -35,7 +35,7 @@ import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
 import { CARS, SPECS, carFits, carPoint, seatHips, type CarDef, type CarSeat } from '../shared/garage';
-import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_COURSE, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, resetSpots, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
+import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_COURSE, besideGate, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, resetSpots, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
 import { ARENA, ARENA_GATE, ARENA_NAME, CITY_ARENA_GATE } from '../shared/arena';
 import { buildArena, type ArenaWorld } from './world/arena';
@@ -47,7 +47,7 @@ import { RACE } from '../shared/race';
 import { Smoke } from './world/smoke';
 // W1 island: splashes in the sea, and where you come back out of it.
 import { Splashes } from './world/ocean';
-import { shoreRespawn, surfaceAt } from '../shared/city';
+import { shoreRespawn, surfaceAt, vehicleSolids } from '../shared/city';
 import { HAZE_MAX, Sky, describeSky } from './world/sky';
 import { Laptop } from './world/laptop';
 import { BoardTexture, QueueBoardTexture, ServicesBoardTexture } from './world/boards';
@@ -1045,10 +1045,16 @@ function inGateNow(g: Gate): boolean {
   return Math.abs(player.pos.y - streetY()) < 1.2 && inGate(g, at.x, at.z);
 }
 
+/** The gate whose opening you (or the car you're in) are in, of the place you're at. */
+function gateHere(): Gate | null {
+  const gates = atArena ? [ARENA_GATE] : atCircuit ? [CIRCUIT_GATE] : [CITY_GATE, CITY_ARENA_GATE];
+  return gates.find(inGateNow) ?? null;
+}
+
 /** Each frame: walked or driven into a gate, you go through it (the city's to the circuit, the circuit's back). */
 function gates() {
   if (trip || !store.floor || upTop || !player.enabled || (!away() && !inOffice())) return;
-  const inside = atArena ? (inGateNow(ARENA_GATE) ? ARENA_GATE : null) : atCircuit ? (inGateNow(CIRCUIT_GATE) ? CIRCUIT_GATE : null) : inGateNow(CITY_GATE) ? CITY_GATE : inGateNow(CITY_ARENA_GATE) ? CITY_ARENA_GATE : null;
+  const inside = gateHere();
   if (!inside) gateArmed = true;
   else if (gateArmed) {
     gateArmed = false;
@@ -1102,14 +1108,31 @@ function goThrough(floor: string, at?: { x: number; y: number; z: number; rotY: 
   if (golf.active) golf.stop();
   if (thrower.active) thrower.stop();
   if (player.seat) standUp();
-  trip = { floor, how: 'switch', timer: window.setTimeout(tripFailed, 10_000) };
+  // Which gate you drove in by, now: in the blink the car may roll on out of its opening.
+  const gate = gateHere();
+  // What was said at the circuit or the arena (a race's "Go!", a missed checkpoint) is old news where you're going.
+  trip = { floor, how: 'switch', timer: window.setTimeout(tripFailed, 10_000), stale: away() ? [...$('toasts').children] : undefined };
   player.enabled = false;
   player.clearKeys();
   fade(true, true);
   setTimeout(() => {
+    if (gate) parkBesideGate(gate);
     dropCar();
     net.send({ t: 'floor.go', floor, ...(at ? { at } : {}) });
   }, 170);
+}
+
+/** The car you drove into gate `g`, pulled over beside it while the lights are down: it waits there, out of the way of the next one through. */
+function parkBesideGate(g: Gate) {
+  const i = driver.car;
+  if (i === null || !driver.driving) return;
+  const kind = carDefs()[i].kind;
+  const others = fleet().solids(i);
+  const spot = besideGate(g).find((p) => carFits(p, [...others, ...vehicleSolids(p.x, p.z, 8)], kind, atCircuit ? circuitGround : undefined));
+  if (!spot) return;
+  const pose = { ...spot, speed: 0, steer: 0, slip: 0 };
+  fleet().place(i, pose);
+  net.send({ t: 'car.drive', car: i, ...pose });
 }
 
 /** Arrived through a gate: out of the one at the other end, on foot or in a car (a circuit car of the kind you came in, or your own back in the city). */
@@ -1174,8 +1197,9 @@ function meetGo(pin: MeetPin) {
   if (walkingTo) stopWalking();
   errand = null;
   meeting = { pin, walking: false, steps: 0 };
-  toast(`🚶 On the way to ${meetLabel(pin)}`);
   meetTick();
+  // After the first step, so a blink through a gate on the way doesn't take it with the old news (and not if you're there already).
+  if (meeting) toast(`🚶 On the way to ${meetLabel(pin)}`);
 }
 
 /** Each frame: the next step to the meeting spot, once the last one's done. */
@@ -1819,7 +1843,7 @@ type TripKind = 'elevator' | 'switch' | Grip;
  * A trip under way: the lights are down (and by elevator the doors are shut) until the next floor
  * arrives. `garage` is down to the garage under it.
  */
-let trip: { floor: string; how: TripKind; timer: number; garage?: boolean } | null = null;
+let trip: { floor: string; how: TripKind; timer: number; garage?: boolean; stale?: Element[] } | null = null;
 
 function showElevator() {
   openElevator({ net, ride, downstairs });
@@ -2066,6 +2090,7 @@ function arrive(how: TripKind | 'back' = trip?.how ?? 'elevator') {
   noticeWaiting();
   syncStack();
   if (trip) {
+    for (const el of trip.stale ?? []) el.remove();
     // Down to the garage: into the car at the bottom of the shaft, now that the street is where this floor has it.
     if (trip.garage && store.floor) placeInCar(player.pos, true);
     clearTimeout(trip.timer);
