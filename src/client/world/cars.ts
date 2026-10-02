@@ -303,16 +303,19 @@ export function supercar(kind: CarKind, color: string): CarModel {
   const T = h.tail, N = h.nose;
   // The lights: lenses (one unlit mesh between them), with what lights up over each.
   const heads: Lamp[] = [], tails: Lamp[] = [], backs: Lamp[] = [];
-  // Mirrors out by the windshield's foot: housing, stalk and glass.
-  const zm = c.to - 0.3, xm = c.belt(zm) + 0.17, ym = h.crest(zm) + 0.09;
+  // Mirrors out by the windshield's foot: the housing down on the shoulder, its stalk out from the side
+  // window (where that is at the stalk's height: up from the beltline to the roof's edge), and the glass.
+  const zm = c.to - 0.3, xm = c.belt(zm) + 0.17, ym = h.crest(zm) + 0.04, sy = ym - 0.03;
+  const [, [bx, by], [rx, ry]] = cabinSlice(h, zm);
+  const x0 = bx + ((rx - bx) * (sy - by)) / (ry - by), x1 = xm - 0.1;
   for (const sx of [-1, 1]) {
     add(lampBox([0.2, 0.09, 0.13], [sx * xm, ym, zm]), 'paint');
-    add(lampBox([0.14, 0.03, 0.05], [sx * (xm - 0.1), ym - 0.03, zm + 0.02]), 'dark');
+    add(lampBox([x1 - x0 + 0.02, 0.03, 0.05], [(sx * (x0 + x1)) / 2, sy, zm + 0.02]), 'dark');
     add(lampBox([0.16, 0.065, 0.01], [sx * xm, ym, zm - 0.066]), 'glass');
   }
-  // Under the tail, the diffuser's fins.
-  const ramp = Math.atan2(h.floor(T) - h.floor(T + 0.37), 0.37);
-  for (const x of [-0.45, -0.15, 0.15, 0.45]) add(lampBox([0.025, 0.12, 0.36], [x, (h.floor(T) + h.floor(T + 0.37)) / 2 - 0.05, T + 0.18], [ramp, 0, 0]), 'dark');
+  // Under the tail, the diffuser's fins: down from its ramp to the floor's level and no lower, so they don't scrape the road on the springs.
+  const [fy0, fy1] = [h.floor(T + 0.37), h.floor(T)];
+  for (const x of [-0.45, -0.15, 0.15, 0.45]) add(lampBox([0.025, fy1 - fy0, 0.36], [x, (fy0 + fy1) / 2, T + 0.18]), 'dark');
   /** A dark intake on a flank, through the corners (z, y) given, flush with the side. */
   const intake = (corners: [number, number][]) => {
     for (const sx of [-1, 1]) {
@@ -337,7 +340,7 @@ export function supercar(kind: CarKind, color: string): CarModel {
       add(lampBox([0.025, 0.15, 0.38], [sx * 0.93, 1.04, -2.15]), 'dark');
     }
     // The splitter under the nose, a slot between the intakes, the engine's grille across the tail, and the wing (its trailing edge up).
-    add(lampBox([1.62, 0.03, 0.3], [0, 0.13, N - 0.14]), 'dark');
+    add(lampBox([1.62, 0.03, 0.3], [0, h.floor(N - 0.29) + 0.015, N - 0.14]), 'dark');
     add(lampBox([0.34, 0.06, 0.05], [0, 0.3, N - 0.005]), 'dark');
     add(lampBox([1.12, 0.14, 0.04], [0, 0.48, T - 0.005]), 'dark');
     add(lampBox([1.86, 0.035, 0.34], [0, 1.085, -2.15], [0.12, 0, 0]), 'dark');
@@ -350,7 +353,7 @@ export function supercar(kind: CarKind, color: string): CarModel {
       for (const off of [0.3, 0.6]) tails.push(roundLamp(0.075, [sx * off, 0.64, T - 0.01]));
       backs.push(boxLamp([0.14, 0.05, 0.04], [sx * 0.45, 0.5, T - 0.01]));
       // Intakes either side of the grille, the badge on each front fender, two exhausts a side.
-      add(lampBox([0.26, 0.1, 0.05], [sx * 0.62, 0.26, N - 0.03]), 'dark');
+      add(lampBox([0.17, 0.1, 0.05], [sx * 0.59, 0.26, N - 0.01]), 'dark');
       add(lampBox([0.015, 0.11, 0.09], [sx * (flank(h, 0.82, 0.64) + 0.005), 0.64, 0.82]), 'badge');
       for (const dx of [0.32, 0.48]) {
         add(new THREE.CylinderGeometry(0.052, 0.052, 0.14, 12).rotateX(Math.PI / 2).translate(sx * dx, 0.3, T - 0.03), 'metal');
@@ -359,7 +362,7 @@ export function supercar(kind: CarKind, color: string): CarModel {
     }
     // The grille, the splitter, the badge on the nose, a vent between the tail lights and the ducktail's lip.
     add(lampBox([1.0, 0.15, 0.05], [0, 0.29, N - 0.01]), 'dark');
-    add(lampBox([1.5, 0.025, 0.22], [0, 0.135, N - 0.11]), 'dark');
+    add(lampBox([1.5, 0.025, 0.22], [0, h.floor(N - 0.22) + 0.0125, N - 0.11]), 'dark');
     add(lampBox([0.1, 0.12, 0.03], [0, 0.46, N - 0.04]), 'badge');
     add(lampBox([0.86, 0.07, 0.03], [0, 0.5, T - 0.005]), 'dark');
     add(lampBox([1.5, 0.035, 0.17], [0, h.crest(-2.2) + 0.02, -2.2], [0.25, 0, 0]), 'paint');

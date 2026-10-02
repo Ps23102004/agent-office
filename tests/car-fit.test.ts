@@ -118,6 +118,24 @@ test('a fender never comes down through its tire, at the most the body ever pitc
   }
 });
 
+test('nothing under a body comes down onto the road, at the most it ever pitches, rolls and bobs', () => {
+  const v = new THREE.Vector3();
+  for (const kind of [...CLOSED, 'race-future'] as const) {
+    const m = supercar(kind, '#3366cc');
+    const body = meshesUnder(m.body, new Set(m.wheels));
+    for (const pitch of [-1, 0, 1]) for (const roll of [-1, 0, 1]) {
+      springs(m, pitch * BODY.pitch, roll * BODY.roll, -BODY.bob);
+      m.root.updateMatrixWorld(true);
+      let low = Infinity;
+      for (const b of body) {
+        const p = b.geometry.attributes.position;
+        for (let i = 0; i < p.count; i++) low = Math.min(low, v.fromBufferAttribute(p, i).applyMatrix4(b.matrixWorld).y);
+      }
+      assert.ok(low > 0.02, `${kind} pitch ${pitch} roll ${roll}: its underside ${(low * 100).toFixed(1)} cm over the road`);
+    }
+  }
+});
+
 /** How far (m) a front tire sticks out past the body's side, slice by slice along the car, when steered `steer`. */
 function outside(body: THREE.BufferGeometry[], tire: THREE.BufferGeometry[]): number {
   const tris = (geos: THREE.BufferGeometry[]) => geos.flatMap((g) => {
