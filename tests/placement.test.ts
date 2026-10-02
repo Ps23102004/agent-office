@@ -4,13 +4,12 @@ import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { LOT_PAVING } from '../src/shared/garage.js';
 import {
+  CROSSING_PAINT,
   GATE_PYLONS,
   NEIGHBOURS,
   OFFICE_BLOCK,
   PERIOD,
-  RACE_PLAZA,
-  RUNWAY_ARENA,
-  RUNWAY_RACE,
+  ROAD_W,
   STOP_AT,
   STOP_LINE,
   STREET_X,
@@ -31,7 +30,7 @@ import { CITY_GATE } from '../src/shared/circuit.js';
 import { CITY_ARENA_GATE } from '../src/shared/arena.js';
 import { VENUES, frontZ } from '../src/shared/venues.js';
 import { poleOnly } from '../src/client/world/dressing.js';
-import { LAT, buildStreetLife, crossAt, nextCrossing } from '../src/client/world/streetlife.js';
+import { LAT, buildStreetLife, busStops, crossAt, nextCrossing, shelterArea } from '../src/client/world/streetlife.js';
 
 // Where things are put in the city, and what it keeps clear: the garage's lots, the crossings, the parks, the lamps and the
 // sidewalk furniture. Pure numbers (and one simulated minute of street life), no WebGL.
@@ -85,14 +84,6 @@ test('in a minute and a half of street life no stopped car has its nose on a zeb
   assert.ok(worst >= ZEBRA.to - 0.05, `a car stopped with its nose ${worst.toFixed(2)} m from the crossing, on the zebra (${ZEBRA.to})`);
 });
 
-test('the two gates\' runways across the race plaza lie on it and do not touch', () => {
-  for (const r of [RUNWAY_RACE, RUNWAY_ARENA]) assert.ok(r.minX >= RACE_PLAZA.minX && r.maxX <= RACE_PLAZA.maxX && r.minZ >= RACE_PLAZA.minZ && r.maxZ <= RACE_PLAZA.maxZ);
-  assert.ok(!touches(RUNWAY_RACE, RUNWAY_ARENA), 'the arena runway is laid over the red one');
-  // Each still runs through its own gate.
-  assert.ok(CITY_GATE.x > RUNWAY_RACE.minX && CITY_GATE.x < RUNWAY_RACE.maxX);
-  assert.ok(CITY_ARENA_GATE.x > RUNWAY_ARENA.minX && CITY_ARENA_GATE.x < RUNWAY_ARENA.maxX && CITY_ARENA_GATE.z > RUNWAY_ARENA.minZ && CITY_ARENA_GATE.z < RUNWAY_ARENA.maxZ);
-});
-
 test('no park swallows a hand-built neighbour, and the neighbours stand clear of every hedge', () => {
   const { parks } = cityLayout();
   for (const p of parks) {
@@ -131,6 +122,44 @@ test("street lamps stand clear of the crossings' landings, the signal poles and 
   }
   for (const v of VENUES) {
     for (const l of lamps) assert.ok(Math.abs(l.x - v.door.x) > 1.5 || Math.abs(l.z - frontZ(v)) > 8, `lamp at ${l.x}, ${l.z} stands on ${v.name}'s door`);
+  }
+});
+
+test('the paint at a crossing: bars on the zebra the walkers use, a stop line behind it in each lane, none over another', () => {
+  const { zebra, stop } = CROSSING_PAINT;
+  assert.equal(zebra.length, 28);
+  assert.equal(stop.length, 4);
+  const eps = 1e-9;
+  // A paint rectangle as [from, to] along its street and [from, to] across it (`far` is where the arm's paint starts).
+  const arm = (r: readonly [number, number, number, number], far: number) => (Math.abs(r[0]) >= far - eps ? [r[0], r[2], r[1], r[3]] : [r[1], r[3], r[0], r[2]]);
+  const reach = 3 * 1.05 + 0.26;
+  for (const r of zebra) {
+    const [a0, a1, c0, c1] = arm(r, ZEBRA.from);
+    assert.ok(a0 * a1 > 0 && Math.min(Math.abs(a0), Math.abs(a1)) >= ZEBRA.from - eps && Math.max(Math.abs(a0), Math.abs(a1)) <= ZEBRA.to + eps, 'a bar is off the zebra');
+    assert.ok(c0 >= -reach - eps && c1 <= reach + eps && reach < ROAD_W / 2, 'a bar runs out of the road');
+  }
+  // The walkers' line, either side of the intersection, is on the zebra.
+  for (const lat of [LAT, -LAT]) assert.ok(zebra.some((r) => lat > r[0] && lat < r[2]));
+  for (const r of stop) {
+    const [a0, a1, c0, c1] = arm(r, STOP_LINE.from);
+    assert.ok(Math.min(Math.abs(a0), Math.abs(a1)) >= STOP_LINE.from - eps && Math.max(Math.abs(a0), Math.abs(a1)) <= STOP_LINE.to + eps, 'a stop line is not where it says');
+    assert.ok(c0 * c1 > 0 && Math.abs(c0) >= 0.2 - eps && Math.abs(c1) <= ROAD_W / 2 - 0.2 + eps, 'a stop line is not in one lane');
+    for (const z of zebra) assert.ok(!touches({ minX: r[0], minZ: r[1], maxX: r[2], maxZ: r[3] }, { minX: z[0], minZ: z[1], maxX: z[2], maxZ: z[3] }), 'a stop line on a bar');
+  }
+});
+
+test('no lamp stands in front of a shop door, and no bus shelter (or its sign) stands on a lamp, a bench or a hedge', () => {
+  for (const l of cityStreetscape().lamps) assert.ok(!atShopDoor(l.x, l.z, 0.2), `lamp at ${l.x}, ${l.z} stands in a doorway`);
+  const stops = busStops();
+  assert.ok(stops.length >= 10, `${stops.length} bus stops`);
+  for (const b of stops) {
+    const a = shelterArea(b.x, b.z, b.face);
+    const hit = citySolids((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 3).find((s) => touches(a, s));
+    assert.ok(!hit, `the shelter at ${b.x}, ${b.z} stands on something at ${hit?.minX}, ${hit?.minZ}`);
+    // Its stop sign at the end of it (dressingModels.ts busSigns) is on free ground too.
+    const sx = b.x - 2.1 * Math.cos(b.face) + 0.2 * Math.sin(b.face);
+    const sz = b.z + 2.1 * Math.sin(b.face) + 0.2 * Math.cos(b.face);
+    assert.equal(citySolids(sx, sz, 0.3).length, 0, `the sign of the stop at ${b.x}, ${b.z} is blocked`);
   }
 });
 
@@ -203,6 +232,9 @@ test("Kenney's street sign keeps its whole pole, from the ground to its top, and
   assert.equal(geo.index!.count, 462, 'the model itself is untouched');
 });
 
-test('the gate pylons and the runways do not overlap', () => {
-  for (const p of GATE_PYLONS) for (const r of [RUNWAY_RACE, RUNWAY_ARENA]) assert.ok(!touches({ minX: p.x - p.half, maxX: p.x + p.half, minZ: p.z - p.half, maxZ: p.z + p.half }, r), `pylon ${p.id} stands on a runway`);
+test("the gate pylons stand clear of their gates' runways", () => {
+  // The circuit's red runway runs 5 m either side of its gate's x (client/world/circuit.ts buildCityGate), the arena's dark one from there east to its gate, as wide as it.
+  const red = { minX: CITY_GATE.x - 5, maxX: CITY_GATE.x + 5, minZ: -Infinity, maxZ: Infinity };
+  const dark = { minX: CITY_GATE.x + 5, maxX: CITY_ARENA_GATE.x + 2, minZ: CITY_ARENA_GATE.z - CITY_ARENA_GATE.width / 2, maxZ: CITY_ARENA_GATE.z + CITY_ARENA_GATE.width / 2 };
+  for (const p of GATE_PYLONS) for (const r of [red, dark]) assert.ok(!touches({ minX: p.x - p.half, maxX: p.x + p.half, minZ: p.z - p.half, maxZ: p.z + p.half }, r), `pylon ${p.id} stands on a runway`);
 });

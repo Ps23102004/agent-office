@@ -42,7 +42,8 @@ function boardMat(text: string, w: number, h: number, bg: string, ink: string, b
   let m = mats.get(key);
   if (!m) {
     const px = Math.min(1024, Math.round(w * 100));
-    m = new THREE.MeshBasicMaterial({ map: boardTexture(text, px, Math.round((px * h) / w), bg, ink, border), toneMapped: false });
+    // Drawn a touch forward of whatever it lies on (a board's slab, a fascia): a few centimetres' gap alone fights it from far off.
+    m = new THREE.MeshBasicMaterial({ map: boardTexture(text, px, Math.round((px * h) / w), bg, ink, border), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     mats.set(key, m);
   }
   return m;
@@ -68,25 +69,31 @@ class Boards {
 const post = (into: THREE.Group, x: number, y0: number, y1: number, z: number, r: number, color: string) => into.add(mesh(new THREE.CylinderGeometry(r, r, y1 - y0, 6), toon(color), x, (y0 + y1) / 2, z, false));
 
 /**
- * The blade sign on a venue's roof (the café's, the bar's), crossed so it's seen from every street: venues.ts puts it
- * in the building's shell, which goes when you walk in (it'd float over the room).
+ * The blade sign on a venue's roof (the café's, the bar's): two boards, a street's each way, one on top of the other (crossed at one
+ * height each would hide the middle of the other's lettering), each a slab (0.4 thick) lettered on both faces. The lower runs on a pair
+ * of posts under its ends, a mast up the middle (inside its thickness) holds the upper on it, and nothing stands in front of any
+ * lettering. venues.ts puts it in the building's shell, which goes when you walk in (it'd float over the room).
  */
 export function buildRoofSign(v: Venue): THREE.Group {
   const out = new THREE.Group();
   const x = (v.box.minX + v.box.maxX) / 2;
   const z = (v.box.minZ + v.box.maxZ) / 2;
   const cafe = v.id === 'cafe';
+  const [bg, ink] = cafe ? ['#2f5d50', '#fff3d6'] : ['#1d1d2b', '#ffb347'];
   const solid = new THREE.Group();
-  // Two boards crossed, each a slab (0.4 thick) with its lettering on both faces, each on a pair of posts through its body.
-  for (const [px, pz] of [[1.8, 0], [-1.8, 0], [0, 1.8], [0, -1.8]]) post(solid, x + px, v.height, v.height + 2.4, z + pz, 0.1, '#2b2d42');
-  for (const yaw of [0, Math.PI / 2]) {
-    const m = mesh(new THREE.BoxGeometry(5.2, 1.7, 0.4), toon(cafe ? '#2f5d50' : '#1d1d2b'), x, v.height + 2.6, z, false);
+  const boards = new Boards();
+  const low = v.height + 1.9;
+  // The lower along z, the upper along x and 5 cm down into it.
+  [Math.PI / 2, 0].forEach((yaw, i) => {
+    const y = low + i * 1.65;
+    const m = mesh(new THREE.BoxGeometry(5.2, 1.7, 0.4), toon(bg), x, y, z, false);
     m.rotation.y = yaw;
     solid.add(m);
-  }
+    boards.add(cafe ? '☕ CAFE' : '🦉 BAR', 5.2, 1.7, bg, ink, ink, x, y, z, yaw, true, 0.25);
+  });
+  for (const s of [-1, 1]) post(solid, x, v.height, low - 0.75, z + s * 1.8, 0.1, '#2b2d42');
+  post(solid, x, v.height, low + 0.85, z, 0.12, '#2b2d42');
   out.add(mergeByMaterial(solid));
-  const boards = new Boards();
-  for (const yaw of [0, Math.PI / 2]) boards.add(cafe ? '☕ CAFE' : '🦉 BAR', 5.2, 1.7, cafe ? '#2f5d50' : '#1d1d2b', cafe ? '#fff3d6' : '#ffb347', cafe ? '#fff3d6' : '#ffb347', x, v.height + 2.6, z, yaw, true, 0.21);
   boards.into(out);
   return out;
 }
@@ -140,9 +147,9 @@ export function buildLandmarks(dark: () => number, gasPoleHeight: number): THREE
     const yaw = Math.atan2(gas.fx, gas.fz);
     // Each a slab round the pole (0.4 thick), lettered on both faces: not two bare sheets either side of it.
     slab(gas.sign.x, gasPoleHeight - 1.4, gas.sign.z, 7.5, 2.8, yaw, '#e63946');
-    boards.add('⛽ GAS', 7.5, 2.8, '#e63946', '#ffffff', '#ffffff', gas.sign.x, gasPoleHeight - 1.4, gas.sign.z, yaw, true, 0.21);
+    boards.add('⛽ GAS', 7.5, 2.8, '#e63946', '#ffffff', '#ffffff', gas.sign.x, gasPoleHeight - 1.4, gas.sign.z, yaw, true, 0.25);
     slab(gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, 6, 1.4, yaw, '#1d2b3a');
-    boards.add('1.89  2.09', 6, 1.4, '#1d2b3a', '#ffd166', '#ffffff', gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, yaw, true, 0.21);
+    boards.add('1.89  2.09', 6, 1.4, '#1d2b3a', '#ffd166', '#ffffff', gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, yaw, true, 0.25);
     glowAt.push(gas.sign.x, gasPoleHeight - 2, gas.sign.z);
     // The canopy's fascia says it too, on the street side.
     const c = gas.canopy;

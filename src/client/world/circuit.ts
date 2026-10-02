@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
-import { RACE_PLAZA, RUNWAY_RACE, rng } from '../../shared/city';
+import { RACE_PLAZA, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
 import { decorTicker } from '../quality';
 import { Fleet, supercar } from './cars';
@@ -179,8 +179,7 @@ export function buildCityGate(street: number): { group: THREE.Group; colliders: 
   const corner = (x: number, z: number, y = 0.03) => ({ x, y, z });
   ground.quad(corner(p.minX, p.minZ), corner(p.maxX, p.minZ), corner(p.maxX, p.maxZ), corner(p.minX, p.maxZ), '#c9ccd3');
   const g = CITY_GATE;
-  const rw = RUNWAY_RACE;
-  ground.quad(corner(rw.minX, rw.minZ, 0.04), corner(rw.maxX, rw.minZ, 0.04), corner(rw.maxX, rw.maxZ, 0.04), corner(rw.minX, rw.maxZ, 0.04), '#d6455d');
+  ground.quad(corner(g.x - 5, p.minZ + 2, 0.04), corner(g.x + 5, p.minZ + 2, 0.04), corner(g.x + 5, p.maxZ, 0.04), corner(g.x - 5, p.maxZ, 0.04), '#d6455d');
   for (let i = 0; i < 10; i++) for (let j = 0; j < 2; j++) {
     const x = g.x - 5 + i, z = g.z + 3 + j;
     ground.quad(corner(x, z, 0.05), corner(x + 1, z, 0.05), corner(x + 1, z + 1, 0.05), corner(x, z + 1, 0.05), (i + j) % 2 ? '#212529' : '#f8f9fa');

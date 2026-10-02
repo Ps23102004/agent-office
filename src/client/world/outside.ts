@@ -288,11 +288,10 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
   // island's beach (walk into the sea and you're put back on it: main.ts).
   colliders.push({ minX: -700, maxX: 700, minZ: -700, maxZ: 700, bottom: G - 1, top: G });
 
-  // The lot in front of the garage, out to the sidewalk, and the one down its east side: paved only on the office's own block, not over the avenues,
-  // a hair above the city's ground (wherever that is), the side lot a hair under the front one where they meet.
-  LOT_PAVING.forEach((b, k) => {
-    group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, city.position.y + 0.02 - 0.002 * k, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
-  });
+  // The lot in front of the garage, out to the sidewalk, and the one down its east side: paved only on the office's own block, not over
+  // the avenues. At the city's own ground height, whatever that is: they win over it by its depth offset (city.ts groundMat), not by
+  // standing up out of it, which would sink the wheels and your feet; the two overlap in the same grey, so it's no matter which is on top.
+  for (const b of LOT_PAVING) group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, city.position.y, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
 
   const forest = new THREE.Group();
 

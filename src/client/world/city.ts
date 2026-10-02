@@ -4,7 +4,7 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STOP_LINE, STREET_X, STREET_Z, WALK, ZEBRA, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, shopModules, SHOP_H, type Light, type Lot } from '../../shared/city';
+import { CROSSING_PAINT, GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, shopModules, SHOP_H, type Light, type Lot } from '../../shared/city';
 import { districtAt } from '../../shared/places';
 import { buildLandmarks } from './landmarks';
 import { VENUES } from '../../shared/venues';
@@ -233,14 +233,9 @@ function groundTexture(): THREE.CanvasTexture {
       g.fillRect(mid - 1.5, i, 3, 12);
       g.fillRect(i, mid - 1.5, 12, 3);
     }
-    // Zebra crossings round the intersection.
-    g.fillStyle = '#f1f1f1';
-    for (let k = -road / 2 + 3; k < road / 2 - 3; k += 7) {
-      for (const s of [-1, 1]) {
-        g.fillRect(mid + k, mid + s * (walk / 2 + 2) - (s < 0 ? 16 : 0), 4, 16);
-        g.fillRect(mid + s * (walk / 2 + 2) - (s < 0 ? 16 : 0), mid + k, 16, 4);
-      }
-    }
+    // Zebra crossings and stop lines, where the street has them (z runs up the canvas).
+    g.fillStyle = '#f5f5f5';
+    for (const [x0, z0, x1, z1] of [...CROSSING_PAINT.zebra, ...CROSSING_PAINT.stop]) g.fillRect(mid + x0 * px, mid - z1 * px, (x1 - x0) * px, (z1 - z0) * px);
   });
 }
 
@@ -821,20 +816,8 @@ function streetTexture(): THREE.CanvasTexture {
         R('#f1f1f1', s * (road - 0.55) - 0.07, a0, s * (road - 0.55) + 0.07, a1);
       }
     }
-    // Zebra crossings across all four arms (ZEBRA, where the walkers cross), and stop lines in front of them (STOP_LINE, where the cars wait), the lane each way's own.
-    for (const s of [-1, 1]) {
-      for (let k = -3; k <= 3; k++) {
-        const c = k * 1.05;
-        R('#f5f5f5', s > 0 ? ZEBRA.from : -ZEBRA.to, c - 0.26, s > 0 ? ZEBRA.to : -ZEBRA.from, c + 0.26);
-        R('#f5f5f5', c - 0.26, s > 0 ? ZEBRA.from : -ZEBRA.to, c + 0.26, s > 0 ? ZEBRA.to : -ZEBRA.from);
-      }
-    }
-    const [stop, stopEnd] = [STOP_LINE.from, STOP_LINE.to];
-    // Right-hand traffic: heading +x you keep to +z, heading -x to -z, heading +z to -x, heading -z to +x.
-    R('#f5f5f5', -stopEnd, 0.2, -stop, road - 0.2);
-    R('#f5f5f5', stop, -road + 0.2, stopEnd, -0.2);
-    R('#f5f5f5', -road + 0.2, -stopEnd, -0.2, -stop);
-    R('#f5f5f5', 0.2, stop, road - 0.2, stopEnd);
+    // Zebra crossings across all four arms (where the walkers cross), and stop lines in front of them (where the cars wait), the lane each way's own.
+    for (const r of [...CROSSING_PAINT.zebra, ...CROSSING_PAINT.stop]) R('#f5f5f5', ...r);
   });
 }
 
@@ -1083,8 +1066,9 @@ export function buildStreetCity(night: NightParts): THREE.Group {
       for (const lx of [-0.7, 0.7]) {
         const [px, pz] = at(lx, 0);
         soup.add(box, '#3d405b', px, 0.22, pz, 0.08, 0.44, 0.44, p.rot);
+        // The uprights are a centimetre deeper than the back and stop a centimetre short of its top: faces in the same plane as the back's would fight it.
         const [ux, uz] = at(lx, -0.22);
-        soup.add(box, '#3d405b', ux, 0.69, uz, 0.08, 0.5, 0.06, p.rot);
+        soup.add(box, '#3d405b', ux, 0.67, uz, 0.08, 0.46, 0.08, p.rot);
       }
     } else if (p.kind === 'bin') {
       soup.add(cyl, '#2f6f4f', p.x, 0.45, p.z, 0.26, 0.9, 0.26);

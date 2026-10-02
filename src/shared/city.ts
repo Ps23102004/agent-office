@@ -8,8 +8,6 @@
 
 import { GOLF_HOLE } from './layout.js';
 import { placeDressing, type Dressing } from './dressing.js';
-import { CITY_ARENA_GATE } from './arena.js';
-import { CITY_GATE } from './circuit.js';
 import { VENUES, VENUE_DOORS, frontZ, venueWalls } from './venues.js';
 
 /** A block and the street beside it (m). */
@@ -23,11 +21,26 @@ export const WALK = 2;
  * Where the crossings are painted and where cars wait, from the middle of an intersection along the street
  * (m): the zebra across each arm, the stop line behind it, and the spot a car's bumper stops at, just short
  * of that line. Walkers cross on the zebra (client/world/streetlife.ts LAT), cars wait behind it, and the
- * street's ground texture (client/world/city.ts streetTexture) paints exactly these.
+ * street's ground (and the roof's view of it) paints exactly these (CROSSING_PAINT).
  */
 export const ZEBRA = { from: ROAD_W / 2 + 0.4, to: ROAD_W / 2 + 2.4 } as const;
 export const STOP_LINE = { from: ROAD_W / 2 + 3.1, to: ROAD_W / 2 + 3.6 } as const;
 export const STOP_AT = STOP_LINE.to + 0.1;
+/**
+ * The white paint at an intersection, as rectangles [x0, z0, x1, z1] in meters from its middle: the zebra's bars across all four
+ * arms (ZEBRA) and each lane's stop line (STOP_LINE, right-hand traffic: heading +x you keep to +z, heading -x to -z, heading +z to
+ * -x, heading -z to +x). The street's ground and the roof's view of it (client/world/city.ts) both paint exactly these.
+ */
+export const CROSSING_PAINT: { zebra: (readonly [number, number, number, number])[]; stop: (readonly [number, number, number, number])[] } = (() => {
+  const zebra: (readonly [number, number, number, number])[] = [];
+  for (const s of [-1, 1]) {
+    const [a, b] = s > 0 ? [ZEBRA.from, ZEBRA.to] : [-ZEBRA.to, -ZEBRA.from];
+    for (let k = -3; k <= 3; k++) zebra.push([a, k * 1.05 - 0.26, b, k * 1.05 + 0.26], [k * 1.05 - 0.26, a, k * 1.05 + 0.26, b]);
+  }
+  const [from, to, road] = [STOP_LINE.from, STOP_LINE.to, ROAD_W / 2];
+  const stop = [[-to, 0.2, -from, road - 0.2], [from, -road + 0.2, to, -0.2], [-road + 0.2, -to, -0.2, -from], [0.2, from, road - 0.2, to]] as const;
+  return { zebra, stop: [...stop] };
+})();
 /** How far out the city goes: past this the haze has it anyway. */
 export const RADIUS = 330;
 /** How far apart a park's tree trunks stand at least (m): canopies are 2.4 m and more across. */
@@ -101,13 +114,6 @@ export const keepClear = (x: number, z: number) => CLEAR.some((a) => x > a.minX 
 
 /** The block behind the office, east of it, left open as a paved plaza with the gate to the race circuit on it (circuit.ts). */
 export const RACE_PLAZA: Area = rect(STREET_X + PERIOD / 2, STREET_Z - PERIOD * 1.5, INNER, INNER);
-
-/**
- * The two gates' runways across the race plaza (client/world/circuit.ts and arena.ts draw them): the circuit's red one up to
- * its gate and past it, the arena's dark one in from the east to its gate, stopping a metre short of the red one.
- */
-export const RUNWAY_RACE: Area = { minX: CITY_GATE.x - 5, maxX: CITY_GATE.x + 5, minZ: RACE_PLAZA.minZ + 2, maxZ: RACE_PLAZA.maxZ };
-export const RUNWAY_ARENA: Area = { minX: RUNWAY_RACE.maxX + 1, maxX: CITY_ARENA_GATE.x + 2, minZ: CITY_ARENA_GATE.z - CITY_ARENA_GATE.width / 2, maxZ: CITY_ARENA_GATE.z + CITY_ARENA_GATE.width / 2 };
 
 /** The block the office stands on, paved all over as its plaza: everything outside this is the city's streets and sidewalks. */
 export const OFFICE_BLOCK: Area = rect(STREET_X - PERIOD / 2, STREET_Z - PERIOD / 2, INNER, INNER);
@@ -568,7 +574,7 @@ export function cityStreetscape(): Streetscape {
     }
   }
   // Lamps down both sides of every street, every 28 m, all the way out: at a quarter and three quarters of the way between the
-  // cross streets, so none stands at a crossing's landing or by a signal pole.
+  // cross streets, so none stands at a crossing's landing or by a signal pole; one that would stand in front of a door is left out.
   const lampsAlong = (origin: number) => {
     const out: number[] = [];
     for (let a = origin + PERIOD / 4 + 28 * Math.ceil((-RADIUS - origin - PERIOD / 4) / 28); a <= RADIUS; a += 28) out.push(a);
@@ -583,8 +589,8 @@ export function cityStreetscape(): Streetscape {
       const off = s * (ROAD_W / 2 + 0.6);
       const sx = STREET_X + k * PERIOD + off;
       const sz = STREET_Z + k * PERIOD + off;
-      for (const a of alongAvenue) if (Math.hypot(sx, a) < RADIUS && inGrid(sx, a)) lamps.push({ x: sx, z: a, ax: -s, az: 0, hand: keepClear(sx, a) });
-      for (const a of alongStreet) if (Math.hypot(a, sz) < RADIUS && inGrid(a, sz)) lamps.push({ x: a, z: sz, ax: 0, az: -s, hand: keepClear(a, sz) });
+      for (const a of alongAvenue) if (Math.hypot(sx, a) < RADIUS && inGrid(sx, a) && !atShopDoor(sx, a, 0.2)) lamps.push({ x: sx, z: a, ax: -s, az: 0, hand: keepClear(sx, a) });
+      for (const a of alongStreet) if (Math.hypot(a, sz) < RADIUS && inGrid(a, sz) && !atShopDoor(a, sz, 0.2)) lamps.push({ x: a, z: sz, ax: 0, az: -s, hand: keepClear(a, sz) });
     }
   }
   // A bench, a bin and a hydrant along the sidewalks of the blocks, now and then; along the shopping streets also parking
