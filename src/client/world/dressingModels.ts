@@ -29,9 +29,10 @@ const KIT: Record<Dress['kind'], { url: string | ((d: Dress) => string); scale: 
   flag: null,
 };
 
-/** The street sign's pole (Kenney's model at its scale): how far its collars reach from the axis, and where its top is (the blades above it are dropped, see poleOnly), and the name blade's height, seated on that top. */
-const SIGN_POLE = { reach: 0.14, top: 2.38 } as const;
-const NAME_Y = 2.6;
+/** The street sign's pole (Kenney's model at its scale): how far its collars reach from the axis (the blades are dropped, see poleOnly), where its top is, and the name blade's centre, its foot on that top. */
+const SIGN_POLE = { reach: 0.14, top: 2.47 } as const;
+const NAME_H = 0.5;
+const NAME_Y = SIGN_POLE.top + NAME_H / 2;
 
 /** A 1-pixel image: the files' own atlases aren't decoded (each would be its own copy); the kit's is loaded once, below. */
 const BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -71,7 +72,7 @@ async function kenney(group: THREE.Group, items: Dress[]) {
   const geos = new Map(await Promise.all([...new Set(placed.map(urlOf))].map(async (u) => [u, await piece(u)] as const)));
   // The street signs get their name on a blade of their own, so they keep the pole only.
   const sign = geos.get(signStreetUrl);
-  if (sign) geos.set(signStreetUrl, poleOnly(sign, KIT.streetSign!.scale, SIGN_POLE.reach, SIGN_POLE.top));
+  if (sign) geos.set(signStreetUrl, poleOnly(sign, KIT.streetSign!.scale, SIGN_POLE.reach));
   const atlas = (url: string) => {
     const t = new THREE.TextureLoader().load(url);
     t.flipY = false;
@@ -173,7 +174,7 @@ function nameplates(group: THREE.Group, list: Dress[]) {
       mat.userData.outlineParameters = { visible: false };
       mats.set(d.name!, mat);
     }
-    const placed = new THREE.PlaneGeometry(2.2, 0.5).rotateY(d.rot + Math.PI / 2).translate(d.x, NAME_Y, d.z);
+    const placed = new THREE.PlaneGeometry(2.2, NAME_H).rotateY(d.rot + Math.PI / 2).translate(d.x, NAME_Y, d.z);
     const list = byName.get(d.name!) ?? [];
     list.push(placed);
     byName.set(d.name!, list);

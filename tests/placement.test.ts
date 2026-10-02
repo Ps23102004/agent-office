@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { LOT_PAVING } from '../src/shared/garage.js';
 import {
@@ -164,24 +165,42 @@ test('the new street furniture: meters at the kerb, newspaper boxes, bike racks 
   for (const p of props.filter((p) => p.kind === 'meter' || p.kind === 'rack')) assert.ok(citySolids(p.x, p.z, 0.05).length >= 1, `${p.kind} is solid`);
 });
 
-test("a sign's pole keeps its collars and loses what reaches out of it or stands above it", () => {
-  // A pole 2 m tall (0.1 wide) and a blade 0.8 m out from it at the top, each a quad of two triangles on its own vertices.
-  const pos: number[] = [];
-  const idx: number[] = [];
-  const quad = (a: number[], b: number[], c: number[], d: number[]) => {
-    const n = pos.length / 3;
-    pos.push(...a, ...b, ...c, ...d);
-    idx.push(n, n + 1, n + 2, n, n + 2, n + 3);
+test("Kenney's street sign keeps its whole pole, from the ground to its top, and loses the blank blades that reach out of it", () => {
+  // Read the real file: its one mesh's positions and indices (after the JSON chunk comes the binary one).
+  const b = readFileSync(new URL('../src/client/models/dressing/road-sign-street.glb', import.meta.url));
+  const jsonLength = b.readUInt32LE(12);
+  const gltf = JSON.parse(b.toString('utf8', 20, 20 + jsonLength));
+  const bin = b.subarray(20 + jsonLength + 8);
+  const prim = gltf.meshes[0].primitives[0];
+  const view = (accessor: number, Type: typeof Float32Array | typeof Uint16Array | typeof Uint32Array) => {
+    const a = gltf.accessors[accessor];
+    const v = gltf.bufferViews[a.bufferView];
+    const from = bin.byteOffset + (v.byteOffset ?? 0) + (a.byteOffset ?? 0);
+    return new Type(bin.buffer.slice(from, from + a.count * Type.BYTES_PER_ELEMENT * (a.type === 'VEC3' ? 3 : 1)));
   };
-  quad([-0.05, 0, 0.05], [0.05, 0, 0.05], [0.05, 2, 0.05], [-0.05, 2, 0.05]);
-  quad([0, 1.9, 0.05], [0, 1.9, 0.8], [0, 2.2, 0.8], [0, 2.2, 0.05]);
-  quad([-0.05, 2.4, 0.05], [0.05, 2.4, 0.05], [0.05, 2.5, 0.05], [-0.05, 2.5, 0.05]);
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  const out = poleOnly(g, 1, 0.14, 2.38);
-  assert.equal(out.index!.count, 6, 'only the pole stays');
-  assert.equal(g.index!.count, 18, 'the model itself is untouched');
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(view(prim.attributes.POSITION, Float32Array), 3));
+  geo.setIndex(new THREE.BufferAttribute(view(prim.indices, gltf.accessors[prim.indices].componentType === 5125 ? Uint32Array : Uint16Array), 1));
+  const SCALE = 5.2; // dressingModels.ts KIT.streetSign
+  const out = poleOnly(geo, SCALE, 0.14);
+  assert.ok(out.index!.count < geo.index!.count, 'the blades go');
+  // What stays covers the pole's height without a gap: the shaft's own triangles run from the base up to the top.
+  const pos = out.getAttribute('position');
+  const spans: [number, number][] = [];
+  for (let t = 0; t < out.index!.count; t += 3) {
+    const ys = [0, 1, 2].map((k) => pos.getY(out.index!.getX(t + k)) * SCALE);
+    spans.push([Math.min(...ys), Math.max(...ys)]);
+    for (let k = 0; k < 3; k++) assert.ok(Math.abs(pos.getX(out.index!.getX(t + k))) * SCALE <= 0.14 && Math.abs(pos.getZ(out.index!.getX(t + k))) * SCALE <= 0.14, 'nothing reaches out of the pole');
+  }
+  spans.sort((p, q) => p[0] - q[0]);
+  let top = spans[0][1];
+  assert.ok(spans[0][0] < 0.01, 'it stands on the ground');
+  for (const [lo, hi] of spans) {
+    assert.ok(lo <= top + 0.01, `a gap in the pole above ${top.toFixed(2)} m`);
+    top = Math.max(top, hi);
+  }
+  assert.ok(top > 2.4 && top < 2.6, `the pole is ${top.toFixed(2)} m tall`);
+  assert.equal(geo.index!.count, 462, 'the model itself is untouched');
 });
 
 test('the gate pylons and the runways do not overlap', () => {

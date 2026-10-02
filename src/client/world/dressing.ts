@@ -26,16 +26,16 @@ export function windy<M extends THREE.Material>(mat: M, key: string, head: strin
 
 /**
  * A sign's pole without what reaches out of it: only the triangles of `geo` (model units, shown `scale` times as big) that stay within
- * `reach` m of the pole's axis (x = z = 0) and below `top` m. Kenney's street sign comes with two blank blades; the street's name goes on
- * a blade of its own (dressingModels.ts), seated on the pole's top.
+ * `reach` m of the pole's axis (x = z = 0). Kenney's street sign comes with two blank blades; the street's name goes on a blade of its
+ * own (dressingModels.ts), seated on the pole's top.
  */
-export function poleOnly(geo: THREE.BufferGeometry, scale: number, reach: number, top: number): THREE.BufferGeometry {
+export function poleOnly(geo: THREE.BufferGeometry, scale: number, reach: number): THREE.BufferGeometry {
   const pos = geo.getAttribute('position');
   const index = geo.index!;
   const keep: number[] = [];
   for (let t = 0; t < index.count; t += 3) {
     const ids = [index.getX(t), index.getX(t + 1), index.getX(t + 2)];
-    if (ids.every((v) => Math.abs(pos.getX(v)) * scale <= reach && Math.abs(pos.getZ(v)) * scale <= reach && pos.getY(v) * scale <= top)) keep.push(...ids);
+    if (ids.every((v) => Math.abs(pos.getX(v)) * scale <= reach && Math.abs(pos.getZ(v)) * scale <= reach)) keep.push(...ids);
   }
   return geo.clone().setIndex(keep);
 }
