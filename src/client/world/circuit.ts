@@ -167,9 +167,8 @@ export function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Colli
   }
   const label = textPlane(sign, { size: 64, bg: '#ffd166', color: '#2b2d42' });
   label.scale.setScalar(1.6);
-  // On the beam's face, over its chequers, in the middle of it.
-  const face = at(0, -0.48);
-  label.position.set(face.x, y0 + H + 0.7, face.z);
+  const face = at(0, -0.9);
+  label.position.set(face.x, y0 + H - 1.2, face.z);
   // Facing whoever's coming to go through it.
   label.rotation.y = g.rotY + Math.PI;
   const shimmer = new THREE.Mesh(
@@ -572,9 +571,10 @@ export function buildCircuit(): Circuit {
       const c = (s: number, d: number) => shade(Math.min(1, rubber(s, d) * heavy + 0.08));
       asphalt.band(s0, s1, d0, d1, 0, [c(s0, d0), c(s1, d0), c(s1, d1), c(s0, d1)]);
     }
-    // White lines inside the edges.
-    paint.band(s0, s1, EDGE - 0.6, EDGE - 0.3, 0, '#f8f9fa');
-    paint.band(s0, s1, -EDGE + 0.3, -EDGE + 0.6, 0, '#f8f9fa');
+    // White lines inside the edges: stopping either side of the chequered start line (s -1 to 1), which they'd lie on.
+    const la = i === 0 ? 1 : s0, lb = i === points.length - 1 ? L - 1 : s1;
+    paint.band(la, lb, EDGE - 0.6, EDGE - 0.3, 0, '#f8f9fa');
+    paint.band(la, lb, -EDGE + 0.3, -EDGE + 0.6, 0, '#f8f9fa');
     // Kerbs where it bends, both sides: a metre of white and a metre of red, rising a centimetre to the
     // outside and lit as if they rose more (their slope is what you see of a kerb).
     if (Math.abs(k) > 1 / 160) {

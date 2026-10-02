@@ -1010,14 +1010,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   const uv = groundGeo.getAttribute('uv') as THREE.BufferAttribute;
   const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
-  const groundMat = detail(new THREE.MeshToonMaterial({ map: streetTexture(), gradientMap: gradient, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }), 'ground');
-  const ground = new THREE.Mesh(groundGeo, groundMat);
-  ground.receiveShadow = true;
-  group.add(ground);
-  // Manhole covers, drains, patches, cracks and oil down the roads (see roadDecals).
-  const decals = new Decals();
-  for (const d of roadDecals()) decals.flat(decalUV(d.decal), d.x, 0, d.z, d.w, d.l, d.rotY);
-  group.add(decals.mesh());
+  const groundMat = new THREE.MeshToonMaterial({ map: streetTexture(), gradientMap: gradient, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
+  group.add(new THREE.Mesh(groundGeo, groundMat));
   group.add(buildIsland(night));
 
   // Walls: a material per paint, and the shop fronts' atlas.
@@ -1302,6 +1296,11 @@ export function buildStreetCity(night: NightParts): THREE.Group {
 
   // Everything vertex-colored (trees' trunks, furniture, gas station...) in the one mesh; the parks and the houses' roofs in theirs.
   group.add(soup.mesh(), lawns.mesh(detail(toonVertexUnique(), 'ground')), tiles.mesh(detail(toonVertexUnique(), 'shingles')));
+  // The ground's grain (asphalt, paving, grass: surface.ts), and manhole covers, drains, patches, cracks, oil and arrows down the roads (see roadDecals).
+  detail(groundMat, 'ground');
+  const decals = new Decals();
+  for (const d of roadDecals()) decals.flat(decalUV(d.decal), d.x, 0, d.z, d.w, d.l, d.rotY);
+  group.add(decals.mesh());
   // The tall lit signs that say where the gates, the gas station, the parking deck, the café and the bar are.
   group.add(buildLandmarks(() => darkOf(storeMat), GAS_POLE));
   // The trees' tops and the awnings' fringes sway in the wind (world/dressing.ts): they're the trees and awnings, so they're here at once.

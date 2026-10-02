@@ -1,16 +1,15 @@
 import * as THREE from 'three';
 import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, WALL_H, type ArenaBox, type V3 } from '../../shared/arena';
-import { CITY_GATE } from '../../shared/circuit';
+import { RACE_PLAZA } from '../../shared/city';
 import { gate, pulse } from './circuit';
 import type { Collider, Interactable } from './office';
-import { Decals, LINE_COUNT, decalUV, detail } from './surface';
 import { mergeColored, mesh, toon, toonUnique, toonVertexUnique } from './toon';
+import { Decals, LINE_COUNT, decalUV, detail } from './surface';
 
-// The arena (shared/arena.ts), drawn: a concrete container yard laid in slabs inside high walls of
-// concrete panels striped yellow and black at the top, shipping containers in four paints with their
-// corrugations, rust, doors and shipping lines' names, wooden crates, concrete barriers, floodlight
-// masts in the corners, and stacks of containers outside the walls to look at. All of it merged
-// into a few draw calls, a surface (surface.ts) each. Also the shots (tracers, sparks), the
+// The arena (shared/arena.ts), drawn: a concrete container yard laid in slabs inside high walls of panels striped yellow and
+// black at the top, shipping containers in four paints with their ribs, rust, lines' names and doors, wooden crates,
+// concrete barriers, floodlight masts in the corners, and stacks of containers outside the walls to
+// look at. All of it merged into a couple of draw calls. Also the shots (tracers, sparks), the
 // rifle you hold and the ones everyone else holds, and the arena's gate on the race plaza in the city.
 
 const CONTAINER_PAINT = ['#c0392b', '#2e6f9e', '#3f8f5a', '#d9822b'];
@@ -141,17 +140,16 @@ export function buildArenaCityGate(street: number): { group: THREE.Group; collid
   const solid = new THREE.Group();
   const g = CITY_ARENA_GATE;
   // A dark runway up to it across the plaza's paving, hazard-striped at its edges: level with the
-  // street (cars cross it), drawn over the paving, and stopping short of the race gate's red runway.
-  const x0 = CITY_GATE.x + 6, x1 = g.x + 2;
+  // street (cars cross it), drawn over the paving, and stopping short of the race gate's red runway
+  // (which runs 5 m either side of the plaza's middle: circuit.ts buildCityGate).
+  const x0 = (RACE_PLAZA.minX + RACE_PLAZA.maxX) / 2 + 6, x1 = g.x + 2;
+  // The stripes run beside the dark middle, not over it, so nothing in it lies on anything else in it.
   const flat = new THREE.Group();
-  flat.add(mesh(new THREE.PlaneGeometry(x1 - x0, g.width).rotateX(-Math.PI / 2), toon('#3d4147'), (x0 + x1) / 2, 0, g.z, false));
+  flat.add(mesh(new THREE.PlaneGeometry(x1 - x0, g.width - 0.6).rotateX(-Math.PI / 2), toon('#3d4147'), (x0 + x1) / 2, 0, g.z, false));
   for (const side of [-1, 1]) for (let x = x0; x < x1 - 0.01; x++) {
     flat.add(mesh(new THREE.PlaneGeometry(1, 0.3).rotateX(-Math.PI / 2), toon((x - x0) % 2 ? '#212529' : '#f4c430'), x + 0.5, 0, g.z + side * (g.width / 2 - 0.15), false));
   }
   const runway = mergeColored(flat, paintOver(toonVertexUnique(), -1));
-  // The stripes over the runway: a step further forward.
-  const stripes = runway.children[0] as THREE.Mesh;
-  stripes.receiveShadow = true;
   const { sign, shimmer } = gate(g, '🎯 Arena', solid, colliders, street, ['#3d4147', '#f4c430']);
   sign.position.y -= street;
   shimmer.position.y -= street;
