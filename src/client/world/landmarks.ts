@@ -120,14 +120,18 @@ export function buildLandmarks(dark: () => number, gasPoleHeight: number): THREE
     for (let k = 0; k < n; k++) solid.add(mesh(new THREE.BoxGeometry(half * 2, h / n, half * 2), toon(k % 2 ? b : a), x, ((k + 0.5) * h) / n, z, false));
   };
 
-  // The gates' pylons: a striped shaft with a big board near the top, facing the street and the plaza, and a light on its tip.
+  // The gates' pylons: a striped shaft with a big board near the top facing the street and one below it facing the plaza (crossed
+  // at one height each hid the middle of the other's lettering, so from a corner it read "RACIRCUIT"), and a light on its tip.
   for (const p of GATE_PYLONS) {
     const race = p.id === 'race';
     stripes(p.x, p.z, p.h, p.half, race ? '#e63946' : '#3d4147', race ? '#f8f9fa' : '#f4c430');
     const by = p.h - 4;
-    for (const yaw of [0, Math.PI / 2]) boards.add(race ? '🏁 RACE CIRCUIT' : '🎯 ARENA', 11, 3.4, race ? '#ffd166' : '#f4c430', '#2b2d42', '#212529', p.x, by, p.z, yaw, true, p.half + 0.06);
+    [0, Math.PI / 2].forEach((yaw, i) => {
+      boards.add(race ? '🏁 RACE CIRCUIT' : '🎯 ARENA', 11, 3.4, race ? '#ffd166' : '#f4c430', '#2b2d42', '#212529', p.x, by - i * 3.7, p.z, yaw, true, p.half + 0.06);
+      glowAt.push(p.x, by - i * 3.7, p.z);
+    });
     solid.add(mesh(new THREE.SphereGeometry(0.5, 8, 6), toon(race ? '#ff4d4d' : '#ffe066', { emissive: race ? '#ff4d4d' : '#ffe066' }), p.x, p.h + 0.4, p.z, false));
-    glowAt.push(p.x, by, p.z, p.x, p.h + 0.4, p.z);
+    glowAt.push(p.x, p.h + 0.4, p.z);
   }
 
   // The gas station's price sign, hung from the top of its pole (the pole is city.ts's).
