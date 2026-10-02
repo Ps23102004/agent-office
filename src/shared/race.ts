@@ -1,3 +1,6 @@
+import { nearestProgress, pointAt } from './circuit.js';
+import type { BotLevel, BotSettings } from './bots.js';
+
 // The race circuit: a place of its own (like the rooftop bar) reached through a gate in the city.
 // Anyone there can line up on the grid; when the race starts, everyone on the grid races the laps,
 // through the checkpoints in order, and the office keeps the positions and lap times for everyone
@@ -54,6 +57,8 @@ export interface Racer extends Timing {
   position: number;
   /** How far (ms) they went through their last checkpoint behind whoever went through it first on the same lap: 0 for them. */
   gap?: number;
+  /** One of the office's own racers (server/racebots.ts, shared/racebot.ts), at this level; its id starts with BOT_ID. */
+  bot?: BotLevel;
 }
 
 /** Someone driving practice laps at the circuit, on their own, outside the race. */
@@ -63,6 +68,9 @@ export interface Practicer extends Timing {
   car: number;
   /** Whole practice laps done this time out. */
   laps: number;
+  /** One of the office's own racers, out on practice laps at this level for someone to chase (`rabbitOf`, a PeerInfo id: `race.rabbit`). Never on the practice record. */
+  bot?: BotLevel;
+  rabbitOf?: string;
 }
 
 export interface RaceState {
@@ -73,12 +81,18 @@ export interface RaceState {
   /** When the first one home finished (epoch ms): the rest have a while to follow before it's over. */
   firstHomeAt?: number;
   racers: Racer[];
-  /** The fastest lap anyone's done here since the office started: who and how long (ms). */
+  /** The fastest lap anyone's done here since the office started: who and how long (ms). Never a bot's. */
   record?: { name: string; ms: number };
   /** Everyone at the circuit driving a car and not in the race: their practice laps. */
   practice: Practicer[];
   /** The fastest practice lap since the office started, kept apart from the race record. */
   practiceRecord?: { name: string; ms: number };
+  /**
+   * The office's own racers (server/racebots.ts): lining up, bots top the grid up to `fill` racers,
+   * people included (1: none), at `level`; `by` who last changed it. Set with `race.bots`. A race
+   * already on keeps the bots it started with.
+   */
+  bots?: BotSettings;
 }
 
 export const RACE = {
@@ -103,4 +117,40 @@ export function sectorOf(i: number): number {
   let k = 0;
   while (k + 1 < SECTORS.length && i >= SECTORS[k + 1]) k++;
   return k;
+}
+
+/** Seconds of trouble (off the track and slow, stuck, or facing the wrong way) before you're put back on it; and of going the wrong way before you're told. */
+export const MARSHAL = { reset: 3, wrongWay: 1, warn: 1 } as const;
+
+/**
+ * Keeps an eye on your car while you're on a lap: going the wrong way round, and in trouble long
+ * enough to be put back on the track (shared/circuit.ts resetSpots: a person's page does it, client/main.ts,
+ * and the office for its bots, server/racebots.ts).
+ */
+export class Marshal {
+  private wrong = 0;
+  private trouble = 0;
+  wrongWay = false;
+
+  /**
+   * Each frame, `dt` s: your car facing `rotY` at `speed` m/s at (x, z), off the asphalt or not,
+   * your foot down or not. Seconds till it's put back (null: it's fine; 0: now).
+   */
+  step(dt: number, car: { x: number; z: number; rotY: number; speed: number }, offTrack: boolean, pushing: boolean): number | null {
+    const p = pointAt(nearestProgress(car.x, car.z).s);
+    const facing = Math.sin(car.rotY) * p.tx + Math.cos(car.rotY) * p.tz;
+    this.wrong = car.speed > 2 && facing < -0.3 ? this.wrong + dt : 0;
+    this.wrongWay = this.wrong >= MARSHAL.wrongWay;
+    const speed = Math.abs(car.speed);
+    const stuck = (offTrack && speed < 4) || (pushing && speed < 1) || facing < -0.3;
+    this.trouble = stuck ? this.trouble + dt : 0;
+    if (this.trouble < MARSHAL.warn) return null;
+    return Math.max(0, MARSHAL.reset - this.trouble);
+  }
+
+  /** Back on the track (or off a lap): all clear. */
+  clear() {
+    this.wrong = this.trouble = 0;
+    this.wrongWay = false;
+  }
 }
