@@ -313,7 +313,9 @@ export class RaceControl {
     if (ms > 0 && !racer.bot && (!r.record || ms < r.record.ms)) r.record = { name: racer.name, ms };
     if (racer.lap < r.laps) return;
     racer.finishedAt = now;
-    r.firstHomeAt ??= now;
+    // The clock on the rest starts with the first person home, never a bot: someone racing bots on
+    // their own always gets to finish (LAP_CAP and STALL still end a race that's going nowhere).
+    if (!racer.bot) r.firstHomeAt ??= now;
     this.settle(now);
   }
 

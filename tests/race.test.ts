@@ -279,6 +279,32 @@ test('the stragglers get a while after the winner, then it ends without them', (
   assert.equal(race.state().racers.length, 1);
 });
 
+test('a bot home first starts no clock: the person racing it still gets to finish', () => {
+  const race = new RaceControl();
+  const now = { t: 0 };
+  race.join('bot:race:1', '🤖 Nova', 1, now.t, 'normal');
+  race.join('a', 'Ada', 0, now.t);
+  race.start('a', now.t);
+  now.t += RACE.countdown * 1000;
+  race.tick(now.t);
+  // The bot at 40 m/s, Ada at 30: she's home over a minute after it.
+  const end = track().length * RACE.laps + 10;
+  let botHome: number | undefined;
+  for (let bot = -7, ada = -7; ada < end; bot += 2, ada += 1.5) {
+    now.t += 50;
+    for (const [id, s] of [['bot:race:1', bot], ['a', ada]] as const) {
+      const p = pointAt(Math.min(s, end));
+      race.drove(id, p.x, p.z, now.t);
+    }
+    botHome ??= race.state().racers.find((x) => x.bot)!.finishedAt;
+    if (botHome !== undefined && race.state().phase === 'racing') assert.equal(race.state().firstHomeAt, undefined);
+  }
+  assert.ok(botHome !== undefined && race.state().racers.find((x) => x.id === 'a')!.finishedAt! - botHome > RACE.grace * 1000);
+  const r = race.state();
+  assert.equal(r.phase, 'finished');
+  assert.deepEqual([...r.racers].sort((x, y) => x.position - y.position).map((x) => [x.id, x.lap]), [['bot:race:1', RACE.laps], ['a', RACE.laps]]);
+});
+
 test('going round the wrong way, or skipping a checkpoint, never makes a lap', () => {
   const race = new RaceControl();
   const now = { t: 0 };

@@ -78,7 +78,7 @@ export interface RaceState {
   laps: number;
   /** When the lights go out (epoch ms), counting down. */
   startsAt?: number;
-  /** When the first one home finished (epoch ms): the rest have a while to follow before it's over. */
+  /** When the first person home finished (epoch ms; a bot home first starts no clock): the rest have a while to follow before it's over. */
   firstHomeAt?: number;
   racers: Racer[];
   /** The fastest lap anyone's done here since the office started: who and how long (ms). Never a bot's. */

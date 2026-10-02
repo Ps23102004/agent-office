@@ -1,5 +1,5 @@
 import type { Area } from './city.js';
-import type { CarDef, CarPose, Course } from './garage.js';
+import type { Box, CarDef, CarPose, Course } from './garage.js';
 
 // The race circuit: a place of its own, like the rooftop bar, reached through the gate on the plaza
 // in the city (CITY_GATE). Everything here is plain numbers, no three.js: the track's shape, where a
@@ -397,6 +397,31 @@ export function besideGate(g: Gate): { x: number; z: number; rotY: number }[] {
   const s = Math.sin(g.rotY), c = Math.cos(g.rotY);
   const d = g.width / 2 + 2;
   return [-d, d, -d - 4, d + 4].map((a) => ({ x: g.out.x + s * 2 + c * a, z: g.out.z + c * 2 - s * a, rotY: g.rotY }));
+}
+
+/** Gate `g`'s two pillars (their middles, each 1.4 m square), either side of its opening. */
+export function gatePillars(g: Gate): { x: number; z: number }[] {
+  const s = Math.sin(g.rotY), c = Math.cos(g.rotY);
+  return [-1, 1].map((side) => ({ x: g.x + side * (g.width / 2 + 0.6) * c, z: g.z - side * (g.width / 2 + 0.6) * s }));
+}
+
+/** The gantry over the start line stands on two legs (1.1 m square), this far either side of the centre line (m): just past the kerbs. */
+export const GANTRY_LEG = TRACK.width / 2 + TRACK.curb + 1.4;
+
+let standing: Box[] | null = null;
+
+/**
+ * What stands on the circuit's ground for a car to run into, besides the other cars: the gantry's
+ * legs either side of the start line, the pit wall, the garages and the gate's pillars (the
+ * grandstands and the trees are past the tyre walls). A person's page (client/world/circuit.ts, its
+ * colliders) and the office's bots (server/racebots.ts) drive among the same ones.
+ */
+export function circuitSolids(): readonly Box[] {
+  if (standing) return standing;
+  const square = (p: { x: number; z: number }, h: number): Box => ({ minX: p.x - h, maxX: p.x + h, minZ: p.z - h, maxZ: p.z + h });
+  const line = pointAt(0);
+  const legs = [-1, 1].map((side) => ({ x: line.x + line.tz * side * GANTRY_LEG, z: line.z - line.tx * side * GANTRY_LEG }));
+  return (standing = [...legs.map((p) => square(p, 0.55)), { ...PIT_WALL }, { ...GARAGES }, ...gatePillars(CIRCUIT_GATE).map((p) => square(p, 0.7))]);
 }
 
 /** The circuit's cars, waiting nose-out in front of the pit garages. Racer.car is an index into these. */

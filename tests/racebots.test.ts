@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CIRCUIT_CARS, CIRCUIT_COURSE, circuitGround, gridPose, nearestProgress, pointAt, track } from '../src/shared/circuit.js';
-import { DRIVE_STEP, advance, type CarPose, type Pedals } from '../src/shared/garage.js';
+import { CIRCUIT_CARS, CIRCUIT_COURSE, GANTRY_LEG, circuitGround, circuitSolids, gridPose, nearestProgress, pointAt, track } from '../src/shared/circuit.js';
+import { DRIVE_STEP, advance, carFits, type CarKind, type CarPose, type Pedals } from '../src/shared/garage.js';
 import { BOTS, BOT_ID, isBot } from '../src/shared/bots.js';
 import { RACE } from '../src/shared/race.js';
 import { RaceBot, seeded } from '../src/shared/racebot.js';
@@ -19,7 +19,7 @@ function circuit() {
   /** `id` gets behind the wheel of circuit car `car` and lines up, as the office has it (server.ts race.join). */
   const line = (id: string, car: number) => {
     assert.ok(garage.enter(id, car, 'driver'));
-    bots.makeRoom(clock.now);
+    bots.makeRoom(id, clock.now);
     const joined = race.join(id, id, car, clock.now);
     bots.sync(clock.now);
     return joined;
@@ -38,7 +38,7 @@ test('a race.bots ask is checked: a whole number of racers from 1 to the grid, a
 });
 
 test('lining up alone, bots top the grid up to the setting; it changes once a second at most; people take a bot’s place; they go when the people do', () => {
-  const { clock, garage, race, bots, line, botRacers } = circuit();
+  const { clock, garage, race, bots, heard, line, botRacers } = circuit();
   // Nobody lined up: no bots, but the setting's there for the lobby to show (4 at normal till someone says).
   assert.equal(bots.size, 0);
   assert.deepEqual(bots.state().bots, { fill: BOTS.fill, level: BOTS.level });
@@ -81,9 +81,20 @@ test('lining up alone, bots top the grid up to the setting; it changes once a se
   assert.ok(bots.set(RACE.slots, 'easy', 'Ann', clock.now));
   assert.equal(bots.state().racers.length, RACE.slots);
   const free = CIRCUIT_CARS.findIndex((_, i) => !garage.state()[i].driver);
+  const told = heard.cars;
+  const gone = botRacers().sort((a, b) => b.slot - a.slot)[0];
   assert.ok(line('ben', free), 'Ben gets on the grid');
   assert.equal(bots.state().racers.length, RACE.slots);
   assert.equal(botRacers().length, RACE.slots - 2);
+  // Everyone's told the bot's car went back to the paddock (or their pages would still draw it on Ben's slot).
+  assert.ok(heard.cars > told, 'the cars went out');
+  assert.equal(garage.state()[gone.car].driver, undefined);
+  assert.equal(bots.state().racers.find((r) => r.id === 'ben')!.slot, gone.slot);
+  // Ben asking again (R twice) frees nobody else's place.
+  const before = botRacers().map((r) => r.id);
+  bots.makeRoom('ben', clock.now);
+  assert.equal(race.join('ben', 'ben', free, clock.now), false);
+  assert.deepEqual(botRacers().map((r) => r.id), before);
 
   // Everyone gone: the bots go too, and the circuit's idle again.
   race.leave('ann', clock.now);
@@ -171,4 +182,60 @@ test('a rabbit to chase on practice laps: one each, off ahead of you, never on t
   assert.equal(rabbit(), undefined);
   assert.equal(bots.size, 0);
   assert.equal(garage.state()[car].x, CIRCUIT_CARS[car].x);
+});
+
+/** The bots inside RaceBots, for a test to look at (and put somewhere). */
+const inside = (bots: RaceBots) => (bots as unknown as { bots: Map<string, { kind: CarKind; pose: CarPose; pedals: Pedals; resets: number; driver: RaceBot }> }).bots;
+
+test('a rabbit in trouble before it’s over the start line is put back where it got to, not at the start line', () => {
+  const { clock, garage, race, bots } = circuit();
+  assert.ok(garage.enter('ann', 0, 'driver'));
+  const p = pointAt(1500);
+  garage.drive('ann', 0, { x: p.x, z: p.z, rotY: Math.atan2(p.tx, p.tz), speed: 20, steer: 0 });
+  assert.equal(bots.rabbit('ann', 'normal', clock.now), undefined);
+  const [b] = inside(bots).values();
+  for (let i = 0; i < 20; i++) bots.tick((clock.now += 50));
+  const was = nearestProgress(b.pose.x, b.pose.z).s;
+  assert.equal(race.state().practice.find((x) => x.rabbitOf === 'ann')!.checkpoint, -1);
+  // Spun round, facing back the way it came (somebody hit it).
+  b.pose = { ...b.pose, rotY: b.pose.rotY + Math.PI, speed: 0 };
+  for (let i = 0; i < 100 && !b.resets; i++) bots.tick((clock.now += 50));
+  assert.equal(b.resets, 1);
+  const now = nearestProgress(b.pose.x, b.pose.z).s;
+  assert.ok(was - now >= -5 && was - now < track().length / 16, `put back ${(was - now).toFixed(0)} m behind where it was`);
+});
+
+test('a bot’s car stops at what stands on the circuit, as a person’s does: it doesn’t drive through the gantry’s legs', () => {
+  const { clock, garage, bots } = circuit();
+  assert.ok(garage.enter('ann', 0, 'driver'));
+  const p = pointAt(400);
+  garage.drive('ann', 0, { x: p.x, z: p.z, rotY: Math.atan2(p.tx, p.tz), speed: 20, steer: 0 });
+  assert.equal(bots.rabbit('ann', 'easy', clock.now), undefined);
+  const [b] = inside(bots).values();
+  // On the grass a few metres short of the start line, in line with a leg, going at it.
+  const legs = circuitSolids().slice(0, 2);
+  const at = pointAt(-6);
+  b.pose = { x: at.x + at.tz * GANTRY_LEG, z: at.z - at.tx * GANTRY_LEG, rotY: Math.atan2(at.tx, at.tz), speed: 15, steer: 0, slip: 0, yaw: 0 };
+  for (let i = 0; i < 20; i++) {
+    bots.tick((clock.now += 50));
+    assert.ok(carFits(b.pose, legs, b.kind), `through the leg at ${JSON.stringify(b.pose)}`);
+  }
+});
+
+test('a bot’s tank running dry between its decisions takes it off the boost straight away, as a person’s page does', () => {
+  const { clock, garage, bots } = circuit();
+  assert.ok(garage.enter('ann', 0, 'driver'));
+  const p = pointAt(400);
+  garage.drive('ann', 0, { x: p.x, z: p.z, rotY: Math.atan2(p.tx, p.tz), speed: 20, steer: 0 });
+  assert.equal(bots.rabbit('ann', 'insane', clock.now), undefined);
+  const [b] = inside(bots).values();
+  // It decides every other tick: this one's its, the next not.
+  bots.tick((clock.now += 50));
+  bots.tick((clock.now += 50));
+  b.driver.boosting = true;
+  b.driver.tank = 0.001;
+  b.pedals = { ...b.pedals, gas: 1, boost: true };
+  bots.tick((clock.now += 50));
+  assert.equal(b.driver.boosting, false);
+  assert.ok(!b.pedals.boost);
 });

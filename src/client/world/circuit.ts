@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
+import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GANTRY_LEG, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gatePillars, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
 import { RACE_PLAZA, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
 import { racingLine, rubber } from '../../shared/racingline';
@@ -148,7 +148,7 @@ export function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Colli
   const at = (across: number, through = 0) => ({ x: g.x + across * c + through * s, z: g.z - across * s + through * c });
   const H = 7;
   for (const side of [-1, 1]) {
-    const p = at(side * (g.width / 2 + 0.6));
+    const p = gatePillars(g)[(side + 1) / 2];
     for (let k = 0; k < 5; k++) box(solid, 1.2, H / 5, 1.2, paint[k % 2], p.x, (k * H) / 5, p.z, g.rotY);
     colliders.push({ minX: p.x - 0.7, maxX: p.x + 0.7, minZ: p.z - 0.7, maxZ: p.z + 0.7, bottom: y0, top: y0 + H + 1.4 });
     // A chequered flag on a pole up top.
@@ -708,11 +708,11 @@ export function buildCircuit(): Circuit {
   const gantryY = 6.4;
   const lineRot = Math.atan2(line.tx, line.tz);
   for (const side of [-1, 1]) {
-    const p = across(side * (EDGE + TRACK.curb + 1.4));
+    const p = across(side * GANTRY_LEG);
     box(solid, 0.9, gantryY + 1.2, 0.9, '#343a40', p.x, 0, p.z, lineRot);
     colliders.push({ minX: p.x - 0.55, maxX: p.x + 0.55, minZ: p.z - 0.55, maxZ: p.z + 0.55, top: gantryY + 1.2 });
   }
-  const span = 2 * (EDGE + TRACK.curb + 1.4) + 0.9;
+  const span = 2 * GANTRY_LEG + 0.9;
   const beam = across(0);
   box(solid, 1.2, 1.2, span, '#343a40', beam.x, gantryY, beam.z, lineRot + Math.PI / 2);
   // Chequered along the beam, both faces.

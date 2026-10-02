@@ -53,7 +53,7 @@ import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_GATE, circuitGround } from '../shared/ci
 import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
-import { RaceBots, askedBots } from './racebots.js';
+import { RaceBots, askedBots, warmRaceBots } from './racebots.js';
 import { BOT_LEVELS, isBotLevel } from '../shared/bots.js';
 import { ArenaControl } from './arena.js';
 import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF, isWeapon } from '../shared/arena.js';
@@ -273,6 +273,7 @@ export async function startServer(cfg: Config) {
     cars: () => circuitCarsChanged(),
     race: () => raceChanged(),
   });
+  setImmediate(warmRaceBots);
   // The arena, a place of its own too (shared/arena.ts): its free-for-all (server/arena.ts), judged from where the office has everyone in it.
   const arena = new ArenaControl((id) => {
     const p = clients.get(id)?.peer;
@@ -1741,7 +1742,7 @@ export async function startServer(cfg: Config) {
         const at = c.peer.floor === CIRCUIT ? circuitCars.seatOf(c.id) : undefined;
         if (!at || at.seat !== 'driver') return warn(c, 'Get behind the wheel of one of the circuit’s cars to line up on the grid');
         // A bot gives you its place if it has to (the grid's full, or over the bots' setting with you on it).
-        raceBots.makeRoom(Date.now());
+        raceBots.makeRoom(c.id, Date.now());
         if (race.join(c.id, c.peer.name, at.car, Date.now())) {
           raceBots.sync(Date.now());
           raceChanged();

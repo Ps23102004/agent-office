@@ -1,5 +1,5 @@
 import { BOTS, BOT_ID, BOT_LEVELS, BOT_NAMES, isBot, isBotLevel, type BotLevel, type BotSettings } from '../shared/bots.js';
-import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_COURSE, circuitGround, gridPose, nearestProgress, pastLine, pointAt, resetSpots, surfaceAt, track } from '../shared/circuit.js';
+import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_COURSE, circuitGround, circuitSolids, gridPose, nearestProgress, pastLine, pointAt, resetSpots, surfaceAt, track } from '../shared/circuit.js';
 import { DRIVE_STEP, NEAR_MISS_EVERY, SPECS, TANK, advance, carFits, tankFill, type Box, type CarKind, type CarPose, type CarState, type Pedals } from '../shared/garage.js';
 import { Marshal, RACE, type RaceState, type Timing } from '../shared/race.js';
 import { RACE_SKILL, RaceBot, nearestLine, racingLine, seeded, speedPlan } from '../shared/racebot.js';
@@ -44,6 +44,14 @@ const RABBIT_AHEAD = 30;
 export function askedBots(fill: unknown, level: unknown): { fill: number; level: BotLevel } | string {
   if (typeof fill !== 'number' || !Number.isInteger(fill) || fill < 1 || fill > RACE.slots || !isBotLevel(level)) return `Bots: 1 to ${RACE.slots} racers in all, at ${BOT_LEVELS.join(', ')}`;
   return { fill, level };
+}
+
+/**
+ * The racing line and every circuit car's speed plan, worked out now (about half a second) rather than
+ * the first time anyone lines up, which would hold up the whole office: call it as it starts.
+ */
+export function warmRaceBots() {
+  for (const c of CIRCUIT_CARS) speedPlan(c.kind);
 }
 
 /** One of the office's racers. */
@@ -141,13 +149,19 @@ export class RaceBots {
     return true;
   }
 
-  /** A person's about to line up: a bot gives them its place if the grid's full or it would be over `fill`. */
-  makeRoom(now: number) {
+  /**
+   * `id` is about to line up: a bot gives them its place if the grid's full or it would be over `fill`
+   * (not if they're on the grid already: asking twice frees nothing). Everyone hears its car's gone.
+   */
+  makeRoom(id: string, now: number) {
     const r = this.race.state();
-    if (r.phase !== 'lobby' && r.phase !== 'countdown') return;
+    if ((r.phase !== 'lobby' && r.phase !== 'countdown') || r.racers.some((x) => x.id === id)) return;
     const people = r.racers.filter((x) => !isBot(x.id)).length + 1;
     const bots = this.racing(r);
-    if (bots.length && (r.racers.length >= RACE.slots || bots.length > this.wanted(people))) this.remove(bots[bots.length - 1], now);
+    if (!bots.length || (r.racers.length < RACE.slots && bots.length <= this.wanted(people))) return;
+    this.remove(bots[bots.length - 1], now);
+    this.io.cars();
+    this.io.race();
   }
 
   /**
@@ -328,9 +342,9 @@ export class RaceBots {
     return b.driver.decide(b.pose, others, 0.1);
   }
 
-  /** One physics step for bot `b`: through the other cars on the circuit's ground, the boost tank, and the marshal. */
+  /** One physics step for bot `b`: through the other cars and what stands about on the circuit's ground (as a person's page has it), the boost tank, and the marshal. */
   private step(b: Bot, r: RaceState, people: Box[]) {
-    const solids = [...people, ...[...this.bots.values()].filter((o) => o !== b).map((o) => carBox(o.kind, o.pose))];
+    const solids = [...circuitSolids(), ...people, ...[...this.bots.values()].filter((o) => o !== b).map((o) => carBox(o.kind, o.pose))];
     b.pose = advance(b.pose, b.pedals, DRIVE_STEP, b.kind, { ...CIRCUIT_COURSE, solids, bumped: (_, speed, vehicle) => void (vehicle && speed >= 2 && b.hits++) });
     b.clock += DRIVE_STEP;
     const fill = tankFill(b.pose, b.kind, solids);
@@ -340,6 +354,8 @@ export class RaceBots {
       rate += TANK.nearMiss / DRIVE_STEP;
     }
     b.driver.refuel(DRIVE_STEP, rate);
+    // The tank ran dry between decisions: off the boost now, as a person's page has it every frame.
+    if (b.pedals.boost && !b.driver.boosting) b.pedals = { ...b.pedals, boost: false };
     // In trouble on a lap (off and slow, stuck, the wrong way round) for a few seconds: back on the track, as a person would be.
     const racer = r.racers.find((x) => x.id === b.id);
     const t: Timing | undefined = racer ?? r.practice.find((x) => x.id === b.id);
@@ -354,7 +370,8 @@ export class RaceBots {
     const trouble = b.marshal.step(DRIVE_STEP, b.pose, surfaceAt(b.pose.x, b.pose.z) === 'grass', b.pedals.gas !== 0) === 0;
     if (!trouble && b.clock - b.mark.at < LOST) return;
     b.resets++;
-    const spots = resetSpots(racer ?? { checkpoint: t.checkpoint });
+    // A rabbit not yet over the start line is put back by the last line it passed, not the start line, which may be most of a lap off its person.
+    const spots = resetSpots(racer ?? { checkpoint: t.checkpoint >= 0 ? t.checkpoint : Math.floor((s / L) * CHECKPOINTS) % CHECKPOINTS });
     this.place(b, spots.find((p) => carFits(p, solids, b.kind, circuitGround)) ?? spots[0]);
   }
 
