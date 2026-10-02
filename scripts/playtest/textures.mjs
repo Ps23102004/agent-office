@@ -1,9 +1,14 @@
 // Textures: a look round the street, the office's front, the circuit and the arena. Code measures how
-// much of what's in view has any surface texture (a texture map, or the world-space detail layer: a
-// material with a DETAIL define), finds broken textures and blank or magenta screenshots; Jev reads a
-// description of what's in view that code writes, and says whether it reads as real-world surfaces.
-// Jev can't see: the screenshots are for a person (or the lead) to look at.
-import { CIRCUIT_CARS, pointAt } from '../../src/shared/circuit.ts';
+// much of what's in view has any surface texture, finds broken textures and blank or magenta
+// screenshots; Jev reads a description of what's in view that code writes, and says whether it reads
+// as real-world surfaces. Jev can't see: the screenshots are for a person (or the lead) to look at.
+//
+// What counts as textured (the marker agreed with the textures work): a material with a texture map,
+// or with the world-space detail layer, which is a define with DETAIL in its name (client/world/
+// surface.ts sets SKY_DETAIL and SKY_DETAIL_*) or `material.userData.detail` set. The sky (Sky's
+// dome group, and anything drawn without a depth test, which is a backdrop) counts as sky, not a surface.
+import { ARENA } from '../../src/shared/arena.ts';
+import { CIRCUIT, CIRCUIT_CARS, pointAt } from '../../src/shared/circuit.ts';
 import { bucket, pixelStats, withThree } from './lib.mjs';
 import { toCircuit, toGarage, walkToArena } from './places.mjs';
 
@@ -23,13 +28,14 @@ export default async function textures(t) {
     const pixels = await pixelStats(page, png);
     spots.push({ name, where, scene, pixels });
   };
-  const stand = (x, z, rotY) => page.evaluate(([x, z, rotY]) => {
-    const p = window.__office.player;
-    p.pos.set(x, p.street, z);
+  // On the ground at (x, z): the city's street, or y 0 at the circuit and the arena (main.ts streetY).
+  const stand = (x, z, rotY) => page.evaluate(([x, z, rotY, away]) => {
+    const o = window.__office, p = o.player;
+    p.pos.set(x, away.includes(o.store.floor) ? 0 : p.street, z);
     p.facing = rotY;
     p.camYaw = rotY + Math.PI;
     p.lookPitch = -0.08;
-  }, [x, z, rotY]);
+  }, [x, z, rotY, [CIRCUIT, ARENA]]);
 
   await toGarage(page);
   await page.evaluate(() => window.__office.getOut(true));
@@ -83,9 +89,9 @@ const grainWords = (g) => bucket(g, [1, 3, 6], ['perfectly smooth (no visible gr
 
 /**
  * In the page: what share of the screen shows surfaces with any texture (a map of any kind, or the
- * world-space detail layer: a material with a DETAIL define). Counted exactly: the view is drawn once
- * more with every mesh in a flat colour of its own (an id), read back, and each pixel put down to the
- * mesh it shows. The sky and anything a few km across (the sky dome, the sea) don't count.
+ * world-space detail layer: see the top of this file). Counted exactly: the view is drawn once more
+ * with every mesh in a flat colour of its own (an id), read back, and each pixel put down to the mesh
+ * it shows. The sky (left out of that drawing) and anything a few km across (the sea) don't count.
  */
 function sceneTextures() {
   const T = window.THREE, o = window.__office, r = o.renderer, scene = o.scene, cam = o.camera;
@@ -93,7 +99,7 @@ function sceneTextures() {
   const texture = (mat) => {
     const map = MAPS.find((k) => mat[k]);
     if (map) return `${map} ${mat[map].image?.width ?? '?'}×${mat[map].image?.height ?? '?'}`;
-    if (Object.keys(mat.defines ?? {}).some((k) => k.startsWith('DETAIL')) || mat.userData?.detail) return 'detail layer';
+    if (Object.keys(mat.defines ?? {}).some((k) => k.includes('DETAIL')) || mat.userData?.detail) return 'detail layer';
     return null;
   };
   const colorOf = (m, mat) => {
@@ -117,6 +123,8 @@ function sceneTextures() {
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgb);
   // Every mesh drawn in its own colour (4 bits a channel, so a little rounding doesn't matter); the rest hidden.
   const ids = [null], hidden = [], swapped = [], broken = [];
+  const sky = new Set();
+  o.sky?.dome?.traverse((x) => sky.add(x));
   scene.updateMatrixWorld(true);
   scene.traverse((m) => {
     if (!m.visible) return;
@@ -124,7 +132,8 @@ function sceneTextures() {
     if (!m.isMesh) return;
     const mats = [].concat(m.material).filter(Boolean);
     for (const mat of mats) for (const k of MAPS) if (mat[k] && !mat[k].isRenderTargetTexture && !mat[k].isDataTexture && !(mat[k].image?.width > 0 || mat[k].image?.videoWidth > 0)) broken.push(`${m.name || m.geometry.type}: ${k}`);
-    if (!mats.length || mats.every((x) => x.transparent && !x.depthWrite) || ids.length >= 4095) return hidden.push(m);
+    // The sky: drawn as it is, it would cover the view (an opaque dome drawn with no depth test) or hide what's behind it.
+    if (!mats.length || mats.every((x) => x.transparent && !x.depthWrite) || sky.has(m) || mats.some((x) => x.depthTest === false) || ids.length >= 4095) return hidden.push(m);
     const box = new T.Box3().setFromObject(m);
     const size = box.getSize(new T.Vector3());
     const k = ids.length;
@@ -158,19 +167,19 @@ function sceneTextures() {
   const id = (i) => (px[i] >> 4) | ((px[i + 1] >> 4) << 4) | ((px[i + 2] >> 4) << 8);
   const lum = (i) => 0.2126 * rgb[i] + 0.7152 * rgb[i + 1] + 0.0722 * rgb[i + 2];
   const count = new Map(), grain = new Map();
-  let sky = 0, n = 0;
+  let open = 0, n = 0;
   for (let y = 0; y < h - 1; y += 3) for (let x = 0; x < w - 1; x += 3) {
     n++;
     const i = (y * w + x) * 4, k = id(i);
     if (!k || !ids[k] || ids[k].backdrop) {
-      sky++;
+      open++;
       continue;
     }
     count.set(k, (count.get(k) ?? 0) + 1);
     const right = i + 4, up = i + w * 4;
     if (id(right) === k && id(up) === k) grain.set(k, (grain.get(k) ?? 0) + Math.abs(lum(i) - lum(right)) + Math.abs(lum(i) - lum(up)));
   }
-  const solid = Math.max(1, n - sky);
+  const solid = Math.max(1, n - open);
   const looks = new Map();
   let textured = 0, grains = 0;
   for (const [k, c] of count) {
@@ -186,5 +195,5 @@ function sceneTextures() {
   const r3 = (x) => Math.round(x * 1000) / 1000;
   const top = [...looks.values()].sort((a, b) => b.share - a.share).slice(0, 10).map((l) => ({ ...l, share: r3(l.share), grain: r3(l.grain / l.share) }));
   const info = r.info;
-  return { meshes: ids.length - 1, texturedMeshes: ids.filter((x) => x?.textured).length, skyShare: r3(sky / n), texturedShare: r3(textured / solid), grain: r3(grains / solid), top, broken: [...new Set(broken)].slice(0, 20), renderer: { textures: info.memory.textures, geometries: info.memory.geometries } };
+  return { meshes: ids.length - 1, texturedMeshes: ids.filter((x) => x?.textured).length, skyShare: r3(open / n), texturedShare: r3(textured / solid), grain: r3(grains / solid), top, broken: [...new Set(broken)].slice(0, 20), renderer: { textures: info.memory.textures, geometries: info.memory.geometries } };
 }

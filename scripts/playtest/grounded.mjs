@@ -33,7 +33,8 @@ const CIRCUIT_SPOTS = {
 };
 
 export default async function grounded(t) {
-  const { page } = await t.open({ view: 'third' });
+  // Full graphics: frames aren't held to 30 a second, so how the body moves is sampled at the same moments every run.
+  const { page } = await t.open({ view: 'third', graphics: 'full' });
   await withThree(page);
 
   // ---- The city: the garage's fleet, each kind on each surface ----

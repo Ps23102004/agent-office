@@ -1,8 +1,9 @@
 // Racing: two players drive through the city's gate at the same spot one after the other (the first
 // one's car must wait out of the second one's way), line up, and race on autopilot for a while. Code
 // asserts the race's bookkeeping: the phases, positions 1..n, progress that never goes back, and no
-// "missed checkpoint" for a car that didn't miss one. Then the same against the office's own racers,
-// once it has some (see BOTS below); until then that part says it's skipped.
+// "missed checkpoint" for a car that didn't miss one. Then the test driver against the office's own
+// racers at each level, once it has some (see BOTS below), each level held to a pace (PACE); until
+// then that part says it's skipped.
 import { CHECKPOINTS, CITY_GATE } from '../../src/shared/circuit.ts';
 import { RACE } from '../../src/shared/race.ts';
 import { bucket } from './lib.mjs';
@@ -15,11 +16,20 @@ const RACE_S = 25;
 const MIN_CHECKPOINTS = 4;
 
 /**
- * The racing bots' hook, when there are some: `__office.race.addBot(level?)` puts one of the office's
- * own racers on the grid (at the game's default level without one), and a racer that's a bot has
- * `bot` set (or an id starting 'bot:', shared/bots.ts BOT_ID). Nothing else is assumed.
+ * The office's own racers, the way the arena has its bots (shared/bots.ts): the race says it has them
+ * with RaceState.bots (like ArenaState.bots: { fill, level }); `{ t: 'race.bots', fill, level }` asks
+ * for racers enough to make `fill` on the grid, at a level of shared/bots.ts BOT_LEVELS; and a racer
+ * that's a bot has `bot` set, or an id starting 'bot:' (BOT_ID). That's the whole contract: a race-bots
+ * build that does it another way changes this file, not the game.
  */
 const BOTS = 3;
+/**
+ * How far round each level's slowest bot gets, against the test driver (on the centre line at up to
+ * 34 m/s, lifting for corners: about an average person's pace), as a share of its checkpoints. Hard
+ * bands, code not Jev: easy is a beginner, normal holds an average driver, hard and insane beat one.
+ */
+// ponytail: bands set from the autopilot's pace, not people's lap times; tune them once there are some.
+const PACE = { easy: 0.6, normal: 0.85, hard: 1.0, insane: 1.1 };
 
 export default async function race(t) {
   const a = await t.open({ name: 'Ann', view: 'third' });
@@ -52,23 +62,34 @@ export default async function race(t) {
   t.metric('people', r.summary);
 
   // ---- Against bots ----
-  const hook = await a.page.evaluate(() => typeof window.__office.race?.addBot === 'function');
-  if (!hook) return t.skip('race vs bots: bots not present (no __office.race.addBot)');
-  await a.page.waitForFunction(() => ['idle', 'finished'].includes(window.__office.store.race.phase) || window.__office.store.race.racers.every((r) => r.finishedAt), null, { timeout: 5000 }).catch(() => {});
-  for (const c of through ? [a, b] : [a]) await c.page.evaluate(() => window.__office.net.send({ t: 'race.leave' }));
-  const withBots = await runRace(t, [a], 'bots', async () => {
-    for (let i = 0; i < BOTS; i++) await a.page.evaluate(() => window.__office.race.addBot());
-    await a.page.waitForFunction((n) => window.__office.store.race.racers.filter((r) => r.bot || r.id.startsWith('bot:')).length >= n, BOTS, { timeout: 10_000 });
-  });
-  t.metric('bots', withBots.summary);
-  const bots = withBots.summary.racers.filter((x) => x.bot);
-  t.check(`each bot gets through at least ${MIN_CHECKPOINTS} checkpoints in ${RACE_S} s`, bots.every((x) => x.through >= MIN_CHECKPOINTS), bots);
-  const me = withBots.summary.racers.find((x) => !x.bot);
+  const hasBots = await a.page.evaluate(() => window.__office.store.race.bots !== undefined || window.__office.store.race.racers.some((r) => r.bot));
+  if (!hasBots) return t.skip('race vs bots: bots not present (no store.race.bots)');
+  const levels = (await import('../../src/shared/bots.ts').catch(() => null))?.BOT_LEVELS ?? Object.keys(PACE);
+  const results = {};
+  for (const level of levels) {
+    for (const c of through ? [a, b] : [a]) await c.page.evaluate(() => window.__office.net.send({ t: 'race.leave' }));
+    await a.page.waitForFunction(() => !window.__office.store.race.racers.some((r) => r.id === window.__office.store.you), null, { timeout: 5000 }).catch(() => {});
+    const r = await runRace(t, [a], `bots-${level}`, async () => {
+      await a.page.evaluate(([fill, level]) => window.__office.net.send({ t: 'race.bots', fill, level }), [BOTS + 1, level]);
+      await a.page.waitForFunction((n) => window.__office.store.race.racers.filter((r) => r.bot || r.id.startsWith('bot:')).length >= n, BOTS, { timeout: 10_000 });
+    });
+    const bots = r.summary.racers.filter((x) => x.bot);
+    const me = r.summary.racers.find((x) => !x.bot);
+    const pace = PACE[level];
+    results[level] = { ...r.summary, slowestBotPace: me?.through ? +(Math.min(...bots.map((x) => x.through)) / me.through).toFixed(2) : null };
+    t.check(`${level}: every bot gets round at least ${pace ?? '?'}× the test driver's checkpoints in ${RACE_S} s`, pace !== undefined && me && bots.length && bots.every((x) => x.through >= pace * me.through), pace === undefined ? `no PACE for ${level}: add one` : { me, bots });
+  }
+  t.metric('bots', results);
+  const words = (r) => {
+    const me = r.racers.find((x) => !x.bot);
+    return r.racers.filter((x) => x.bot).map((x) => `${x.name}: ${x.through} checkpoints in ${RACE_S} s, ${bucket(x.through - me.through, [-3, -1, 1, 3], ['well behind the test driver', 'a little behind', 'level with', 'a little ahead of', 'well ahead of'])} the test driver`).join('; ');
+  };
   await t.judge('bots', {
-    game: 'An arcade racing game. A human-like test driver (an autopilot that follows the centre line, not the racing line, and lifts for corners) raced the game\'s bots.',
-    race: bots.map((x) => `${x.name}: ${x.through} checkpoints in ${RACE_S} s, ${bucket(x.through - me.through, [-3, -1, 1, 3], ['well behind the test driver', 'a little behind', 'level with', 'a little ahead of', 'well ahead of'])} the test driver`).join('; '),
+    game: 'An arcade racing game. A human-like test driver (an autopilot that follows the centre line, not the racing line, and lifts for corners) raced the game\'s bots at each level.',
+    levels: Object.fromEntries(Object.entries(results).map(([k, r]) => [k, words(r)])),
   }, {
-    competitive: { type: 'noul', instructions: 'Does `race` describe bots a person would find a fair, competitive race against (neither parked nor untouchable)?', flag: (x) => x.noul < 0.5 },
+    ...Object.fromEntries(Object.keys(results).map((k) => [k, { type: 'noul', instructions: `Does \`levels.${k}\` describe ${k} bots a person would find a fair race against at that level (neither parked nor untouchable)?`, flag: (x) => x.noul < 0.5 }])),
+    ramp: { type: 'noul', instructions: 'Do the `levels` get harder in the order they are listed?', flag: (x) => x.noul < 0.5 },
   });
 }
 

@@ -2,9 +2,10 @@
 // and holds the trigger): the rifle's rate of fire, how many shots land from the hip at 15 m, that
 // damage and the kill add up, the kill feed and the respawn. Then, once the office has bots of its own
 // (store.arena.bots, from shared/bots.ts), a test player who stands their ground and shoots back at
-// whatever bot they can see, a while at each level: code checks the bots join, move, shoot and are
-// never hit through cover; Jev reads the numbers in words and says whether each level plays like a
-// person of that standard. Without bots that part says it's skipped.
+// whatever bot they can see, a while at each level: code checks the bots join, move, shoot, are never
+// hit through cover, and play to their level's band (BANDS: how often they land a shot, how soon they
+// find the test player), the levels ramping up from easy to insane; Jev reads the numbers in words and
+// says whether each level plays like a person of that standard. Without bots that part says it's skipped.
 import { ARENA_BOXES, ARENA_CENTER, EYE_Y, RULES, inArena, rayWorld } from '../../src/shared/arena.ts';
 import { bucket } from './lib.mjs';
 import { toGarage, walkToArena } from './places.mjs';
@@ -16,6 +17,22 @@ const PLAY_S = 40;
 const FILL = 4;
 /** What each level should play like (shared/bots.ts says so of its own levels). */
 const LIKE = { easy: 'a beginner', normal: 'an average player', hard: 'a skilled player', insane: 'a top player' };
+/**
+ * What a person of each level manages in a real match, held as hard bands (code, not Jev). `acc`:
+ * the share of all their shots that land, at least. People with a rifle in a moving match land
+ * roughly 1 in 10 as beginners, 1 in 8 average, 1 in 6 skilled and 1 in 5 at the top; each floor is
+ * that less 2.5 standard deviations of a 40 s sample's luck (0.02 each at 250 shots), so a level that
+ * plays to its standard fails by chance about 1 run in 160. `firstHit`: seconds from the start
+ * to their first hit on the test player, at most. Nobody lands more than MAX_ACC of their shots in a
+ * moving match: that's an aimbot. And the levels ramp up: the top one hits the test player more often
+ * than the bottom one, with a better aim, and no level is clearly easier than the one below it (its
+ * hits on the test player more than 2 standard deviations of luck under that one's). In 40 s a level
+ * a notch harder than the one below isn't reliably told from it, and the test player's deaths are too
+ * few to tell levels apart: those are Jev's to read.
+ */
+// ponytail: rough bands from people in shooters generally, not this game's own players; tune them once some have played.
+const BANDS = { easy: { acc: 0.05, firstHit: 20 }, normal: { acc: 0.075, firstHit: 12 }, hard: { acc: 0.115, firstHit: 8 }, insane: { acc: 0.15, firstHit: 6 } };
+const MAX_ACC = 0.6;
 
 export default async function arena(t) {
   const a = await t.open({ name: 'Ann' });
@@ -109,9 +126,19 @@ export default async function arena(t) {
     t.check(`${level}: every bot moves about (10 m or more in ${PLAY_S} s)`, r.bots.every((x) => x.moved >= 10), r.bots);
     t.check(`${level}: the bots shoot, and land shots on the test player`, r.botShots > 0 && r.botHitsOnMe > 0, { botShots: r.botShots, botHitsOnMe: r.botHitsOnMe });
     t.check(`${level}: nobody is hit through cover`, !through.length, through.slice(0, 3));
+    const band = BANDS[level];
+    t.check(`${level}: the bots land ${band ? `${band.acc * 100}%` : '?'} to ${MAX_ACC * 100}% of their shots, as people of that level do`, band && r.botAccuracy >= band.acc && r.botAccuracy <= MAX_ACC, band ? { botAccuracy: r.botAccuracy, botShots: r.botShots } : `no BANDS for ${level}: add one`);
+    t.check(`${level}: a bot first hits the test player within ${band?.firstHit ?? '?'} s`, band && r.firstHitS !== null && r.firstHitS <= band.firstHit, { firstHitS: r.firstHitS });
     delete r.hits;
   }
   t.metric('bots', results);
+  // The ramp (hits are counts, so their luck is about their square root).
+  const ladder = Object.entries(results).map(([level, r]) => ({ level, hits: r.botHitsOnMe, accuracy: r.botAccuracy, deaths: r.myDeaths }));
+  for (const [i, x] of ladder.entries()) if (i) t.check(`${x.level} is no easier than ${ladder[i - 1].level} (hits on the test player not 2 SD of luck under)`, x.hits >= ladder[i - 1].hits - 2 * Math.sqrt(x.hits + ladder[i - 1].hits), ladder);
+  if (ladder.length > 1) {
+    const [lo, hi] = [ladder[0], ladder.at(-1)];
+    t.check(`${hi.level} is harder than ${lo.level}: more hits on the test player, and a better aim`, hi.hits > lo.hits && hi.accuracy > lo.accuracy, ladder);
+  }
   const words = (r) => `In ${PLAY_S} s the test player hit ${Math.round(r.myAccuracy * 100)}% of their ${r.myShots} shots; the bots fired ${r.botShots} shots and hit ${Math.round(r.botAccuracy * 100)}% of them (${bucket(r.botAccuracy, [0.15, 0.3, 0.5, 0.7], ['wild', 'poor', 'fair', 'good', 'deadly'])}); they first hit the test player ${r.firstHitS === null ? 'never' : `${r.firstHitS} s in`}, killed them ${r.myDeaths} times and were killed ${r.myKills} times by them; each moved about ${Math.round(r.bots.reduce((s, x) => s + x.moved, 0) / r.bots.length)} m.`;
   const state = {
     game: 'A first-person arena shooter: rifles, 25 damage a body shot and 50 a head shot, 100 health, a container yard with cover.',

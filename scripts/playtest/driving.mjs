@@ -3,6 +3,7 @@
 // asserts the hard limits (it goes, stops, turns the way it's told and doesn't spin out); Jev reads the
 // telemetry put into words and says whether it reads as confident, controllable arcade handling.
 import { TRACK, nearestProgress, pointAt, track } from '../../src/shared/circuit.ts';
+import { DRIVE_STEP } from '../../src/shared/garage.ts';
 import { bucket } from './lib.mjs';
 import { toCircuit } from './places.mjs';
 
@@ -31,7 +32,8 @@ const at = (s, d = 0) => {
 };
 
 export default async function driving(t) {
-  const { page } = await t.open({ view: 'third' });
+  // Full graphics: no frame is skipped to hold it to 30 a second (runScript's clock is a step a frame).
+  const { page } = await t.open({ view: 'third', graphics: 'full' });
   const car = await toCircuit(page, { kind: 'lambo' });
   t.metric('car', car);
   await page.waitForTimeout(1500); // shaders for a new place compile in the first second or so
@@ -39,13 +41,11 @@ export default async function driving(t) {
 
   /** Puts the car at `pose` doing `speed`, runs `phases` (lib: runScript), and returns its telemetry with track position added. */
   const run = async (name, pose, speed, phases) => {
-    await page.evaluate(([pose, speed]) => {
-      const d = window.__office.driver;
-      d.fleet.place(d.car, { ...pose, speed, steer: 0, slip: 0, yaw: 0 });
-    }, [pose, speed]);
-    const shot = t.shot(page, `${name}-start`);
-    const rows = await page.evaluate(runScript, { phases, pts });
-    await shot;
+    const start = { ...pose, speed, steer: 0, slip: 0, yaw: 0 };
+    await page.evaluate((start) => window.__office.driver.fleet.place(window.__office.driver.car, start), start);
+    // The screenshot first, then the run from the start again (runScript puts it there): a screenshot stalls a frame or two.
+    await t.shot(page, `${name}-start`);
+    const rows = await page.evaluate(runScript, { phases, pts, start, step: DRIVE_STEP });
     await t.shot(page, `${name}-end`);
     return rows.map((r) => ({ ...r, d: nearestProgress(r.x, r.z).d }));
   };
@@ -93,7 +93,7 @@ export default async function driving(t) {
   const t1 = corner('Turn 1');
   rows = await run('handbrake', at(t1.s0 - 36), 22, [{ ms: 1500, steer: 'line', cruise: 22 }, { ms: 450, steer: 'line', keys: ['Space', 'KeyW'] }, { ms: 2500, steer: 'line', keys: ['KeyW'] }]);
   const drift = rows.filter((r) => r.phase >= 1);
-  m.handbrake = { peakSlipDeg: maxSlip(drift), slidingS: round(drift.filter((r) => slipDeg(r) >= 10 && slipDeg(r) <= 45).length * 0.02), endHeadingDeg: deg(headingError(last(rows))), keptSpeed: round(Math.min(...drift.map((r) => r.speed)) / 22), spun: drift.some((r) => slipDeg(r) >= BAR.drift.spinDeg) };
+  m.handbrake = { peakSlipDeg: maxSlip(drift), slidingS: round(drift.reduce((s, r, i) => s + (i && slipDeg(r) >= 10 && slipDeg(r) <= 45 ? r.t - drift[i - 1].t : 0), 0)), endHeadingDeg: deg(headingError(last(rows))), keptSpeed: round(Math.min(...drift.map((r) => r.speed)) / 22), spun: drift.some((r) => slipDeg(r) >= BAR.drift.spinDeg) };
   t.check(`handbrake turn: the tail slides (body slip at least ${BAR.drift.minSlipDeg}°)`, m.handbrake.peakSlipDeg >= BAR.drift.minSlipDeg, m.handbrake);
   t.check('handbrake turn: comes out of the corner pointing the way round (within 45°), not spun', !m.handbrake.spun && Math.abs(m.handbrake.endHeadingDeg) <= 45, m.handbrake);
   t.check(`handbrake turn: never drops below ${BAR.drift.keep * 100}% of its entry speed`, m.handbrake.keptSpeed >= BAR.drift.keep, m.handbrake);
@@ -183,9 +183,12 @@ function settle(rows) {
  * In the page: drives by a list of phases, `ms` each, pressing keys as a player would (synthetic key
  * events: the game reads e.code). A phase has `keys` held, `steer` ('left', 'right', or 'line': at the
  * track's centre line 14 m+ ahead), `cruise` (W whenever slower than that, m/s) and `until: 'stopped'`
- * (on to the next once the car has). Samples the car every 20 ms; resolves with the samples.
+ * (on to the next once the car has). The car is put at `start` first. It runs in the game's own frame
+ * loop, on a clock of its own that the game runs on meanwhile: `step` s a frame (the car's physics
+ * step), so a run is the same steps with the same keys every time, whatever the frame rate. It samples
+ * the car each frame and resolves with the samples (`t`, s on that clock).
  */
-function runScript({ phases, pts }) {
+function runScript({ phases, pts, start, step }) {
   const o = window.__office;
   const all = ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'Space', 'ShiftLeft'];
   const held = new Set();
@@ -205,18 +208,30 @@ function runScript({ phases, pts }) {
     const want = Math.atan2(a[0] - p.x, a[1] - p.z);
     return Math.atan2(Math.sin(want - p.rotY), Math.cos(want - p.rotY));
   };
+  // The game's clock for the run: one physics step a frame however long the frame really took (and
+  // never ahead of real time), so the car gets the same steps, and the keys at the same steps, every run.
+  const raf = window.requestAnimationFrame;
+  let real = null, clock = null;
+  window.requestAnimationFrame = (cb) => raf((ts) => {
+    if (ts !== real) [clock, real] = [clock === null ? ts : Math.min(clock + step * 1000, ts), ts];
+    cb(clock);
+  });
   return new Promise((resolve) => {
     const rows = [];
-    const t0 = performance.now();
-    let k = 0, from = t0;
-    const timer = setInterval(() => {
-      const now = performance.now(), p = o.driver.pose;
-      while (k < phases.length && (now - from >= phases[k].ms || (phases[k].until === 'stopped' && p && Math.abs(p.speed) < 0.3 && now - from > 200))) [from, k] = [now, k + 1];
+    let t0 = null, k = 0, from = 0;
+    const frame = (ts) => {
+      if (t0 === null) {
+        o.driver.fleet.place(o.driver.car, start);
+        t0 = ts;
+      }
+      const p = o.driver.pose, sim = ts - t0;
+      while (k < phases.length && (sim - from >= phases[k].ms || (phases[k].until === 'stopped' && p && Math.abs(p.speed) < 0.3 && sim - from > 200))) [from, k] = [sim, k + 1];
       if (k >= phases.length || !p) {
-        clearInterval(timer);
+        window.requestAnimationFrame = raf;
         all.forEach((c) => set(c, false));
         return resolve(rows);
       }
+      window.requestAnimationFrame(frame);
       const ph = phases[k];
       const want = new Set(ph.keys ?? []);
       if (ph.cruise !== undefined && p.speed < ph.cruise) want.add('KeyW');
@@ -225,7 +240,8 @@ function runScript({ phases, pts }) {
       if (steer < -0.04) want.add('KeyD');
       all.forEach((c) => set(c, want.has(c)));
       const r = (n) => Math.round(n * 1000) / 1000;
-      rows.push({ t: r((now - t0) / 1000), phase: k, x: r(p.x), z: r(p.z), rotY: r(p.rotY), speed: r(p.speed), slip: r(p.slip ?? 0), steer: r(p.steer ?? 0), keys: [...held].join('') });
-    }, 20);
+      rows.push({ t: r(sim / 1000), phase: k, x: r(p.x), z: r(p.z), rotY: r(p.rotY), speed: r(p.speed), slip: r(p.slip ?? 0), steer: r(p.steer ?? 0), keys: [...held].join('') });
+    };
+    window.requestAnimationFrame(frame);
   });
 }
