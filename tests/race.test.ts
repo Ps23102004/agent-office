@@ -115,6 +115,29 @@ test('where you are on the track: how far round, how far off it, and what it is 
   assert.ok(circuitGround(CIRCUIT_GATE.out.x, CIRCUIT_GATE.out.z));
 });
 
+test('looking only near the track, where you are comes out just as it does checking every point', () => {
+  const { points, length } = track();
+  const every = (x: number, z: number) => {
+    let best = 0;
+    for (let i = 1; i < points.length; i++) if ((points[i].x - x) ** 2 + (points[i].z - z) ** 2 < (points[best].x - x) ** 2 + (points[best].z - z) ** 2) best = i;
+    const p = points[best];
+    const along = (x - p.x) * p.tx + (z - p.z) * p.tz;
+    const q = pointAt(p.s + along);
+    return { s: q.s, d: (x - q.x) * q.tz - (z - q.z) * q.tx };
+  };
+  const xs = points.map((p) => p.x), zs = points.map((p) => p.z);
+  const [x0, x1, z0, z1] = [Math.min(...xs) - 80, Math.max(...xs) + 80, Math.min(...zs) - 80, Math.max(...zs) + 80];
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let k = 0; k < 4000; k++) {
+    // Anywhere round the track and well out past it, and (half of them) close by it.
+    const by = k % 2 ? pointAt(rand() * length) : null;
+    const x = by ? by.x + (rand() - 0.5) * 70 : x0 + rand() * (x1 - x0);
+    const z = by ? by.z + (rand() - 0.5) * 70 : z0 + rand() * (z1 - z0);
+    assert.deepEqual(nearestProgress(x, z), every(x, z), `at (${x.toFixed(1)}, ${z.toFixed(1)})`);
+  }
+});
+
 test('the grid: eight slots behind the line, two by two, on the asphalt, facing the lights', () => {
   const seen = new Set<string>();
   for (let slot = 0; slot < RACE.slots; slot++) {

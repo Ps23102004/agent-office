@@ -130,6 +130,7 @@ export class Garage {
     const { x, z, rotY, speed, steer } = pose;
     const slip = pose.slip ?? 0;
     const spec = SPECS[this.defs[car].kind];
+    const fastest = spec.top * boostTop(this.defs[car].kind);
     if (![x, z, rotY, speed, steer, slip].every(Number.isFinite) || !this.where(x, z)) return undefined;
     if (this.where === paved && !this.plausible(car, { x, z, rotY })) return undefined;
     this.movedAt[car] = this.now();
@@ -137,8 +138,9 @@ export class Garage {
       x,
       z,
       rotY: Math.atan2(Math.sin(rotY), Math.cos(rotY)),
-      speed: Math.min(spec.top * boostTop(this.defs[car].kind), Math.max(-spec.reverse, speed)),
-      slip: spec.width < 1 ? 0 : Math.min(spec.top * 0.75, Math.max(-spec.top * 0.75, slip)),
+      // A spin can carry it backwards or sideways as fast as it was going: as fast as the car goes, either way.
+      speed: Math.min(fastest, Math.max(-spec.top, speed)),
+      slip: spec.width < 1 ? 0 : Math.min(fastest, Math.max(-fastest, slip)),
       steer: Math.min(DRIVE.steer, Math.max(-DRIVE.steer, steer)),
     });
     return { x: c.x, z: c.z, rotY: c.rotY, speed: c.speed, steer: c.steer, slip: c.slip };

@@ -48,6 +48,8 @@ export class PlayerController {
   jumpBoost = 1;
   /** 0 (steady) to 1: how hard the view trembles after one coffee too many. */
   jitter = 0;
+  /** Rolling the first-person view over (radians, + to the left): a driver feeling the corner (driving.ts). */
+  tilt = 0;
   /** How far below the floor you're on the street is: further down the higher your floor (see streetBelow). */
   street = STREET_Y;
   /**
@@ -383,7 +385,7 @@ export class PlayerController {
       this.stepOffset *= Math.exp(-dt * 16);
       this.bob = 0;
       this.jitterT += dt;
-      this.updateCamera();
+      this.updateCamera(false, dt);
       return;
     }
     if (this.seat) {
@@ -391,7 +393,7 @@ export class PlayerController {
         this.moving = false;
         this.facing = this.seat.rotY;
         this.jitterT += dt;
-        this.updateCamera();
+        this.updateCamera(false, dt);
         return;
       }
       this.stand();
@@ -467,7 +469,7 @@ export class PlayerController {
     const bob = walking ? Math.abs(Math.sin(this.walkPhase)) * 0.035 : 0;
     this.bob += (bob - this.bob) * Math.min(1, dt * 18);
     this.jitterT += dt;
-    this.updateCamera();
+    this.updateCamera(false, dt);
   }
 
   /** A step along `path`: toward its next corner, turning (and in first person, looking) the way you go. */
@@ -506,7 +508,8 @@ export class PlayerController {
     }
   }
 
-  updateCamera(snap = false) {
+  /** The camera where you are: in your head, or the third-person one easing after you over `dt` seconds (the same at any frame rate), unless `snap`. */
+  updateCamera(snap = false, dt = 1 / 60) {
     if (this.view === 'first') {
       this.camera.position.set(this.pos.x, this.pos.y + EYE_HEIGHT + this.bob + this.stepOffset + this.lift, this.pos.z);
       this.camera.rotation.set(this.lookPitch, this.camYaw, 0);
@@ -565,7 +568,8 @@ export class PlayerController {
       else cam.z = R.maxZ + e;
     }
     if (snap) this.camera.position.copy(cam);
-    else this.camera.position.lerp(cam, 0.25);
+    // A quarter of the way a frame at 60 fps, and as far in the same time at any other.
+    else this.camera.position.lerp(cam, 1 - Math.pow(0.75, Math.min(0.1, dt) * 60));
     this.camera.lookAt(target);
     this.shake();
   }
@@ -573,6 +577,7 @@ export class PlayerController {
   /** The jitters: the view trembles a little, on top of wherever you're looking. Drunk, it rolls and sways. */
   private shake() {
     const t = this.jitterT;
+    this.camera.rotation.z += this.tilt;
     if (this.drunk > 0) {
       const d = this.drunk;
       this.camera.rotation.z += d * (0.07 * Math.sin(t * 0.9) + 0.025 * Math.sin(t * 2.3 + 1));

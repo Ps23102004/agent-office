@@ -1,5 +1,6 @@
-import { SPECS, DRIVE_STEP, seatOffset, carFits, carPoint, collide, contact, drive, onPavement, type Box, type CarKind, type CarPose, type CarSeat, type Contact, type Pedals } from '../shared/garage';
-import { shoreRespawns, surfaceAt, vehicleSolids, type Surface } from '../shared/city';
+import { SPECS, DRIVE_STEP, NEAR_MISS_EVERY, TANK, advance, seatOffset, carFits, carPoint, tankFill, type Box, type CarKind, type CarPose, type CarSeat, type Course, type Pedals } from '../shared/garage';
+import { shoreRespawns, surfaceAt, vehicleSolids } from '../shared/city';
+import type { Pad } from './gamepad';
 import type { PlayerController } from './player';
 import type { ViewMode } from './state';
 import type { Fleet } from './world/cars';
@@ -19,12 +20,8 @@ export interface DriveHooks {
   splash?(at: { x: number; z: number }, speed: number): void;
   /** The screen going dark (and light again) while the car's fished out and put back on the road. */
   fade?(on: boolean): void;
-  /** Where a car can be, if not the pavement (at the race circuit: the track, its grass and the paddock). */
-  ground?(): ((x: number, z: number) => boolean) | undefined;
-  /** What's under the tires at (x, z) where `ground` says (the circuit's track or its grass); the city's surface otherwise. */
-  surfaceAt?(x: number, z: number): Surface;
-  /** What the ground does to the car after a step of `dt` (grass slows it): the car as it is then. */
-  surface?(p: CarPose, dt: number): CarPose;
+  /** Where you're driving, if not the city's streets: the race circuit's edge and grass (shared/circuit.ts CIRCUIT_COURSE). */
+  course?(): Omit<Course, 'solids' | 'bumped'> | undefined;
   /** Held on the brakes, whatever you press (on the grid, counting down). */
   hold?(): boolean;
 }
@@ -36,17 +33,6 @@ const SINK = { fade: 0.7, back: 1.1, up: 1.25 } as const;
 const SEND_EVERY = 0.066;
 /** How soon after one crunch another can sound (seconds). */
 const BUMP_EVERY = 0.35;
-/** The longest step a car takes in one go (m), so it never jumps a lamp post between two frames. */
-const STEP = 0.25;
-
-/**
- * The boost meter (0 empty to 1 full): a full tank lasts `burn` seconds on Shift. It fills back slowly
- * by itself (`trickle` a second), faster drifting (by slip × speed), slipping close past another moving
- * car much faster or slower than it (`nearMiss` of a tank, now and then), and tucked in behind one (`draft`).
- */
-const TANK = { burn: 3.5, trickle: 0.02, drift: 0.002, nearMiss: 0.12, draft: 0.2 } as const;
-/** A near miss fills the tank once (by TANK.nearMiss), then not again for this long (seconds). */
-const NEAR_MISS_EVERY = 1.5;
 
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -59,6 +45,10 @@ export class Driver {
   /** The boost meter, 0 to 1 (see TANK), and whether you're on it now (Shift, with the gas down): for the HUD. */
   boost = 1;
   boosting = false;
+  /** A gamepad, as read this frame (gamepad.ts), if there's one plugged in: it drives as well as the keys. */
+  pad: Pad | null = null;
+  /** The OS asks for less motion (main.ts reduceMotion): the view doesn't lean into corners, look on into the turn, or swing round a drift. */
+  calm = false;
   /** Holding X: looking back over your shoulder (or the chase camera round in front). */
   private lookingBack = false;
   /** Seconds behind the wheel (or beside it), for how often things happen. */
@@ -68,7 +58,17 @@ export class Driver {
   private nearMissAt = -Infinity;
   /** The way the car pointed last frame, to turn a first-person view along with it. */
   private yaw = 0;
+  /** How far a first-person view looks on into the turn (radians), on top of where the car points. */
+  private lead = 0;
   private remainder = 0;
+  /**
+   * Your car as its physics has it, and a step before: it's drawn between the two (`remainder` of the
+   * way), so it glides at any frame rate rather than jumping a step some frames and none others. Where
+   * it was last drawn, so a car put somewhere else (a reset, the grid) is taken as where it is.
+   */
+  private now: CarPose | null = null;
+  private before: CarPose | null = null;
+  private drawn = { x: NaN, z: NaN, rotY: NaN };
   /** Seconds since the car went into the sea, while it's going under; null on land. */
   private sinking: number | null = null;
   /** How far under it's gone (m), which takes you down with it. */
@@ -92,9 +92,31 @@ export class Driver {
     return this.seat === 'driver';
   }
 
-  /** The car you're in, as it's drawn. */
+  /** The car you're in: where its physics has it if you're driving, else as it's drawn. */
   get pose(): CarPose | null {
-    return this.car === null ? null : this.fleet.cars[this.car].pose;
+    if (this.car === null) return null;
+    return this.driving ? this.physics(this.car) : this.fleet.cars[this.car].pose;
+  }
+
+  /** Your car as its physics has it, unless something else has put it somewhere since it was last drawn: then there. */
+  private physics(car: number): CarPose {
+    const shown = this.fleet.cars[car].pose;
+    if (!this.now || shown.x !== this.drawn.x || shown.z !== this.drawn.z || shown.rotY !== this.drawn.rotY) {
+      this.now = this.before = { ...shown };
+      this.drawn = { x: shown.x, z: shown.z, rotY: shown.rotY };
+    }
+    return this.now;
+  }
+
+  /** Draws your car between its last two physics steps, `remainder` of the way. */
+  private show(car: number) {
+    const a = this.before!, b = this.now!;
+    const k = Math.min(1, this.remainder / DRIVE_STEP);
+    const mix = (u: number, v: number) => u + (v - u) * k;
+    const pose: CarPose = { ...b, x: mix(a.x, b.x), z: mix(a.z, b.z), rotY: a.rotY + wrap(b.rotY - a.rotY) * k, speed: mix(a.speed, b.speed), steer: mix(a.steer, b.steer), slip: mix(a.slip ?? 0, b.slip ?? 0), yaw: mix(a.yaw ?? 0, b.yaw ?? 0) };
+    this.fleet.place(car, pose);
+    const shown = this.fleet.cars[car].pose;
+    this.drawn = { x: shown.x, z: shown.z, rotY: shown.rotY };
   }
 
   /** Gets into `seat` of car `car`, looking out over its hood. */
@@ -105,6 +127,8 @@ export class Driver {
     this.seat = seat;
     this.gas = 0;
     this.remainder = 0;
+    this.now = this.before = null;
+    this.lead = 0;
     this.sent.at = -Infinity;
     const p = this.player;
     p.stopWalking();
@@ -155,14 +179,26 @@ export class Driver {
   }
 
   /**
-   * How much wider the view is (degrees) for how fast you're going: nothing at a crawl, up to 22
-   * more flat out, and 8 more on the boost.
+   * How much wider the view is (degrees) for how fast you're going: nothing at a crawl, a few at
+   * city speeds, up to 20 more flat out, and 8 more on the boost.
    */
   get fov(): number {
-    const pose = this.pose;
-    if (!pose || this.car === null) return 0;
-    const k = Math.min(1, Math.abs(pose.speed) / SPECS[this.fleet.cars[this.car].def.kind].top);
-    return 22 * k * k + (this.boosting ? 8 : 0);
+    const k = this.pace();
+    return 20 * k ** 1.2 + (this.boosting ? 8 : 0);
+  }
+
+  /** How hard the view rumbles (as PlayerController.jitter): a little at speed, more on the boost and sliding. */
+  get rumble(): number {
+    const pose = this.car === null ? null : this.fleet.cars[this.car].pose;
+    if (!pose) return 0;
+    const k = this.pace();
+    return 0.25 * k * k + (this.boosting ? 0.1 : 0) + Math.min(0.15, Math.abs(pose.slip ?? 0) * 0.02) * Math.min(1, k * 3);
+  }
+
+  /** How fast you're going, of the car's top speed (0 to 1). */
+  private pace(): number {
+    if (this.car === null) return 0;
+    return Math.min(1, Math.hypot(this.fleet.cars[this.car].pose.speed, this.fleet.cars[this.car].pose.slip ?? 0) / SPECS[this.fleet.cars[this.car].def.kind].top);
   }
 
   /**
@@ -223,14 +259,16 @@ export class Driver {
       this.hooks.fade?.(false);
     }
     if (this.driving) {
-      const was = this.fleet.cars[car].pose;
-      const pose = { ...was, ...(under ? this.ashore(car, was) : {}), speed: 0, slip: 0, yaw: 0 };
+      const was = this.physics(car);
+      const pose = { ...was, ...(under ? this.ashore(car, was) : {}), speed: 0, slip: 0, yaw: 0, drift: 0 };
       this.fleet.place(car, pose);
       this.hooks.moved(car, pose);
     }
     const p = this.player;
     p.rig = null;
     p.riding = false;
+    p.tilt = 0;
+    this.now = this.before = null;
     this.chaseOff();
     if (this.boosting) this.fleet.cars[car].boosting = false;
     this.car = null;
@@ -247,14 +285,18 @@ export class Driver {
       const p = this.player;
       const held = this.hooks.hold?.() ?? false;
       const kind = this.fleet.cars[car].def.kind;
+      // The keys, or the pad's stick and triggers (only while you have the controls, like the keys).
+      const pad = p.enabled ? this.pad : null;
+      const keyTurn = (p.holding('KeyA', 'ArrowLeft') ? 1 : 0) - (p.holding('KeyD', 'ArrowRight') ? 1 : 0);
       const pedals: Pedals = {
-        gas: held ? 0 : (p.holding('KeyW', 'ArrowUp') ? 1 : 0) - (p.holding('KeyS', 'ArrowDown') ? 1 : 0),
-        turn: (p.holding('KeyA', 'ArrowLeft') ? 1 : 0) - (p.holding('KeyD', 'ArrowRight') ? 1 : 0),
+        gas: Math.max(-1, Math.min(1, (p.holding('KeyW', 'ArrowUp') ? 1 : 0) - (p.holding('KeyS', 'ArrowDown') ? 1 : 0) + (pad ? pad.gas - pad.brake : 0))),
+        turn: keyTurn || (pad?.turn ?? 0),
+        brake: p.holding('Space') || !!pad?.handbrake,
         // A window open over the game (the map, the controls) takes your hands off: the brakes go on rather than it rolling on unsteered.
-        brake: held || !p.enabled || p.holding('Space'),
+        stop: held || !p.enabled,
       };
       // Shift with the gas down, while there's boost left (pedals have no boost); run dry, it takes a tenth of a tank to light again.
-      this.boosting = pedals.gas > 0 && this.boost > (this.boosting ? 0 : 0.1) && kind !== 'bicycle' && this.sinking === null && p.holding('ShiftLeft', 'ShiftRight');
+      this.boosting = pedals.gas > 0 && !pedals.stop && this.boost > (this.boosting ? 0 : 0.1) && kind !== 'bicycle' && this.sinking === null && (p.holding('ShiftLeft', 'ShiftRight') || !!pad?.boost);
       pedals.boost = this.boosting;
       this.fleet.cars[car].boosting = this.boosting;
       this.gas = pedals.gas;
@@ -265,19 +307,19 @@ export class Driver {
       }
       // A slow frame carries its fraction over; a paused tab never gets a giant physics step.
       this.remainder += Math.min(0.1, Math.max(0, dt));
-      let pose = this.fleet.cars[car].pose;
+      let pose = this.physics(car);
       // What's in the way, once a frame: a frame's steps don't take the car out of reach of it.
       const solids = this.fleet.solids(car);
       if (this.hooks.traffic) solids.push(...this.hooks.traffic(pose.x, pose.z, 12 + Math.abs(pose.speed) * 0.2));
       while (this.remainder + 1e-10 >= DRIVE_STEP) {
-        pose = this.move(pose, pedals, DRIVE_STEP, solids);
-        this.fleet.place(car, pose);
+        this.before = pose;
+        pose = this.now = this.move(pose, pedals, DRIVE_STEP, solids);
         this.remainder = Math.max(0, this.remainder - DRIVE_STEP);
       }
-      this.fleet.place(car, pose);
+      this.show(car);
       this.boost = this.boosting ? Math.max(0, this.boost - Math.min(0.1, dt) / TANK.burn) : Math.min(1, this.boost + this.refill(pose, kind, solids, Math.min(0.1, dt)));
       // Its middle's gone off the beach into the sea: a splash, and it goes under (the office never hears it was in the water).
-      if (!this.hooks.ground?.() && surfaceAt(pose.x, pose.z) === 'water') {
+      if (!this.hooks.course?.() && surfaceAt(pose.x, pose.z) === 'water') {
         this.sinking = 0;
         this.remainder = 0;
         this.hooks.splash?.(pose, Math.hypot(pose.speed, pose.slip ?? 0));
@@ -337,103 +379,18 @@ export class Driver {
     return spots.find((at) => carFits(at, [...cars, ...vehicleSolids(at.x, at.z, 8), ...(this.hooks.traffic?.(at.x, at.z, 12) ?? [])], kind)) ?? spots[0];
   }
 
-  /**
-   * The car `dt` on from `from`: in short steps, bouncing off whatever's in the way. It's pushed back
-   * out of anything it's got into (the way out that's shortest), and the hit takes the motion into it:
-   * off-centre, it spins the car round; into another car, its mass counts. A step that would leave it
-   * further into something than it was doesn't happen. At the circuit, its edge is a barrier too.
-   */
+  /** The car `dt` on from `from` (shared/garage.ts advance): through what's in the way, on the city's streets or the circuit. */
   private move(from: CarPose, pedals: Pedals, dt: number, solids: Box[]): CarPose {
     const kind = this.fleet.cars[this.car!].def.kind;
-    const ground = this.hooks.ground?.();
-    // Spinning, its ends swing round further than its middle goes.
-    const reach = Math.hypot(SPECS[kind].length, SPECS[kind].width) / 2;
-    const n = Math.max(1, Math.ceil(((Math.hypot(from.speed, from.slip ?? 0) + Math.abs(from.yaw ?? 0) * reach) * dt) / STEP));
-    const h = dt / n;
-    let pose = from;
-    for (let i = 0; i < n; i++) {
-      // The grip under the tires, where the car is: road, grass, sand (shared/garage.ts GROUND); at the circuit, its own.
-      const driven = drive(pose, pedals, h, kind, ground ? (this.hooks.surfaceAt?.(pose.x, pose.z) ?? 'road') : surfaceAt(pose.x, pose.z));
-      let next = this.hooks.surface ? this.hooks.surface(driven, h) : driven;
-      // Over the circuit's edge (from on it: one that's off can drive back on): back where it was, off the barrier.
-      const on = (q: CarPose) => !ground || onPavement(q, kind, ground);
-      if (!on(next) && on(pose)) {
-        const c = edge(next, kind, ground!);
-        next = collide({ ...next, x: pose.x, z: pose.z, rotY: pose.rotY }, kind, c);
-        this.bumped(c, closing(driven, c));
-        pose = next;
-        continue;
-      }
-      const out = this.unstick(next, kind, solids);
-      next = out.p;
-      // Wedged in deeper than before (two things at once, or the edge): it stays where it was, as the hits left it going.
-      if (!on(next) || (!out.clear && this.depth(next, kind, solids) > this.depth(pose, kind, solids) + 1e-6)) next = { ...next, x: pose.x, z: pose.z, rotY: pose.rotY };
-      pose = next;
-    }
-    return pose;
+    return advance(from, pedals, dt, kind, { ...this.hooks.course?.(), solids, bumped: (at, speed, vehicle) => this.bumped(at, speed, vehicle) });
   }
 
-  /** The car at `p` pushed out of `solids`, deepest first, bouncing off each it was going into; `clear` if it's out of them all. */
-  private unstick(p: CarPose, kind: CarKind, solids: Box[]): { p: CarPose; clear: boolean } {
-    for (let k = 0; k < 5; k++) {
-      let hit: { c: Contact; b: Box } | null = null;
-      for (const b of solids) {
-        const c = contact(p, b, kind);
-        if (c && (!hit || c.depth > hit.c.depth)) hit = { c, b };
-      }
-      if (!hit) return { p, clear: true };
-      // Out of goes (four pushes): still in something.
-      if (k === 4) break;
-      const { c, b } = hit;
-      this.bumped(c, closing(p, c, b), !!b.mass);
-      p = collide(p, kind, c, b);
-      p = { ...p, x: p.x + c.nx * (c.depth + 1e-4), z: p.z + c.nz * (c.depth + 1e-4) };
-    }
-    return { p, clear: false };
-  }
-
-  /** How far into `solids` the car at `p` is, all told (m); 0 clear of them all. */
-  private depth(p: CarPose, kind: CarKind, solids: Box[]): number {
-    let d = 0;
-    for (const b of solids) d += contact(p, b, kind)?.depth ?? 0;
-    return d;
-  }
-
-  /**
-   * How much boost comes back (of the meter) over `dt`: a trickle, more sliding sideways at speed, slipping
-   * close past other cars, and tucked in behind one.
-   */
+  /** How much boost comes back (of the meter) over `dt` (shared/garage.ts tankFill), a near miss now and then. */
   private refill(p: CarPose, kind: CarKind, solids: Box[], dt: number): number {
-    const spec = SPECS[kind];
-    const v = Math.abs(p.speed);
-    let rate = TANK.trickle;
-    let lump = 0;
-    if (v > 6 && Math.abs(p.slip ?? 0) > 1) rate += TANK.drift * Math.abs(p.slip ?? 0) * v;
-    if (v > 15) {
-      const s = Math.sin(p.rotY), c = Math.cos(p.rotY);
-      let near = false, draft = false;
-      for (const b of solids) {
-        // Only what's moving: a parked car, or one stopped at the lights, is no near miss.
-        const ox = b.vx ?? 0, oz = b.vz ?? 0;
-        if (!b.mass || Math.hypot(ox, oz) < 2) continue;
-        const dx = (b.minX + b.maxX) / 2 - p.x, dz = (b.minZ + b.maxZ) / 2 - p.z;
-        // Where it is from you: across (+ left) and ahead.
-        const across = Math.abs(dx * c - dz * s), ahead = dx * s + dz * c;
-        const half = b.hx ?? (b.maxX - b.minX) / 2;
-        const gap = across - spec.width / 2 - half;
-        // Past it, not keeping it company.
-        const passing = Math.hypot(s * p.speed - ox, c * p.speed - oz) > 5;
-        if (passing && gap > 0 && gap < 1.5 && Math.abs(ahead) < spec.length) near = true;
-        const going = ox * s + oz * c;
-        if (across < 1.5 && ahead > spec.length / 2 + 1 && ahead < 18 && going > 10) draft = true;
-      }
-      if (near && this.clock - this.nearMissAt > NEAR_MISS_EVERY) {
-        this.nearMissAt = this.clock;
-        lump = TANK.nearMiss;
-      }
-      if (draft) rate += TANK.draft;
-    }
-    return rate * dt + lump;
+    const { rate, nearMiss } = tankFill(p, kind, solids);
+    if (!nearMiss || this.clock - this.nearMissAt <= NEAR_MISS_EVERY) return rate * dt;
+    this.nearMissAt = this.clock;
+    return rate * dt + TANK.nearMiss;
   }
 
   /** Ran into something at `at`, losing `speed` m/s of the car's: a crunch, if it's enough to hear. */
@@ -454,8 +411,10 @@ export class Driver {
 
   /**
    * You in your seat, wherever the car's got to. In first person you look round from it, turning as
-   * it turns; in third, the chase camera swings round behind it as it goes, on a spring that lags
-   * through the corners and pulls back as you speed up. Holding X, you look back.
+   * it turns and a little on into the turn, the view leaning with the corner; in third, the chase
+   * camera swings round behind where the car's going (so a drift shows side on), on a spring that lags
+   * through the corners and pulls back as you speed up. Holding X, you look back. Eased by time, so
+   * it's the same at any frame rate.
    */
   private sit(dt: number) {
     const p = this.player;
@@ -465,49 +424,32 @@ export class Driver {
     p.moving = false;
     const turned = wrap(at.rotY - this.yaw);
     this.yaw = at.rotY;
-    const back = p.holding('KeyX');
+    const back = p.holding('KeyX') || !!this.pad?.lookBack;
     const flipped = back !== this.lookingBack;
     this.lookingBack = back;
-    if (p.view === 'first') p.camYaw += turned + (flipped ? Math.PI : 0);
-    else {
-      const pose = this.fleet.cars[this.car!].pose;
-      const speed = Math.abs(pose.speed);
+    const pose = this.fleet.cars[this.car!].pose;
+    const speed = Math.abs(pose.speed);
+    const ease = (rate: number) => 1 - Math.exp(-dt * rate);
+    if (p.view === 'first') {
+      const lead = back || this.calm ? 0 : Math.max(-0.25, Math.min(0.25, (pose.yaw ?? 0) * 0.2)) * Math.min(1, speed / 5);
+      const was = this.lead;
+      this.lead += (lead - this.lead) * ease(6);
+      p.camYaw += turned + (this.lead - was) + (flipped ? Math.PI : 0);
+      // About 2° for each g round the corner, leaning out with the car.
+      const g = (speed * (pose.yaw ?? 0)) / 9.81;
+      p.tilt = this.calm ? 0 : p.tilt + (Math.max(-0.06, Math.min(0.06, -g * 0.035)) - p.tilt) * ease(8);
+    } else {
+      p.tilt = 0;
+      // Behind where it's going rather than where it points: half the slide, up to 25°.
+      const sliding = speed > 3 && !this.calm ? Math.max(-0.44, Math.min(0.44, 0.5 * Math.atan2(pose.slip ?? 0, speed))) : 0;
       // Stiffer the faster it goes, so it never loses the car; looking back snaps round at once.
-      const k = flipped ? 1 : Math.min(1, dt * (2.5 + speed * 0.06) * Math.min(1, speed / 4));
-      p.camYaw += wrap(at.rotY + (back ? 0 : Math.PI) - p.camYaw) * k;
+      const k = flipped ? 1 : ease((2.5 + speed * 0.06) * Math.min(1, speed / 4));
+      p.camYaw += wrap(at.rotY + sliding + (back ? 0 : Math.PI) - p.camYaw) * k;
       if (this.camWas) {
         const top = SPECS[this.fleet.cars[this.car!].def.kind].top;
         const want = Math.max(this.camWas.dist, 9) + 3 * Math.min(1, speed / top);
-        p.camDist += (want - p.camDist) * Math.min(1, dt * 2);
+        p.camDist += (want - p.camDist) * ease(2);
       }
     }
   }
-}
-
-/** How fast the car at `p` is going into what's at `c` (m/s; less what that's doing itself). */
-function closing(p: CarPose, c: Contact, other: Pick<Box, 'vx' | 'vz'> = {}): number {
-  const s = Math.sin(p.rotY), co = Math.cos(p.rotY);
-  const vx = s * p.speed + co * (p.slip ?? 0) - (other.vx ?? 0);
-  const vz = co * p.speed - s * (p.slip ?? 0) - (other.vz ?? 0);
-  return Math.max(0, -(vx * c.nx + vz * c.nz));
-}
-
-/** Directions round a point, to feel for which way the edge of `where` runs. */
-const RING = Array.from({ length: 24 }, (_, i) => [Math.cos((i / 24) * Math.PI * 2), Math.sin((i / 24) * Math.PI * 2)]);
-
-/**
- * Where the car at `p` has gone over the edge of `where`, and which way is back in, square to the
- * barrier itself: felt for round the point that's over (the ones inside, on a ring about it, lie
- * in toward the track), so a graze along it slides on rather than stopping dead.
- */
-function edge(p: CarPose, kind: CarKind, where: (x: number, z: number) => boolean): Contact {
-  const w = SPECS[kind].width / 2, l = SPECS[kind].length / 2;
-  const off = [[w, l], [-w, l], [w, -l], [-w, -l], [w, 0], [-w, 0], [0, l], [0, -l]].map(([lx, lz]) => carPoint(p, lx, lz)).filter((q) => !where(q.x, q.z));
-  const at = off.reduce((m, q) => ({ x: m.x + q.x / off.length, z: m.z + q.z / off.length }), { x: 0, z: 0 });
-  let nx = 0, nz = 0;
-  for (const r of [0.6, 1.5]) for (const [cx, cz] of RING) if (where(at.x + cx * r, at.z + cz * r)) { nx += cx; nz += cz; }
-  let d = Math.hypot(nx, nz);
-  // Nothing inside round it (or all of it): back toward the car's middle.
-  if (d < 1e-6) { nx = p.x - at.x; nz = p.z - at.z; d = Math.hypot(nx, nz) || 1; }
-  return { nx: nx / d, nz: nz / d, depth: 0, x: at.x, z: at.z };
 }

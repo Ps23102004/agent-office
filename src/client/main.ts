@@ -34,8 +34,8 @@ import { ROUND, score, targetFrame, type BarGame, type Score, type Toss } from '
 import { Hands } from './world/hands';
 import { Basketball, IN_HANDS } from './world/hoop';
 import { HOOP, SWEET, idealSpeed, lookAtRim, meter, shotSpeed, throwPitch, tossSpeed, underCeiling } from '../shared/hoop';
-import { CARS, SPECS, carFits, carPoint, seatHips, type CarDef, type CarPose, type CarSeat } from '../shared/garage';
-import { CIRCUIT, CIRCUIT_CARS, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, GRASS_TOP, gridPose, inGate, resetSpots, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
+import { CARS, SPECS, carFits, carPoint, seatHips, type CarDef, type CarSeat } from '../shared/garage';
+import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_COURSE, track, CIRCUIT_GATE, CIRCUIT_NAME, CITY_GATE, circuitGround, gridPose, inGate, resetSpots, surfaceAt as trackSurface, type Gate } from '../shared/circuit';
 import { buildCircuit, type Circuit } from './world/circuit';
 import { ARENA, ARENA_GATE, ARENA_NAME, CITY_ARENA_GATE } from '../shared/arena';
 import { buildArena, type ArenaWorld } from './world/arena';
@@ -119,6 +119,7 @@ import { loadingScreen } from './ui/loading';
 import { TitleScreen, skipTitle, titleLook } from './ui/title';
 import './ui/title.css';
 import { SlowFrames } from './framerate';
+import { readPad } from './gamepad';
 import { offerLite, touchOnly } from './ui/litesuggest';
 import { decorTicker, pixelRatioFor, quality, setGraphics, tooSoon } from './quality';
 import { openDeskLabel, openExpand } from './ui/floorplan';
@@ -437,13 +438,6 @@ const fleet = () => (store.floor === CIRCUIT ? theCircuit().fleet : office.cars)
 const carDefs = (): readonly CarDef[] => (store.floor === CIRCUIT ? CIRCUIT_CARS : CARS);
 /** How high the ground the cars are on is: the street under your floor, or the circuit's. */
 const streetY = () => (away() ? 0 : player.street);
-/** Off the track, the grass (slippery already: shared/garage.ts GROUND, and no boost there) bogs a car down to a crawl, slower than any corner. */
-function onGrass(p: CarPose, dt: number): CarPose {
-  if (trackSurface(p.x, p.z) !== 'grass') return p;
-  const drag = Math.exp(-dt * 0.8);
-  const speed = Math.abs(p.speed) > GRASS_TOP ? p.speed - Math.sign(p.speed) * Math.min(Math.abs(p.speed) - GRASS_TOP, 16 * dt) : p.speed;
-  return { ...p, speed, slip: (p.slip ?? 0) * drag };
-}
 /** Where you came to the circuit from (a floor, and the garage's car you drove through the gate in), to go back to. */
 let raceFrom: { floor: string; car: number | null } | null = null;
 /** Through a gate: to the circuit or back to the city, until you're there. */
@@ -488,9 +482,7 @@ const driver = new Driver(player, office.cars, {
   },
   fade: (on) => fade(on),
   // W2: at the circuit a car goes on its track, grass and paddock; the grass slows it; on the grid the brakes are on till the lights go out.
-  ground: () => (atCircuit ? circuitGround : undefined),
-  surface: (p, dt) => (atCircuit ? onGrass(p, dt) : p),
-  surfaceAt: (x, z) => (trackSurface(x, z) === 'grass' ? 'grass' : 'road'),
+  course: () => (atCircuit ? CIRCUIT_COURSE : undefined),
   hold: () => atCircuit && store.race.phase === 'countdown' && !!myRacer(),
 });
 const telescope = new TelescopeView(
@@ -5247,6 +5239,22 @@ function frame(ts?: number) {
     if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[carDefs()[driver.car!].kind].length) / 2), Math.abs(pose.speed));
   }
   if (title?.active) player.enabled = false;
+  // A gamepad drives too (gamepad.ts): the sticks and triggers go to the car; Y gets you out, B back on the track, View swaps the camera, L3 honks.
+  driver.pad = readPad();
+  // Driving, the view rumbles a little with your speed (and on the boost, and sliding), and leans and swings with the car: not if the OS asks for less motion.
+  driver.calm = reduceMotion.matches;
+  if (!reduceMotion.matches) player.jitter = Math.max(player.jitter, driver.rumble);
+  if (driver.active && driver.pad && player.enabled) {
+    const tapped = driver.pad.tapped;
+    if (tapped.has('out')) getOut();
+    else if (tapped.has('reset') && atCircuit) resetCar();
+    if (tapped.has('horn')) honk();
+    if (tapped.has('view') && !atArena) {
+      settings.view = player.view === 'first' ? 'third' : 'first';
+      driver.setView(settings.view);
+      saveSettings(settings);
+    }
+  }
   player.update(dt);
   // Where the player's camera goes, all at once: the title blends to it, not to a step toward it from the flight.
   if (title?.active) player.updateCamera(true);
