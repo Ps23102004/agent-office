@@ -13,5 +13,6 @@ test('M is the city map with or without Shift, and voice mute never steals it', 
   assert.ok(CONTROLS.Walking.some(([keys, action]) => keys.includes('Z') && action === 'Change camera'));
   assert.ok(CONTROLS.Racing.some(([keys]) => keys.includes('Backspace')));
   assert.ok(CONTROLS.Driving.some(([keys]) => keys.includes('X')));
+  assert.deepEqual(CONTROLS.Arena.find(([, action]) => action === 'Slide while running')?.[0], ['Shift + C']);
   assert.deepEqual(CONTROLS.Everywhere.find(([, action]) => action === 'Mute / unmute voice')?.[0], ['U']);
 });

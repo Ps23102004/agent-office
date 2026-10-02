@@ -285,7 +285,7 @@ export class ArenaPlay {
     this.hud.scoreboard(false);
     const controls = new BotControls(store.arena.bots, (fill, level) => this.w.send({ t: 'arena.bots', fill, level }));
     const el = h('div.modal.bot-window', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Arena bots' },
-      h('header', {}, h('h2', {}, '🤖 Arena bots')), h('div.body', {}, controls.el));
+      h('header', {}, h('h2', {}, '🤖 Arena bots')), h('div.body', {}, controls.el), controls.footer);
     let releaseFocus = () => {};
     this.botsModal = openModal(el, { onClose: () => {
       this.botsModal = null; this.refreshBots = undefined; releaseFocus();
@@ -400,7 +400,6 @@ export class ArenaPlay {
     this.deathCam(dt, alive);
 
     const me = store.arena.players.find((x) => x.id === store.you);
-    const killer = this.killer === undefined ? undefined : store.arena.players.find((x) => x.id === this.killer);
     this.hud.render({
       you: store.you,
       state: store.arena,
@@ -414,7 +413,7 @@ export class ArenaPlay {
       weapon: this.weapon, guns: this.ammo, crouching: p.crouching, climbing: p.climbing,
       mouseFree: !this.w.locked() && !modalOpen(),
       ...(this.killedBy !== undefined && !alive ? { killedBy: this.killedBy,
-        killerHp: killer?.hp ?? this.killerHp, killerWeapon: this.killerWeapon } : {}),
+        killerHp: this.killerHp, killerWeapon: this.killerWeapon } : {}),
     });
     // Everyone else: their rifles, how they hold them, crouching, falling, safe; and the practice targets.
     this.others(dt, now, t);
@@ -491,7 +490,7 @@ export class ArenaPlay {
       const kind = m.kill ? 'kill' : m.head ? 'head' : 'hit';
       this.hud.hitmarker(kind);
       v.set(m.end.x, m.end.y, m.end.z).project(this.w.camera);
-      if (v.z >= -1 && v.z <= 1) this.hud.damage(m.dmg ?? 0, m.hp, !!m.head, Math.max(4, (v.x + 1) * 50), Math.max(8, (1 - v.y) * 50 - 4));
+      if (v.z >= -1 && v.z <= 1) this.hud.damage(m.dmg ?? 0, !!m.head, Math.max(4, (v.x + 1) * 50), Math.max(8, (1 - v.y) * 50 - 4));
       this.w.sound.gun(kind);
       this.stats.hits++;
       if (m.head) this.stats.heads++;

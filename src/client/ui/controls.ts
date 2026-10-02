@@ -44,7 +44,7 @@ export const CONTROLS: Record<ControlMode, [keys: string[], what: string][]> = {
     [['R'], 'Reload'],
     [['1', '2', 'Q'], 'Swap rifle / SMG (or the wheel)'],
     [['C'], 'Crouch (hold)'],
-    [['Shift', 'C'], 'Slide while running'],
+    [['Shift + C'], 'Slide while running'],
     [['Shift'], 'Run'],
     [['B'], 'Bot lobby · total players and difficulty'],
     [['Tab'], 'Scoreboard (hold)'],

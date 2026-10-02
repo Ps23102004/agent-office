@@ -1,5 +1,5 @@
 import { RULES, WEAPONS, type ArenaState, type WeaponId } from '../../shared/arena';
-import { botName } from '../player-name';
+import { botLabel, botName } from '../player-name';
 import { isBot } from '../../shared/bots';
 import { h } from './dom';
 import './arena.css';
@@ -72,8 +72,9 @@ export class ArenaHUD {
     type: 'button', hidden: true, onclick: () => this.openBots?.(), title: 'Bot settings (B)',
   }, '🤖 Bots · B');
   private readonly shieldLabel = h('div.arena-shield-label', { hidden: true }, 'SHIELDED');
-  private readonly damageSlots = Array.from({ length: 8 }, () => ({
+  private readonly damageSlots = Array.from({ length: 12 }, (_, i) => ({
     el: h('div.arena-damage-number', { hidden: true }), timer: undefined as ReturnType<typeof setTimeout> | undefined,
+    offset: [-36, 36, -60, 60][i % 4],
   }));
   private damageNext = 0;
   private readonly reloadFill = h('i');
@@ -97,7 +98,7 @@ export class ArenaHUD {
   private readonly matchDetail = h('span.arena-label');
   private readonly matchClock = h('strong.arena-clock');
   private readonly match = h('section.arena-match', { 'aria-label': 'Match' },
-    this.matchStatus, this.scoreline, h('div.arena-match-meta', {}, this.matchDetail, this.matchClock));
+    this.matchStatus, this.scoreline, h('div.arena-match-meta', {}, this.matchDetail, this.matchClock), this.botsButton);
   private readonly feedRows = Array.from({ length: 5 }, () => {
     const killer = h('span.arena-feed-name');
     const victim = h('span.arena-feed-name');
@@ -131,7 +132,7 @@ export class ArenaHUD {
   constructor(private readonly openBots?: () => void) {
     this.el.append(this.vignette, this.death, this.cross, this.marker, this.arc,
       this.health, this.ammo, this.match, this.feed, this.medalStack, this.board,
-      this.stance, this.botsButton, this.shieldLabel, ...this.damageSlots.map((slot) => slot.el));
+      this.stance, this.shieldLabel, ...this.damageSlots.map((slot) => slot.el));
   }
 
   show(on: boolean) {
@@ -201,7 +202,7 @@ export class ArenaHUD {
       if (!line) return;
       const feedName = (name: string) => {
         const p = players.find((p) => p.name === name);
-        return p?.bot || (p && isBot(p.id)) || name.startsWith('🤖') ? botName(name, v.state.bots?.level) : name;
+        return p?.bot || (p && isBot(p.id)) || name.startsWith('🤖') ? botLabel(name) : name;
       };
       text(row.killer, feedName(line.killer));
       text(row.victim, feedName(line.victim));
@@ -216,7 +217,7 @@ export class ArenaHUD {
 
     visible(this.death, v.killedBy !== undefined);
     if (v.killedBy !== undefined) {
-      text(this.deathText, `KILLED BY ${v.killedBy}${v.killerHp !== undefined ? ` · ${Math.ceil(v.killerHp)} HP LEFT` : ''}${v.killerWeapon ? ` · ${v.killerWeapon.toUpperCase()}` : ''}`);
+      text(this.deathText, `KILLED BY ${v.killedBy}${v.killerHp !== undefined && v.killerHp > 0 ? ` · ${Math.ceil(v.killerHp)} HP LEFT` : ''}${v.killerWeapon ? ` · ${v.killerWeapon.toUpperCase()}` : ''}`);
       const left = me?.respawnAt === undefined ? 0 : Math.ceil((me.respawnAt - v.now) / 1000);
       text(this.respawn, left > 0 ? `Back in ${left}` : 'Respawning…');
     }
@@ -253,12 +254,15 @@ export class ArenaHUD {
     this.markerTimer = setTimeout(() => { visible(this.marker, false); visible(this.shieldLabel, false); }, kind === 'shield' ? 450 : 180);
   }
 
-  /** A fixed pool of screen-space bursts, created once and recycled per confirmed hit. */
-  damage(dmg: number, hp: number | undefined, head: boolean, x: number, y: number) {
-    const slot = this.damageSlots[this.damageNext++ % this.damageSlots.length];
+  /** Stagger confirmed hits to either side of the aim point; never replace a visible burst. */
+  damage(dmg: number, head: boolean, x: number, y: number) {
+    const next = this.damageNext++ % this.damageSlots.length;
+    const slot = [...this.damageSlots.slice(next), ...this.damageSlots.slice(0, next)].find((s) => s.el.hidden);
+    if (!slot) return;
     clearTimeout(slot.timer);
-    text(slot.el, `${Math.round(dmg)}${hp !== undefined ? ` · ${Math.ceil(hp)} HP` : ''}`);
+    text(slot.el, String(Math.round(dmg)));
     slot.el.dataset.head = String(head);
+    style(slot.el, '--damage-offset', `${slot.offset}px`);
     style(slot.el, 'left', `${clamp(x, 96).toFixed(2)}%`);
     style(slot.el, 'top', `${clamp(y, 90).toFixed(2)}%`);
     this.pulse(slot.el);

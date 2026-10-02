@@ -15,6 +15,10 @@ export function playerName(id: string, source: Names): string {
   return source.peers.get(id)?.name ?? source.arena.players.find((p) => p.id === id)?.name ?? 'Someone';
 }
 
+export function botLabel(name: string): string {
+  return name.startsWith('🤖') ? name : `🤖 ${name}`;
+}
+
 export function botName(name: string, level?: BotLevel): string {
-  return `${name.startsWith('🤖') ? name : `🤖 ${name}`} · BOT${level ? ` · ${level}` : ''}`;
+  return `${botLabel(name)} · BOT${level ? ` · ${level}` : ''}`;
 }

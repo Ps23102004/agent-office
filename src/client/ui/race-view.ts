@@ -53,6 +53,27 @@ export function raceHudOrder(state: RaceState, you: string, live: {
   return Array.from(slots, (r) => r ?? rest.shift()!);
 }
 
+/** Three nearby ranks at most, all gaps in the same reference frame. */
+export function raceHudStandings(state: RaceState, you: string, live: {
+  position: number | null;
+  gapAhead: { id: string; seconds: number; metres: number } | null;
+  gapBehind: { id: string; seconds: number; metres: number } | null;
+}) {
+  const ordered = raceHudOrder(state, you, live);
+  const me = ordered.findIndex((r) => r.id === you);
+  const relative = me >= 0 && ordered[me].finishedAt === undefined && live.position !== null;
+  const start = me < 0 ? 0 : Math.max(0, me - 1);
+  const end = me < 0 ? 3 : me + 2;
+  return ordered.slice(start, end).map((racer, i) => {
+    const ahead = racer.id === live.gapAhead?.id;
+    const neighbour = ahead ? live.gapAhead : racer.id === live.gapBehind?.id ? live.gapBehind : null;
+    const gap = relative ? racer.id === you ? 'You' : neighbour
+      ? `${neighbour.seconds.toFixed(1)}s ${ahead ? 'ahead' : 'behind'}` : 'Gap unavailable'
+      : raceGap(state, racer);
+    return { racer, position: start + i + 1, gap, relative };
+  });
+}
+
 /** Laps behind, else the office-timed gap at the last line (Racer.gap), else checkpoints behind: never invented seconds. */
 export function raceGap(state: RaceState, racer: Racer): string {
   const leader = raceOrder(state)[0];

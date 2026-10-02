@@ -161,7 +161,7 @@
 .arena-hud .arena-health { bottom: calc(max(var(--arena-edge), env(safe-area-inset-bottom)) + 64px); }
 
 .arena-hud .arena-bots-button {
-  position: absolute; top: max(var(--arena-edge), env(safe-area-inset-top)); left: max(var(--arena-edge), env(safe-area-inset-left));
+  position: absolute; top: calc(100% + 8px); left: 0;
   pointer-events: auto; min-height: 44px; padding: 8px 14px; border: 1px solid #ffcf33; border-radius: 4px;
   background: #10171e; color: #fff; font: 700 13px/1.3 system-ui, sans-serif; cursor: pointer;
 }
@@ -174,14 +174,13 @@
 .arena-hud .arena-damage-number[data-head='true'] { color: var(--arena-accent); }
 .arena-hud .arena-damage-number[data-pulse='a'] { animation: arena-number-a .75s ease-out both; }
 .arena-hud .arena-damage-number[data-pulse='b'] { animation: arena-number-b .75s ease-out both; }
-@keyframes arena-number-a { from { opacity: 1; transform: translate(-50%, -50%); } to { opacity: 0; transform: translate(-50%, -160%); } }
-@keyframes arena-number-b { from { opacity: 1; transform: translate(-50%, -50%); } to { opacity: 0; transform: translate(-50%, -160%); } }
+@keyframes arena-number-a { from { opacity: 1; transform: translate(calc(-50% + var(--damage-offset)), -50%); } to { opacity: 0; transform: translate(calc(-50% + var(--damage-offset)), calc(-50% - 60px)); } }
+@keyframes arena-number-b { from { opacity: 1; transform: translate(calc(-50% + var(--damage-offset)), -50%); } to { opacity: 0; transform: translate(calc(-50% + var(--damage-offset)), calc(-50% - 60px)); } }
 .arena-hud .arena-scoreboard tbody th:nth-child(2) { white-space: normal; overflow-wrap: anywhere; font-size: 13px; }
-.arena-hud .arena-feed-name { white-space: normal; overflow-wrap: anywhere; font-size: 11px; }
+.arena-hud .arena-feed-name { white-space: nowrap; overflow-wrap: break-word; font-size: 11px; }
 @media (max-width: 640px) {
-  .arena-hud .arena-bots-button { top: 110px; }
   .arena-hud .arena-damage-number { font-size: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .arena-hud .arena-damage-number { animation: none !important; }
+  .arena-hud .arena-damage-number { animation: none !important; transform: translate(calc(-50% + var(--damage-offset)), -50%); }
 }

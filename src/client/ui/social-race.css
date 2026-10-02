@@ -18,10 +18,37 @@
 .race-split[data-trend="slower"] { color: #913718; }
 .race-hud [aria-label="Your practice laps"] > div:last-child { grid-column: auto; }
 .rabbit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.race-live-positions { list-style: none; padding: 0; margin: 10px 0; font: 600 11px/1.5 system-ui, sans-serif; }
-.race-live-positions li { padding: 3px 0; border-bottom: 1px solid var(--ink); overflow-wrap: anywhere; }
+.race-live-positions { list-style: none; padding: 0; margin: 6px 0; font: 600 11px/1.4 system-ui, sans-serif; }
+.race-live-positions li { display: flex; justify-content: space-between; gap: 6px; padding: 2px 0; border-bottom: 1px solid var(--ink); white-space: nowrap; }
+.race-live-positions li[hidden] { display: none; }
+.race-standing-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.race-live-positions li > :last-child { flex-shrink: 0; }
 .race-live-positions .race-you { font-weight: 900; }
-.race-neighbours { font-size: 11px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rabbit-controls:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.race-hud .race-metrics { margin-top: 6px; gap: 4px 12px; }
+.race-hud .race-sectors li { padding: 2px 0; }
+.race-hud .race-split { margin: 6px 0; }
+.race-hud .race-map { margin-top: 6px; }
+@media (min-width: 601px) {
+  .race-hud { width: 360px; }
+  .race-hud .race-hud-details { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; }
+  .race-hud .race-hud-details > .race-metrics { grid-column: 1 / -1; }
+  .race-hud .race-map svg { width: 96px; }
+}
+@media (max-height: 500px) and (min-width: 601px) {
+  .race-hud { width: min(560px, calc(100vw - 280px)); max-height: calc(100dvh - var(--race-hud-top, 84px) - 72px); padding: 6px; }
+  .race-hud .race-hud-details { display: grid; grid-template-columns: 100px minmax(0, 1fr) 80px; gap: 8px; }
+  .race-hud .race-hud-details > .race-metrics { grid-column: auto; }
+  .race-hud .race-metrics { grid-template-columns: 1fr; gap: 2px; margin-top: 4px; }
+  .race-hud .race-metrics:not([aria-label]) > div:last-child { display: none; }
+  .race-hud .race-metrics dd { font-size: 13px; }
+  .race-hud .race-coach { margin: 4px 0; font-size: 11px; }
+  .race-hud .race-live-positions { margin: 4px 0; }
+  .race-hud .race-split { display: none; }
+  .race-hud .race-sectors { margin: 4px 0; }
+  .race-hud .race-sectors li { padding: 0; line-height: 14px; }
+  .race-hud .race-map svg { width: 80px; }
+}
 .race-lobby-backdrop { z-index: 35; }
 #hud:has(.race-hud:not(.hidden)) :is(#toasts, #conn, .chat) { z-index: 36; }
 body:has(.race-lobby-backdrop) #hud :is(#toasts, #conn, .chat) { z-index: 36; }

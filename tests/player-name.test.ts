@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { playerName, botName } from '../src/client/player-name.js';
+import { playerName, botLabel, botName } from '../src/client/player-name.js';
 import { idleRace } from '../src/shared/race.js';
 import { idleArena } from '../src/shared/arena.js';
 
@@ -22,4 +22,6 @@ test('arena bots resolve from the arena roster and tags never repeat the robot i
   assert.equal(playerName('bot:arena:1', source), '🤖 Bolt');
   assert.equal(botName('🤖 Bolt', 'insane'), '🤖 Bolt · BOT · insane');
   assert.equal(botName('Bolt', 'easy'), '🤖 Bolt · BOT · easy');
+  assert.equal(botLabel('Bolt'), '🤖 Bolt');
+  assert.equal(botLabel('🤖 Bolt'), '🤖 Bolt');
 });

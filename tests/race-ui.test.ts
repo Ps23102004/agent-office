@@ -1,9 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { idleRace, type Racer } from '../src/shared/race.js';
-import { boostAvailable, countdownLights, mapProjection, raceGap, raceHudOrder, raceOrder, raceTime, speedReading } from '../src/client/ui/race-view.js';
+import { boostAvailable, countdownLights, mapProjection, raceGap, raceHudOrder, raceHudStandings, raceOrder, raceTime, speedReading } from '../src/client/ui/race-view.js';
 
 const racer = (id: string, extra: Partial<Racer> = {}): Racer => ({ id, name: id, car: 0, slot: 0, lap: 0, checkpoint: -1, position: 1, ...extra });
+
+test('an eight-car HUD keeps you and your neighbours, including the leader, with gaps to you only', () => {
+  const state = idleRace();
+  state.racers = Array.from({ length: 8 }, (_, i) => racer(String(i), { position: i + 1, slot: i, gap: i * 1000 }));
+  const live = { position: 2, gapAhead: { id: '0', seconds: 0.8, metres: 20 }, gapBehind: { id: '2', seconds: 1.2, metres: 30 } };
+  const rows = raceHudStandings(state, '1', live);
+  assert.deepEqual(rows.map((r) => [r.position, r.racer.id, r.gap]), [[1, '0', '0.8s ahead'], [2, '1', 'You'], [3, '2', '1.2s behind']]);
+  assert.ok(rows.every((r) => r.relative));
+  const first = raceHudStandings(state, '0', { ...live, position: 1, gapAhead: null, gapBehind: { ...live.gapBehind, id: '1' } });
+  assert.deepEqual(first.map((r) => r.position), [1, 2]);
+  const last = raceHudStandings(state, '7', { ...live, position: 8, gapAhead: { ...live.gapAhead, id: '6' }, gapBehind: null });
+  assert.deepEqual(last.map((r) => r.position), [7, 8]);
+  const unavailable = raceHudStandings(state, '1', { ...live, gapAhead: null });
+  assert.equal(unavailable[0].gap, 'Gap unavailable', 'never substitute a checkpoint gap for a missing live gap');
+  const watching = raceHudStandings(state, 'spectator', live);
+  assert.deepEqual(watching.map((r) => r.gap), ['Leading', '+1.00s', '+2.00s']);
+  assert.ok(watching.every((r) => !r.relative));
+});
 
 test('live overtakes update the HUD neighbourhood with unique ranks without changing server results', () => {
   const state = idleRace();

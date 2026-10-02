@@ -50,6 +50,7 @@ export class BotControls {
   private sentAt = -Infinity;
   private available = false;
   readonly el: HTMLElement;
+  readonly footer: HTMLElement;
   constructor(settings: BotSettings | undefined, send: (fill: number, level: BotLevel) => void) {
     const initial = settings ?? BOTS;
     const id = `bot-fill-${++nextId}`;
@@ -67,7 +68,8 @@ export class BotControls {
       h('h3', {}, 'Play with bots'),
       h('label.bot-fill', { for: id }, 'Total players · people + bots ', this.fill),
       h('p.note', {}, 'Bots fill the spare places. People always keep their place; 1 sends all bots home.'),
-      this.difficulty.el, this.current, this.apply);
+      this.difficulty.el);
+    this.footer = h('footer.bot-actions', {}, this.current, this.apply);
   }
   update(settings: BotSettings | undefined, enabled: boolean) {
     const s: BotSettings = settings ?? BOTS;
