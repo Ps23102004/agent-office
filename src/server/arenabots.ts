@@ -1,4 +1,4 @@
-import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, EYE_Y, RULES, rayWorld, type ArenaPlayer, type V3 } from '../shared/arena.js';
+import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_H, BODY_R, EYE_Y, HEAD_Y, RULES, rayWorld, type ArenaPlayer, type V3 } from '../shared/arena.js';
 import { lookFromSeed } from '../shared/avatar.js';
 import { BOTS, BOT_ID, BOT_NAMES, SKILL, isBot, type BotLevel, type BotSettings, type BotSkill } from '../shared/bots.js';
 import { NavGrid, type Pt, type Rect } from '../shared/nav.js';
@@ -18,9 +18,9 @@ const RUN = 7.5;
 /** The rifle's cone and kick (rad), as a person's page has them (client/arena.ts SPREAD, KICK). */
 const CONE = { hip: 0.012, move: 0.02, ads: 0.15, perShot: 0.006, maxBloom: 0.03, recover: 0.08 };
 const KICK = { up: 0.012, settle: 9 };
-/** Where on someone it aims, above their feet: the chest, or the head. */
-const CHEST = 1.0;
-const HEAD = 1.5;
+/** Where on someone it aims, above their feet: the chest, or the middle of the head, as the shot judge shapes them. */
+const CHEST = HEAD_Y * 0.75;
+const HEAD = (HEAD_Y + BODY_H) / 2;
 /** How long (ms) it remembers where someone was. */
 const FORGET = 8000;
 /** Colours for the bots' name tags. */
@@ -479,7 +479,7 @@ export class ArenaBots {
     b.nextShot = now + RULES.every;
     const shot = this.io.shoot(p.id, eye, d, now);
     if (!shot) return;
-    if (shot.kill) this.downed.add(shot.hit!);
+    if (shot.kill && shot.hit) this.downed.add(shot.hit);
     b.ammo--;
     b.bloom = Math.min(CONE.maxBloom, b.bloom + CONE.perShot);
     b.kick += KICK.up * (1 - k.recoil);

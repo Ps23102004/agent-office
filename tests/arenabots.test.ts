@@ -181,7 +181,7 @@ test('each level aims as well as it should against someone strafing 15 m off, an
     kills.sort((a, b) => a - b);
     return { level, rate: hits / shots, kill: kills[15] };
   });
-  // Measured (30 duels each): easy ~38% and 2.5 s to the kill, normal ~57% / 1.1 s, hard ~77% / 0.65 s, insane ~88% / 0.45 s.
+  // Measured (60 duels each): easy ~38% and 2.6 s to the kill, normal ~57% / 1.1 s, hard ~77% / 0.65 s, insane ~88% / 0.5 s.
   const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.25, 0.5, 1500, 4000], normal: [0.45, 0.7, 700, 1600], hard: [0.65, 0.88, 450, 900], insane: [0.8, 0.97, 300, 700] };
   for (const r of rows) {
     const [lo, hi, k0, k1] = bands[r.level];
