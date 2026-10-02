@@ -134,7 +134,7 @@ export function buildLandmarks(dark: () => number, gasPoleHeight: number): THREE
     stripes(p.x, p.z, p.h, p.half, race ? '#e63946' : '#3d4147', race ? '#f8f9fa' : '#f4c430');
     const by = p.h - 4;
     [0, Math.PI / 2].forEach((yaw, i) => {
-      boards.add(race ? '🏁 RACE CIRCUIT' : '🎯 ARENA', 11, 3.4, race ? '#ffd166' : '#f4c430', '#2b2d42', '#212529', p.x, by - i * 3.7, p.z, yaw, true, p.half + 0.06);
+      boards.add(race ? '🏁 RACE CIRCUIT' : '🎯 ARENA', 11, 3.4, race ? '#ffd166' : '#f4c430', '#2b2d42', '#212529', p.x, by - i * 3.7, p.z, yaw, true, p.half + 0.03);
       glowAt.push(p.x, by - i * 3.7, p.z);
     });
     solid.add(mesh(new THREE.SphereGeometry(0.5, 8, 6), toon(race ? '#ff4d4d' : '#ffe066', { emissive: race ? '#ff4d4d' : '#ffe066' }), p.x, p.h + 0.4, p.z, false));
@@ -151,10 +151,10 @@ export function buildLandmarks(dark: () => number, gasPoleHeight: number): THREE
     slab(gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, 6, 1.4, yaw, '#1d2b3a');
     boards.add('1.89  2.09', 6, 1.4, '#1d2b3a', '#ffd166', '#ffffff', gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, yaw, true, 0.25);
     glowAt.push(gas.sign.x, gasPoleHeight - 2, gas.sign.z);
-    // The canopy's fascia says it too, on the street side.
+    // The canopy's fascia says it too, on the street side (a centimetre proud of the red band along its foot).
     const c = gas.canopy;
     const cw = gas.fz ? c.maxX - c.minX : c.maxZ - c.minZ;
-    boards.add('GAS', Math.min(cw, 6), 0.9, '#f4f1de', '#e63946', '#e63946', (c.minX + c.maxX) / 2 + gas.fx * ((c.maxX - c.minX) / 2 + 0.04), 4.5, (c.minZ + c.maxZ) / 2 + gas.fz * ((c.maxZ - c.minZ) / 2 + 0.04), yaw, false);
+    boards.add('GAS', Math.min(cw, 6), 0.9, '#f4f1de', '#e63946', '#e63946', (c.minX + c.maxX) / 2 + gas.fx * ((c.maxX - c.minX) / 2), 4.5, (c.minZ + c.maxZ) / 2 + gas.fz * ((c.maxZ - c.minZ) / 2), yaw, false, 0.04);
   }
 
   // A big P over the parking deck, crossed so it's seen from every street.
