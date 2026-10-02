@@ -18,12 +18,14 @@ import {
   SWAP,
   WEAPONS,
   damageOf,
+  eyeY,
   nextShot,
   rayBox,
   rayPerson,
   rayWorld,
   spreadOf,
   targetAt,
+  type Body,
   type V3,
 } from '../src/shared/arena.js';
 import { CITY_GATE, inGate } from '../src/shared/circuit.js';
@@ -376,4 +378,86 @@ test('two guns: a swap takes a moment and drops the reload; the SMG fires faster
   assert.equal(damageOf(WEAPONS.smg, false, 21), Math.round(17 * 0.8));
   assert.equal(damageOf(WEAPONS.smg, false, 60), Math.round(17 * 0.6));
   assert.equal(damageOf(WEAPONS.rifle, true, 60), RULES.head);
+});
+
+test('a reload that\'s done stays done through a swap that gets to the office before its timer does', () => {
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 12, y: 0, z: C.z - 30 } };
+  const a = new ArenaControl((id) => ({ ...spots[id], crouch: false }));
+  let now = 5_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  const o = { x: spots.a.x, y: EYE_Y, z: spots.a.z };
+  const down = { x: 0, y: -1, z: 0.1 };
+  while (a.fire('a', o, down, (now += WEAPONS.rifle.every), undefined));
+  assert.ok(a.reload('a', now));
+  // The page's reload is over and it swaps away and back, all before the office's timer next ticks.
+  now += WEAPONS.rifle.reload + 80;
+  assert.ok(a.weapon('a', 'smg', now));
+  assert.ok(a.weapon('a', 'rifle', (now += 100)));
+  now += SWAP;
+  let shots = 0;
+  while (a.fire('a', o, down, (now += WEAPONS.rifle.every), undefined)) shots++;
+  assert.equal(shots, WEAPONS.rifle.mag, 'a full magazine, not blanks');
+});
+
+test('crouched behind a barrier, nobody on the ground beyond can hit you, head and all, and you can\'t see over; standing, your head shows and you can', () => {
+  // One shot, judged by the office, from `from`'s eyes at `aim`, at someone at `them`.
+  const judge = (from: V3, them: Body, aim: V3) => {
+    const spots: Record<string, Body> = { a: from, b: them };
+    const a = new ArenaControl((id) => ({ ...spots[id], crouch: !!spots[id].crouch }));
+    a.join('a', 'A', 0);
+    a.join('b', 'B', 0);
+    const o = { x: from.x, y: eyeY(from), z: from.z };
+    return a.fire('a', o, { x: aim.x - o.x, y: aim.y - o.y, z: aim.z - o.z }, RULES.safe * 1000 + 1, undefined);
+  };
+  const barriers = ARENA_BOXES.filter((b) => b.kind === 'barrier');
+  assert.equal(barriers.length, 4);
+  for (const b of barriers) {
+    assert.ok(eyeY({ y: 0, crouch: true }) < b.y1 && eyeY({ y: 0 }) > b.y1, 'eyes under it crouching, over it standing');
+    // Across it the short way (u), along it the long way (w).
+    const thinX = b.maxX - b.minX < b.maxZ - b.minZ;
+    const mid = { x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 };
+    const half = thinX ? (b.maxX - b.minX) / 2 : (b.maxZ - b.minZ) / 2;
+    const spot = (u: number, w: number, y = 0): V3 => (thinX ? { x: mid.x + u, y, z: mid.z + w } : { x: mid.x + w, y, z: mid.z + u });
+    for (const side of [-1, 1]) {
+      // Up against its far side (player.ts RADIUS 0.32 off it).
+      const near = half + 0.32;
+      let crouchedHits = 0, standingHits = 0;
+      for (const dist of [3, 6, 12, 25]) {
+        const from = spot(-side * (half + dist), 0.3);
+        for (let y = 0.4; y <= 1.8; y += 0.02) {
+          for (let w = -0.45; w <= 0.45; w += 0.15) {
+            const aim = spot(side * near, w, y);
+            if (judge(from, { ...spot(side * near, 0), crouch: true }, aim)?.hit) crouchedHits++;
+            if (judge(from, spot(side * near, 0), aim)?.hit) standingHits++;
+          }
+        }
+      }
+      assert.equal(crouchedHits, 0, 'crouched: hidden');
+      assert.ok(standingHits > 0, 'standing: the head shows');
+    }
+  }
+});
+
+test('a page can\'t say it\'s crouching (low behind cover) and fire from standing height; standing up, or jumping, it can', () => {
+  const spots: Record<string, Body> = { a: { x: C.x - 20, y: 0, z: C.z - 30, crouch: true }, b: { x: C.x - 10, y: 0, z: C.z - 30 } };
+  const a = new ArenaControl((id) => ({ ...spots[id], crouch: !!spots[id].crouch }));
+  let now = 6_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  now += RULES.safe * 1000;
+  const from = (y: number) => ({ x: spots.a.x, y, z: spots.a.z });
+  const atB = (o: V3) => ({ x: spots.b.x - o.x, y: spots.b.y + 0.75 - o.y, z: spots.b.z - o.z });
+  const shoot = (o: V3) => a.fire('a', o, atB(o), (now += RULES.every), 0);
+  a.moved('a', spots.a, now);
+  // Just down: eyes still on their way.
+  assert.equal(shoot(from(EYE_Y))?.hit, 'b');
+  // Down a while: from crouched eyes, yes; from standing ones, no.
+  now += 400;
+  assert.equal(shoot(from(EYE_Y)), undefined);
+  assert.equal(shoot(from(eyeY(spots.a) + 0.1))?.hit, 'b');
+  // Leaving the ground (the page says so straight away: main.ts), higher than that's fine.
+  spots.a = { ...spots.a, y: 0.1 };
+  a.moved('a', spots.a, now);
+  assert.equal(shoot(from(eyeY(spots.a) + 0.35))?.hit, 'b');
 });

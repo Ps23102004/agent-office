@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CROUCH } from '../../shared/arena';
+import { CROUCH, HEAD_C } from '../../shared/arena';
 import { HAIR_COLORS, HAIR_STYLES, SKIN_TONES, type Look } from '../../shared/avatar';
 import { EMOTE_BY_ID, type Emote, type EmoteId } from '../../shared/emotes';
 import type { CarriedIssue, Theme, WorkerAction, WorkerStatus, WorkerTask } from '../../shared/protocol';
@@ -592,6 +592,8 @@ export class Person {
   aimPitch = 0;
   /** In the arena: how far down they're crouching, 0 to 1 (shared/arena.ts CROUCH all the way). */
   crouchK = 0;
+  /** The crouch the head was last put down for. */
+  private hunched = 0;
   /** In the arena: how far they've fallen, killed, 0 to 1: backward (`fallDir` 1) or forward (-1). */
   fallen = 0;
   fallDir: 1 | -1 = 1;
@@ -1322,8 +1324,8 @@ export class Person {
     }
     const c = this.crouchK;
     if (c > 0.001) {
-      // Down on one knee, more or less: the right leg out in front, the left back under them.
-      this.body.position.y -= CROUCH * c;
+      // Down on one knee, more or less: the right leg out in front, the left back under them (and the head down into the shoulders, see update).
+      this.body.position.y -= KNEEL * c;
       this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, -1.25, c);
       this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 1.25, c);
     }
@@ -1479,6 +1481,13 @@ export class Person {
     if (this.golf && !sit && !airborne) this.golfStep(dt);
     if (this.oche && !sit) this.ocheStep(dt);
     if (this.rifle || this.crouchK > 0.001 || this.fallen > 0.001 || this.hitT > 0 || this.shirt.emissive.r > 0) this.arenaStep(dt);
+    // Crouching, the head goes down into the shoulders the rest of the way the body doesn't (where the
+    // office has it: shared/arena.ts), and a holiday hat comes off: it'd show over cover the head's down behind.
+    if (this.crouchK !== this.hunched) {
+      this.hunched = this.crouchK;
+      this.head.position.y = HEAD_C - (CROUCH - KNEEL) * this.crouchK;
+      for (const h of this.hat) h.visible = this.crouchK < 0.5;
+    }
   }
 }
 
@@ -1493,6 +1502,8 @@ const RIFLE_GRIP = new THREE.Vector3(-0.08, -0.08, 0.3);
 const RIFLE_HOLD = new THREE.Vector3(-0.3, -0.1, 0.5);
 /** How long (s) a hit's flash lasts. */
 const HIT_FLASH = 0.12;
+/** How far (m) the body goes down crouching, on one knee; the head goes the rest of CROUCH, down into the shoulders. */
+const KNEEL = 0.32;
 
 // -----------------------------------------------------------------------------------------------
 

@@ -5,6 +5,7 @@ import { PlayerController } from '../src/client/player.js';
 import type { Collider } from '../src/client/world/office.js';
 import { cityLayout, citySolids, parkHedges, solidHeight } from '../src/shared/city.js';
 import { BALCONY, FLOOR, LOFT, SEATING_BY_ID, SLAB, STAIRS, STREET_Y, seatAt, seatPlace } from '../src/shared/layout.js';
+import { ARENA_BOXES, ARENA_CENTER, CROUCH } from '../src/shared/arena.js';
 
 /** The office floor: upstairs, over the garage, so off it you'd drop to the street. */
 const officeFloor: Collider = { ...FLOOR, bottom: -SLAB, top: 0 };
@@ -295,7 +296,7 @@ test('the arena: C crouches you lower and slower; from a run, a slide first', (t
   const standing = eyes();
   const crouchWalk = go('KeyW', 'KeyC');
   frames(30);
-  assert.ok(Math.abs(standing - eyes() - 0.32) < 0.03, `eyes ${standing} → ${eyes()}`);
+  assert.ok(Math.abs(standing - eyes() - CROUCH) < 0.03, `eyes ${standing} → ${eyes()}`);
   player.update(1); // the slide's rest runs out
   keys();
   frames(60);
@@ -306,4 +307,25 @@ test('the arena: C crouches you lower and slower; from a run, a slide first', (t
   keys('KeyC');
   frames(30);
   assert.equal(player.crouching, false);
+});
+
+test('the arena\'s own yard: jumping at the crate by the middle block climbs you onto it, then onto the container', (t) => {
+  const C = ARENA_CENTER;
+  // As client/world/arena.ts makes them: the yard's ground, and everything in it.
+  const yard: Collider[] = [{ minX: C.x - 300, maxX: C.x + 300, minZ: C.z - 300, maxZ: C.z + 300, bottom: -1, top: 0 }, ...ARENA_BOXES.map((b) => ({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, bottom: b.y0, top: b.y1 }))];
+  const crate = ARENA_BOXES.find((b) => b.kind === 'crate' && b.y1 === 1.2 && Math.abs(b.minX - C.x - 3.6) < 0.01)!;
+  const block = ARENA_BOXES.find((b) => b.kind === 'container' && b.minX < crate.minX && b.maxX > C.x && b.minZ < crate.maxZ && b.maxZ > crate.minZ)!;
+  for (const fps of [30, 60, 144]) {
+    const { player, keys, frames } = controller(t, yard);
+    player.arena = true;
+    // East of the crate, heading west at it (and the block behind it).
+    player.pos.set(crate.maxX + 2, 0, (crate.minZ + crate.maxZ) / 2);
+    player.camYaw = Math.PI / 2;
+    keys('KeyW', 'Space');
+    frames(Math.round(fps * 1.2), 1 / fps);
+    keys();
+    frames(fps * 2, 1 / fps);
+    const p = player.pos;
+    assert.ok(Math.abs(p.y - block.y1) < 0.01 && p.x > block.minX && p.x < block.maxX, `${fps} fps: up on the block (x=${(p.x - C.x).toFixed(2)}, y=${p.y.toFixed(2)})`);
+  }
 });

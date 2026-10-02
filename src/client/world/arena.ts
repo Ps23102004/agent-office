@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, WALL_H, type ArenaBox, type V3, type WeaponId } from '../../shared/arena';
+import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, WALL_H, type ArenaBox, type V3 } from '../../shared/arena';
 import { RACE_PLAZA } from '../../shared/city';
 import { gate, pulse } from './circuit';
 import type { Collider, Interactable } from './office';
 import { mergeColored, mesh, toon } from './toon';
+import type { WeaponId } from '../../shared/arena';
 
 // The arena (shared/arena.ts), drawn: a concrete container yard inside high walls striped yellow and
 // black at the top, shipping containers in four paints with their ribs and doors, wooden crates,

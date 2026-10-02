@@ -43,7 +43,10 @@ const box = (x: number, z: number, sx: number, sz: number, h: number, kind: Aren
 
 /** A container's height and width; they're 12 m long. */
 const CH = 2.6, CW = 2.5;
-/** A concrete barrier's height: over it standing, hidden behind it crouching (see CROUCH). */
+/**
+ * A concrete barrier's height: over it standing (eyes at EYE_Y), hidden behind it crouching, eyes and
+ * head and all (see CROUCH).
+ */
 const BARRIER_H = 1.3;
 
 /**
@@ -145,18 +148,22 @@ export const RULES = {
 
 /**
  * Where someone stands, and how they're shaped to be hit, as character.ts draws a Person (m): a body
- * BODY_R round from their feet up to HEAD_Y, and above it the head, a ball HEAD_R round its middle at
- * HEAD_C. BODY_H is how tall they stand, hair and all.
+ * BODY_R round from their feet up to BODY_TOP (the shoulders, not the head line: aim at HEAD_C for
+ * the head), and above it the head, a ball HEAD_R round its middle at HEAD_C. BODY_H is how tall they
+ * stand, hair and all.
  */
 export const BODY_R = 0.42;
 export const BODY_H = 1.75;
-export const HEAD_Y = 1.0;
+export const BODY_TOP = 1.0;
 export const HEAD_C = 1.32;
 export const HEAD_R = 0.34;
 /** Where the eyes are, above the feet: where a shot leaves from. */
 export const EYE_Y = 1.4;
-/** How much lower crouching puts your eyes, your head and the top of your body (m). */
-export const CROUCH = 0.32;
+/**
+ * How much lower crouching puts your eyes, your head and the top of your body (m): enough that the
+ * whole head is under a barrier's top (HEAD_C - CROUCH + HEAD_R < BARRIER_H), as are the eyes.
+ */
+export const CROUCH = 0.38;
 
 /** Someone to be hit: where their feet are, and whether they're crouching. */
 export interface Body extends V3 {
@@ -383,12 +390,13 @@ function rayColumn(o: V3, d: V3, p: V3, r: number, top: number): number | undefi
  * Where the ray from `o` going `d` (a unit vector) first touches someone with their feet at `p`: how
  * far along, and whether that's their head (the ball, if it gets there before the body). `r` is how
  * far round them their body counts (a little more than it is, for the moment the office has them a
- * bit off where the shooter saw them); the head grows by half as much. Undefined if it misses them.
+ * bit off where the shooter saw them). The head is only ever as big as it's drawn: grown, it would
+ * peek over cover a crouching head is under. Undefined if it misses them.
  */
 export function rayPerson(o: V3, d: V3, p: Body, r: number = BODY_R): { t: number; head: boolean } | undefined {
   const low = p.crouch ? CROUCH : 0;
-  const head = raySphere(o, d, { x: p.x, y: p.y + HEAD_C - low, z: p.z }, HEAD_R + (r - BODY_R) / 2);
-  const body = rayColumn(o, d, p, r, p.y + HEAD_Y - low);
+  const head = raySphere(o, d, { x: p.x, y: p.y + HEAD_C - low, z: p.z }, HEAD_R);
+  const body = rayColumn(o, d, p, r, p.y + BODY_TOP - low);
   if (head !== undefined && (body === undefined || head <= body)) return { t: head, head: true };
   return body === undefined ? undefined : { t: body, head: false };
 }

@@ -5127,7 +5127,7 @@ const shadowMe = new THREE.Vector3();
 const dogTick = decorTicker();
 const holidayTick = decorTicker();
 applyGraphics();
-let lastSent = { x: 0, y: 0, z: 0, rotY: 0, moving: false, at: 0, pitch: 0, crouch: false };
+let lastSent = { x: 0, y: 0, z: 0, rotY: 0, moving: false, at: 0, pitch: 0, crouch: false, grounded: true };
 let spotSavedAt = 0;
 let speakTick = 0;
 /** Which half-stride your walk is on, so each one plays a footstep. */
@@ -5360,12 +5360,17 @@ function frame(ts?: number) {
   }
 
   // In the arena, where you're looking up or down and whether you're crouching too: how everyone else sees you hold your rifle, and how low you are to hit.
-  const pitch = atArena ? player.lookPitch : 0;
-  const crouch = atArena && player.crouching;
-  const moved = Math.abs(player.pos.x - lastSent.x) + Math.abs(player.pos.y - lastSent.y) + Math.abs(player.pos.z - lastSent.z) > 0.01 || Math.abs(player.facing - lastSent.rotY) > 0.02 || Math.abs(pitch - lastSent.pitch) > 0.03 || crouch !== lastSent.crouch;
-  if ((moved || player.moving !== lastSent.moving) && now - lastSent.at > 66) {
-    lastSent = { x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY: player.facing, moving: player.moving, at: now, pitch, crouch };
-    net.send({ t: 'move', x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY: player.facing, moving: player.moving, ...(atArena ? { pitch, crouch } : {}) });
+  // Dead there, the view turns to whoever killed you (client/arena.ts), but your body lies as it fell: which way it faces, looks and crouches stays put.
+  const dead = atArena && arenaPlay.dead;
+  const rotY = dead ? lastSent.rotY : player.facing;
+  const pitch = dead ? lastSent.pitch : atArena ? player.lookPitch : 0;
+  const crouch = dead ? lastSent.crouch : atArena && player.crouching;
+  const moved = Math.abs(player.pos.x - lastSent.x) + Math.abs(player.pos.y - lastSent.y) + Math.abs(player.pos.z - lastSent.z) > 0.01 || Math.abs(rotY - lastSent.rotY) > 0.02 || Math.abs(pitch - lastSent.pitch) > 0.03 || crouch !== lastSent.crouch;
+  // Crouching, standing up, leaving the ground or landing in the arena goes straight away: the office checks how high your shots leave from against it (server/arena.ts).
+  const sudden = atArena && (crouch !== lastSent.crouch || player.grounded !== lastSent.grounded);
+  if ((moved || player.moving !== lastSent.moving) && (sudden || now - lastSent.at > 66)) {
+    lastSent = { x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY, moving: player.moving, at: now, pitch, crouch, grounded: player.grounded };
+    net.send({ t: 'move', x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY, moving: player.moving, ...(atArena ? { pitch, crouch } : {}) });
   }
   // Where you are, to come back to next time.
   if (now - spotSavedAt > 1000) {

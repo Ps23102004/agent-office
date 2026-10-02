@@ -41,8 +41,10 @@ export const CONTROLS: Record<ControlMode, [keys: string[], what: string][]> = {
     [['Click'], 'Fire'],
     [['Right click'], 'Aim down the sights'],
     [['R'], 'Reload'],
+    [['1', '2', 'Q'], 'Swap rifle / SMG (or the wheel)'],
+    [['C'], 'Crouch (from a run: slide)'],
     [['Tab'], 'Scoreboard (hold)'],
-    [['Space'], 'Jump'],
+    [['Space'], 'Jump; at a ledge, climb up'],
   ],
   Everywhere: [
     [['?'], 'Controls'],

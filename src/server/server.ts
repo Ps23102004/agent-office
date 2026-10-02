@@ -268,7 +268,7 @@ export async function startServer(cfg: Config) {
   // The arena, a place of its own too (shared/arena.ts): its free-for-all (server/arena.ts), judged from where the office has everyone in it.
   const arena = new ArenaControl((id) => {
     const p = clients.get(id)?.peer;
-    return p && p.floor === ARENA ? { x: p.x, y: p.y, z: p.z, crouch: p.crouch } : undefined;
+    return p && p.floor === ARENA ? { x: p.x, y: p.y, z: p.z, crouch: !!p.crouch } : undefined;
   });
   /** When each person (account, or name) last posted a meeting spot. */
   const meetAt = new Map<string, number>();

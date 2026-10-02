@@ -41,6 +41,13 @@ const TRAIL = 1000;
 const jitter = (w: WeaponId) => WEAPONS[w].every / 2;
 /** How far (m) the eyes a shot leaves from can be off where the office has them, up or down: a step, a bob, a moment's lag. */
 const REACH_Y = 0.7;
+/**
+ * Crouched this long (ms) on the same footing, someone's eyes are all the way down: a shot can leave
+ * from no higher than EYE_SLACK (m: a bob, a frame of standing up) over them. Else a page could say
+ * it's crouching, to be judged low behind a barrier, and fire over it from standing height.
+ */
+const CROUCHED = 300;
+const EYE_SLACK = 0.15;
 /** Kills kept in the feed. */
 const FEED = 6;
 
@@ -62,6 +69,12 @@ interface Gun {
  * The arena's free-for-all, as the office keeps it: who's in, their health and guns, kills and deaths,
  * the match clock, and the practice targets while it's warm-up. Who a shot hits is worked out here,
  * from where the office has everyone (`where`) and where they've been (`moved`).
+ *
+ * For anyone else putting players in (bots, server/arenabots.ts): `where` has to say whether each is
+ * crouching (they're lower to hit); every step a player takes goes to `moved`, or shots at them are
+ * judged on where they are now, not where the shooter saw them; and `fire` takes the shooter's round
+ * trip (undefined for a bot, which sees everyone where they are). Aim at a body's middle below
+ * BODY_TOP, or at HEAD_C for the head, less CROUCH for someone crouching (shared/arena.ts).
  */
 export class ArenaControl {
   private arena: ArenaState = idleArena();
@@ -74,7 +87,7 @@ export class ArenaControl {
   /** When the clock last moved on. */
   private ticked = 0;
 
-  constructor(private where: (id: string) => Body | undefined) {}
+  constructor(private where: (id: string) => Required<Body> | undefined) {}
 
   state(): ArenaState {
     const a = this.arena;
@@ -136,11 +149,36 @@ export class ArenaControl {
     return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, crouch: k < 0.5 ? a.crouch : b.crouch };
   }
 
+  /**
+   * A reload that's done (or as good as: see jitter) fills gun `w`. First thing whenever someone does
+   * anything with their gun, so it's never lost to a swap or the like before the timer (tick) gets to it.
+   */
+  private reloaded(g: Gun, w: WeaponId, now: number) {
+    if (g.reloadAt === undefined || now < g.reloadAt - jitter(w)) return;
+    g.ammo[w] = WEAPONS[w].mag;
+    delete g.reloadAt;
+  }
+
+  /** Whether `id` has been crouching at least CROUCHED ms without going up or down (no jump, no step): their eyes are all the way down. */
+  private crouched(id: string, now: number): boolean {
+    const trail = this.trails.get(id);
+    if (!trail?.length) return false;
+    // From the last move before that long ago (where they were then) on.
+    let i = trail.length - 1;
+    while (i > 0 && trail[i].t > now - CROUCHED) i--;
+    if (trail[i].t > now - CROUCHED) return false;
+    const y = trail[trail.length - 1].y;
+    for (; i < trail.length; i++) if (!trail[i].crouch || Math.abs(trail[i].y - y) > 0.02) return false;
+    return true;
+  }
+
   /** `id` starts reloading the gun in their hands. */
   reload(id: string, now: number): boolean {
     const g = this.guns.get(id);
     const w = this.arena.players.find((p) => p.id === id)?.w;
-    if (!g || !w || g.reloadAt !== undefined || g.ammo[w] >= WEAPONS[w].mag) return false;
+    if (!g || !w) return false;
+    this.reloaded(g, w, now);
+    if (g.reloadAt !== undefined || g.ammo[w] >= WEAPONS[w].mag) return false;
     g.reloadAt = now + WEAPONS[w].reload;
     g.ready = Math.max(g.ready, g.reloadAt);
     return true;
@@ -154,6 +192,7 @@ export class ArenaControl {
     const me = this.arena.players.find((p) => p.id === id);
     const g = this.guns.get(id);
     if (!me || !g || !me.alive || me.w === w || !WEAPONS[w]) return false;
+    this.reloaded(g, me.w, now);
     me.w = w;
     delete g.reloadAt;
     // Longer than any gun's gap between shots, so it never fires sooner than it could have.
@@ -165,19 +204,17 @@ export class ArenaControl {
    * `id` fires from `o` along `d` at `now`: undefined if they can't (dead, out of rounds, too soon, or
    * not where they say they are), else what it hit. The office's word, not the page's. `rtt` is a
    * person's round trip to the office (ms): everyone's judged where that person's page showed them a
-   * moment ago. A bot leaves it out: it sees everyone where they are.
+   * moment ago. A bot passes undefined: it sees everyone where they are. (Not optional, so nobody
+   * wiring in another kind of shooter forgets to pass a person's.)
    */
-  fire(id: string, o: V3, d: V3, now: number, rtt?: number): ShotResult | undefined {
+  fire(id: string, o: V3, d: V3, now: number, rtt: number | undefined): ShotResult | undefined {
     const g = this.guns.get(id);
     const me = this.arena.players.find((p) => p.id === id);
     const at = this.where(id);
     if (!me || !g || !at) return undefined;
     const w = me.w, gun = WEAPONS[w];
     // Only the reload: respawns, healing and the match clock are the timer's (tick), which tells everyone.
-    if (g.reloadAt !== undefined && now >= g.reloadAt - jitter(w)) {
-      g.ammo[w] = gun.mag;
-      delete g.reloadAt;
-    }
+    this.reloaded(g, w, now);
     if (!me.alive || this.arena.phase === 'over') return undefined;
     if (g.reloadAt !== undefined || g.ammo[w] <= 0 || now < g.ready - jitter(w)) return undefined;
     const len = Math.hypot(d.x, d.y, d.z);
@@ -185,6 +222,7 @@ export class ArenaControl {
     const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
     const eye = { x: at.x, y: eyeY(at), z: at.z };
     if (Math.hypot(o.x - at.x, o.z - at.z) > REACH || Math.abs(o.y - eye.y) > REACH_Y) return undefined;
+    if (o.y > eye.y + EYE_SLACK && at.crouch && this.crouched(id, now)) return undefined;
     // Not round a corner or over cover from behind it: the eyes have to see where the shot leaves from.
     const gap = Math.hypot(o.x - eye.x, o.y - eye.y, o.z - eye.z);
     if (gap > 0.05 && rayWorld(eye, { x: (o.x - eye.x) / gap, y: (o.y - eye.y) / gap, z: (o.z - eye.z) / gap }, gap) < gap - 0.05) return undefined;
@@ -282,7 +320,7 @@ export class ArenaControl {
 
   /** Where `id` should come back in: a spawn nobody alive can see, the furthest from them; else just the furthest. */
   spawnFor(id: string): { x: number; z: number; rotY: number } {
-    const others = this.arena.players.filter((p) => p.id !== id && p.alive).map((p) => this.where(p.id)).filter((p): p is Body => !!p);
+    const others = this.arena.players.filter((p) => p.id !== id && p.alive).map((p) => this.where(p.id)).filter((p): p is Required<Body> => !!p);
     let best = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
     let score = -Infinity;
     for (const s of SPAWNS) {

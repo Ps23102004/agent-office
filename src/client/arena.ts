@@ -42,6 +42,9 @@ export interface ArenaWiring {
  * - `hurt`: you were hit, `dmg` by `by`, from `angle` (radians from where you look, + to the right), with `hp` left.
  * - `died`: killed by `by` (`name`), who has `hp` left.
  * - `weapon`: you swapped to gun `w` (shared/arena.ts WEAPONS).
+ * Not events, as they last a while rather than happen: your health, kills and the like are your row
+ * of store.arena.players; and while you're safe just back in (others' shots do you no harm), its
+ * `safeUntil` (office clock: store.officeNow()), gone the moment you fire.
  */
 export type ArenaEvent =
   | { t: 'hit'; victim?: string; target?: number; dmg: number; hp: number; head: boolean; kill: boolean }
@@ -64,6 +67,8 @@ const FALL = 0.45;
 const GONE = 2.4;
 /** The gun in everyone else's hands, a touch bigger than yours. */
 const HELD_SCALE = 1.1;
+/** How long (ms) the wheel has to be still before it swaps guns again. */
+const WHEEL_GAP = 250;
 
 const v = new THREE.Vector3();
 const dir = new THREE.Vector3();
@@ -111,6 +116,8 @@ export class ArenaPlay {
   /** When the gun you swapped to is up and ready (performance.now), while it's coming up; and when you last swapped. */
   private swapAt = 0;
   private swappedAt = 0;
+  /** When the wheel last turned (an event's timeStamp): a swap is one turn of it, however many notches. */
+  private wheelAt = -Infinity;
   private active = false;
   private firing = false;
   private aiming = false;
@@ -155,8 +162,13 @@ export class ArenaPlay {
       this.aiming = false;
       this.hud.scoreboard(false);
     });
-    // The wheel swaps guns too: one swap at a time, however many notches (or a trackpad's stream of them).
-    window.addEventListener('wheel', (e) => this.active && this.w.locked() && e.deltaY !== 0 && !this.swapAt && this.swap(this.weapon === 'rifle' ? 'smg' : 'rifle'), { passive: true });
+    // The wheel swaps guns too: once a turn of it, however many notches (or a trackpad's stream of
+    // them, still coming after you let go): a turn's over once it's been still a quarter of a second.
+    window.addEventListener('wheel', (e) => {
+      const turn = e.timeStamp - this.wheelAt > WHEEL_GAP;
+      this.wheelAt = e.timeStamp;
+      if (turn && this.active && this.w.locked() && e.deltaY !== 0) this.swap(this.weapon === 'rifle' ? 'smg' : 'rifle');
+    }, { passive: true });
   }
 
   /** One of your guns, in the hands' scene, hidden, with its flash. */
@@ -212,6 +224,11 @@ export class ArenaPlay {
 
   get on(): boolean {
     return this.active;
+  }
+
+  /** Dead in the arena: the view's on whoever killed you (deathCam), not where your body lies. */
+  get dead(): boolean {
+    return this.active && !this.alive();
   }
 
   /** Whether you're alive in there, as the office has it. */
@@ -390,6 +407,9 @@ export class ArenaPlay {
     dir.addScaledVector(right, Math.cos(a) * r).addScaledVector(upAxis, Math.sin(a) * r).normalize();
     const o: V3 = { x: eye.x, y: eye.y, z: eye.z };
     this.w.send({ t: 'arena.fire', o, d: { x: dir.x, y: dir.y, z: dir.z } });
+    // Firing gives up being safe, as the office has it straight away (it doesn't say so till its next word).
+    const me = store.arena.players.find((x) => x.id === store.you);
+    if (me) delete me.safeUntil;
     this.bloom = Math.min(SPREAD.maxBloom, this.bloom + SPREAD.perShot);
     const kick = KICK.up * gun.kick * (1 - this.adsK * 0.4) * (p.crouching ? 0.75 : 1);
     p.lookPitch += kick;
@@ -571,6 +591,8 @@ export class ArenaPlay {
         them.fallen = Math.min(1, since / FALL);
         them.root.visible = since < GONE;
       }
+      // No name over the fallen, nor over anyone crouching: it'd give away where they're down behind cover.
+      them.showLabel(pl.alive && !peer?.crouch);
       if (pl.alive && (pl.safeUntil ?? 0) < officeNow) this.unsafe.delete(pl.id);
       const safe = pl.alive && (pl.safeUntil ?? 0) > officeNow && !this.unsafe.has(pl.id);
       let shell = this.shells.get(pl.id);
@@ -595,6 +617,7 @@ export class ArenaPlay {
       them.holdRifle(null);
       them.fallen = them.crouchK = them.aimPitch = 0;
       them.root.visible = true;
+      them.showLabel(true);
     }
     this.shells.get(id)?.removeFromParent();
     this.shells.delete(id);
