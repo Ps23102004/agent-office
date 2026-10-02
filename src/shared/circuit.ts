@@ -169,21 +169,59 @@ export function pointAt(s: number): TrackPoint {
   return { x: a.x + (b.x - a.x) * k, z: a.z + (b.z - a.z) * k, s: u, tx: tx / d, tz: tz / d };
 }
 
+/** The map in GRID-metre squares, each with the track's points within NEAR m of it (out past the grass to the tyre walls, and a little more). */
+const GRID = 16;
+const NEAR = 32;
+let grid: { minX: number; minZ: number; cols: number; rows: number; cells: number[][] } | null = null;
+const NONE: number[] = [];
+
+/** The track's points (their places in track().points, in order) within NEAR of (x, z), and maybe a few more; none far off the track. */
+function nearby(x: number, z: number): number[] {
+  if (!grid) {
+    const { points } = track();
+    const minX = Math.min(...points.map((p) => p.x)) - NEAR, minZ = Math.min(...points.map((p) => p.z)) - NEAR;
+    const cols = Math.ceil((Math.max(...points.map((p) => p.x)) + NEAR - minX) / GRID) + 1;
+    const rows = Math.ceil((Math.max(...points.map((p) => p.z)) + NEAR - minZ) / GRID) + 1;
+    const cells: number[][] = Array.from({ length: cols * rows }, () => []);
+    points.forEach((p, i) => {
+      for (let cz = Math.floor((p.z - NEAR - minZ) / GRID); cz <= Math.floor((p.z + NEAR - minZ) / GRID); cz++) {
+        for (let cx = Math.floor((p.x - NEAR - minX) / GRID); cx <= Math.floor((p.x + NEAR - minX) / GRID); cx++) {
+          // How far the point is from the square (0 inside it).
+          const dx = Math.max(0, minX + cx * GRID - p.x, p.x - (minX + (cx + 1) * GRID));
+          const dz = Math.max(0, minZ + cz * GRID - p.z, p.z - (minZ + (cz + 1) * GRID));
+          if (dx * dx + dz * dz <= NEAR * NEAR) cells[cz * cols + cx].push(i);
+        }
+      }
+    });
+    grid = { minX, minZ, cols, rows, cells };
+  }
+  const cx = Math.floor((x - grid.minX) / GRID), cz = Math.floor((z - grid.minZ) / GRID);
+  return cx < 0 || cz < 0 || cx >= grid.cols || cz >= grid.rows ? NONE : grid.cells[cz * grid.cols + cx];
+}
+
 /**
  * The nearest the track comes to (x, z): how far round it that is (`s`), and how far from the centre
- * line (`d`, + to a driver's left going the right way round). Checks every point: a few hundred.
+ * line (`d`, + to a driver's left going the right way round). Near the track it checks only the points
+ * close by (a car runs this many times a step, a bot's on the office's too); further off, every one.
  */
 export function nearestProgress(x: number, z: number): { s: number; d: number } {
   const { points } = track();
   let best = 0;
   let bestD = Infinity;
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    const d = (p.x - x) ** 2 + (p.z - z) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = i;
+  const scan = (ids: Iterable<number>) => {
+    for (const i of ids) {
+      const d = (points[i].x - x) ** 2 + (points[i].z - z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
     }
+  };
+  // One of those near it within NEAR: anything nearer is among them too, so it's the nearest of all.
+  scan(nearby(x, z));
+  if (bestD > NEAR * NEAR) {
+    bestD = Infinity;
+    scan(points.keys());
   }
   // Between that point and the next (or the one before), for the part of a step it's along.
   const p = points[best];

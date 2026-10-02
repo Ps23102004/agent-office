@@ -76,6 +76,12 @@ test('it turns tighter slowly than flat out, so it never spins at speed', () => 
   assert.ok(p.steer > 0 && p.steer < steerLimit(10));
   const on = run(p, { gas: 0, turn: 1, brake: false }, 1);
   assert.ok(Math.abs(on.steer - steerLimit(on.speed)) < 0.05);
+  // On the gas holding a speed, the wheel the physics gives you is steerLimit's: the air's grip and all.
+  for (const v of [20, 40, 60]) {
+    let q: CarPose = { ...still(), speed: v };
+    for (let t = 0; t < 2; t += 1 / 60) q = drive(q, { gas: Math.max(-1, Math.min(1, (v - q.speed) * 2)), turn: 1, brake: false }, 1 / 60);
+    assert.ok(Math.abs(q.steer - steerLimit(q.speed)) < 2e-4, `${v} m/s: the wheel at ${q.steer.toFixed(4)}, steerLimit ${steerLimit(q.speed).toFixed(4)}`);
+  }
 });
 
 test('you can drive out of the garage, across the lot, down the street and off-road, but not out to sea', () => {

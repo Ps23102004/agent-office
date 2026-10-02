@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DRIVE_STEP, SPECS, advance, drive, type Box, type CarKind, type CarPose, type Pedals } from '../src/shared/garage.js';
+import { DRIVE_STEP, SPECS, TANK, advance, drive, tankFill, type Box, type CarKind, type CarPose, type Pedals } from '../src/shared/garage.js';
 
 // How the cars handle, measured the way a driver feels it: scripted inputs through the shared physics
 // (shared/garage.ts), the same at every frame rate, so each target here is a number that can't drift
@@ -91,8 +91,8 @@ test('lifting off or braking hard mid-corner never spins it', () => {
   }
 });
 
-/** A tug on the handbrake into a left-hander at `v0`, then the gas and the wheel held into it; then the wheel let go. */
-function drift(v0: number, kind: CarKind = 'lambo', tug = 0.3, held = 3) {
+/** A tug on the handbrake into a left-hander at `v0`, then the gas and the wheel held into it; then `exit`: the wheel let go, unless said. */
+function drift(v0: number, kind: CarKind = 'lambo', tug = 0.3, held = 3, exit: Pedals = { gas: 1, turn: 0, brake: false }) {
   let inBand = 0, most = 0;
   let p = run(start(v0), tug + held, (_q, t) => ({ gas: t < tug ? 0 : 1, turn: 1, brake: t < tug }), kind, (q, t) => {
     most = Math.max(most, slide(q));
@@ -100,9 +100,11 @@ function drift(v0: number, kind: CarKind = 'lambo', tug = 0.3, held = 3) {
   });
   const kept = p.speed / v0;
   let out = Infinity, swing = 0;
-  p = run(p, 3, () => ({ gas: 1, turn: 0, brake: false }), kind, (q, t) => {
+  p = run(p, 3, () => exit, kind, (q, t) => {
     swing = Math.min(swing, slide(q));
-    if (out === Infinity && Math.abs(slide(q)) < 5 && Math.abs(q.yaw!) < 0.3) out = t;
+    // Straight: hardly sliding (or stopped), and with the wheel let go hardly turning.
+    const straight = Math.hypot(q.speed, q.slip ?? 0) < 3 || (Math.abs(slide(q)) < 5 && (exit.turn !== 0 || Math.abs(q.yaw!) < 0.3));
+    if (out === Infinity && straight) out = t;
   });
   return { inBand, most, kept, out, swing };
 }
@@ -133,6 +135,25 @@ test('a tug on the handbrake starts a drift you hold on the gas and the wheel, a
     best = Math.max(best, good);
   }
   assert.ok(best >= 3.5, `held ${best.toFixed(2)} s of 5 on the keys`);
+  // Lifting off or braking with the wheel still into the turn, it straightens as the tail's caught: no skating on sideways.
+  for (const v of [30, 45]) {
+    for (const gas of [0, -1]) {
+      const d = drift(v, 'lambo', 0.3, 1.2, { gas, turn: 1, brake: false });
+      assert.ok(d.out <= 0.8, `${gas ? 'braking' : 'lifting'} at ${v} m/s, the wheel held: straight ${d.out.toFixed(2)} s on`);
+    }
+  }
+});
+
+test('drifting fills the boost faster than a grip corner, but a second of it is under half a tank', () => {
+  for (const v0 of [30, 45, 60]) {
+    let drifted = 0, gripped = 0;
+    run(start(v0), 1.3, (_q, t) => ({ gas: t < 0.3 ? 0 : 1, turn: 1, brake: t < 0.3 }), 'lambo', (q, t) => {
+      if (t > 0.3) drifted += tankFill(q, 'lambo', []).rate * H;
+    });
+    run(start(v0), 1, (q) => ({ gas: hold(v0, q), turn: 1, brake: false }), 'lambo', (q) => (gripped += tankFill(q, 'lambo', []).rate * H));
+    assert.ok(drifted <= 0.5, `${v0} m/s: a second's drift fills ${drifted.toFixed(2)} of a tank (a tank burns in ${TANK.burn} s)`);
+    assert.ok(drifted > gripped && drifted > 3 * TANK.trickle, `${v0} m/s: drifting ${drifted.toFixed(2)}, gripping ${gripped.toFixed(2)}`);
+  }
 });
 
 test('the handbrake alone swings the tail without stopping the car, and a spin ends without a jolt', () => {
@@ -147,6 +168,22 @@ test('the handbrake alone swings the tail without stopping the car, and a spin e
     prev = v;
   });
   assert.ok(jolt <= 2.5, `at most ${jolt.toFixed(2)} g`);
+  // Going back faster than it reverses (spun round, or bounced off a wall), S brakes it no harder than the brakes do going forward.
+  const back = drive(start(-25), { gas: -1, turn: 0, brake: false }, H);
+  assert.ok((back.speed + 25) / H / 9.81 <= 3, `S at -25 m/s: ${((back.speed + 25) / H / 9.81).toFixed(1)} g`);
+  for (const v of [30, 45, 55]) {
+    p = start(v);
+    while (p.speed > -15) p = drive(p, { gas: 0, turn: 1, brake: true }, H);
+    prev = Math.hypot(p.speed, p.slip ?? 0);
+    jolt = 0;
+    p = run(p, 2, () => ({ gas: -1, turn: 1, brake: false }), 'lambo', (q) => {
+      const s = Math.hypot(q.speed, q.slip ?? 0);
+      jolt = Math.max(jolt, (prev - s) / H / 9.81);
+      prev = s;
+    });
+    assert.ok(jolt <= 3, `S as a spin from ${v} m/s goes backwards: at most ${jolt.toFixed(2)} g`);
+    assert.ok(p.speed >= -SPECS.lambo.reverse - 0.5, `and it's back to reversing speed (${p.speed.toFixed(1)} m/s)`);
+  }
 });
 
 /** Along a barrier at z = 0 (the ground is z < 0, or a wall: `solid`), angled `angle`° into it at `v` m/s, gas down, for 3 s. */

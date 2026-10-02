@@ -512,7 +512,7 @@ export class PlayerController {
   updateCamera(snap = false, dt = 1 / 60) {
     if (this.view === 'first') {
       this.camera.position.set(this.pos.x, this.pos.y + EYE_HEIGHT + this.bob + this.stepOffset + this.lift, this.pos.z);
-      this.camera.rotation.set(this.lookPitch, this.camYaw, this.tilt);
+      this.camera.rotation.set(this.lookPitch, this.camYaw, 0);
       this.shake();
       return;
     }
@@ -577,6 +577,7 @@ export class PlayerController {
   /** The jitters: the view trembles a little, on top of wherever you're looking. Drunk, it rolls and sways. */
   private shake() {
     const t = this.jitterT;
+    this.camera.rotation.z += this.tilt;
     if (this.drunk > 0) {
       const d = this.drunk;
       this.camera.rotation.z += d * (0.07 * Math.sin(t * 0.9) + 0.025 * Math.sin(t * 2.3 + 1));

@@ -217,15 +217,25 @@ export const AIDS = { assist: 0.8, deadzone: 0.1, guard: 0.75, guardOff: 0.15, s
  * It stays let go while the gas is down and the wheel turned into the turn (and, still sliding, a turn
  * back into it lets it go again), and grips again in `out` seconds once either isn't. Let go, the rear tires keep `rear` of their grip, and the car holds the
  * slide the wheel asks for: `angle` (radians) with it turned all the way into the turn, less with it
- * turned less, straight with it let go, easing there in about `ease` seconds (`hold`: how firmly, 1/s).
+ * turned less, straight with it let go or off the gas, easing there in about `ease` seconds (`hold`: how firmly, 1/s).
  * Sideways, the tires scrub off speed: `scrub` g at right angles. Under `slow` m/s there's no drifting.
  */
 export const DRIFT = { in: 0.12, out: 0.35, rear: 0.8, angle: 0.55, ease: 0.25, hold: 8, scrub: 0.6, slow: 8 } as const;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** How far the front wheels can turn at `speed`: less the faster you go, down to what keeps the turn on `kind`'s tires (of `grip`). */
-export function steerLimit(speed: number, kind: CarKind = 'lambo', grip: number = SPECS[kind].grip): number {
+/** How hard `kind`'s tires hold at `speed` on `ground` (a road, unless said): a car's harder the faster it goes, the air pressing it down onto them (AIDS.downforce); a bike leans instead. */
+export function gripAt(kind: CarKind, speed: number, ground: { grip: number } = GROUND.road): number {
+  const spec = SPECS[kind];
+  return spec.grip * ground.grip * (spec.width < 1 ? 1 : 1 + AIDS.downforce * Math.min(AIDS.downforceTop, Math.abs(speed) / spec.top) ** 2);
+}
+
+/**
+ * How far the front wheels can turn at `speed`: less the faster you go, down to what keeps the turn on
+ * `kind`'s tires (of `grip`: on a road, unless said). It's the wheel the physics gives you gripping;
+ * sliding, the countersteer (AIDS.assist) turns them on past it.
+ */
+export function steerLimit(speed: number, kind: CarKind = 'lambo', grip: number = gripAt(kind, speed)): number {
   return Math.min(DRIVE.steer / (1 + Math.abs(speed) / 9), Math.atan((SPECS[kind].wheelbase * grip * TIRES.gravity * DRIVE.lock) / Math.max(1, speed * speed)));
 }
 
@@ -285,8 +295,7 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
   let yaw = p.yaw ?? 0;
   let slip = p.slip ?? 0;
   const moving = Math.hypot(v, slip);
-  // The air presses a fast car down onto its tires (a bike leans instead).
-  const grip = spec.grip * ground.grip * (bike ? 1 : 1 + AIDS.downforce * Math.min(AIDS.downforceTop, moving / spec.top) ** 2);
+  const grip = gripAt(kind, moving, ground);
   // How far it's sliding: the angle between where it's pointed and where it's going (+ toward its left).
   const slide = !bike && moving > DRIVE.crawl ? Math.atan2(slip, Math.abs(v) + 1e-6) : 0;
   const handbrake = pedals.brake && !bike;
@@ -331,7 +340,12 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
     if (v > 0) {
       toward(0, brake * -gas);
       braking = brake * -gas;
-    } else v = Math.max(-spec.reverse * Math.max(0.5, ground.top), v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
+    } else {
+      // Sliding backwards faster than it reverses (a spin, a bounce off a wall), the brakes slow it, not all at once.
+      const most = spec.reverse * Math.max(0.5, ground.top);
+      if (v < -most) toward(-most, brake * -gas);
+      else v = Math.max(-most, v + Math.min(DRIVE.reverseAccel, spec.accel) * gas * dt);
+    }
   } else toward(0, kind === 'bicycle' ? 0.65 : (kind === 'motorbike' ? 2 : DRIVE.coast) + DRIVE.drag * v * v);
   // A car's handbrake locks only the rear wheels: it slows you a little (the gas still pulls), and lets the tail come round.
   if (pedals.brake) toward(0, bike ? brake : DRIVE.handbrake);
@@ -384,7 +398,8 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
       // Nothing helps: the tail's yours to throw.
     } else if (drift > 0) {
       // Drifting: it turns as fast as its path does, plus what takes the slide to the angle the wheel asks for.
-      const asked = -way * DRIFT.angle * clamp(pedals.turn * way, 0, 1);
+      // Off the gas it straightens while the tail's caught again, whatever the wheel's doing.
+      const asked = onGas ? -way * DRIFT.angle * clamp(pedals.turn * way, 0, 1) : 0;
       const path = (front + rear) / spec.mass / Math.max(1, Math.abs(v));
       yaw += (path - (asked - slide) / DRIFT.ease - yaw) * Math.min(1, DRIFT.hold * drift * dt);
     } else {
@@ -398,8 +413,8 @@ function tireStep(p: CarPose, pedals: Pedals, dt: number, kind: CarKind, ground:
     if (!handbrake && Math.abs(slide) > guard) yaw *= 1 - Math.min(1, (dt * 6 * (Math.abs(slide) - guard)) / 0.3);
     slip += ((front + rear) / spec.mass - v * yaw) * dt;
   }
-  // Reverse's top speed is the engine's, not a spin's: sliding backwards keeps its speed.
-  v = clamp(v + yaw * slip * dt, gas < 0 ? Math.min(-spec.reverse, was) : -spec.top, spec.top * boostTop(kind));
+  // Reverse's top speed is the engine's (S, above, brakes a car going back faster), not a spin's: sliding backwards keeps its speed.
+  v = clamp(v + yaw * slip * dt, -spec.top, spec.top * boostTop(kind));
   // Sideways no faster than it can go at all (a spin swaps speed between the two).
   slip = clamp(slip, -spec.top * boostTop(kind), spec.top * boostTop(kind));
   if (Math.abs(v) < 1e-3 && Math.abs(slip) < 0.01) { v = 0; slip = 0; yaw = 0; }
@@ -707,10 +722,11 @@ function edge(p: CarPose, kind: CarKind, where: (x: number, z: number) => boolea
 
 /**
  * The boost meter (0 empty to 1 full): a full tank lasts `burn` seconds on Shift. It fills back slowly
- * by itself (`trickle` a second), faster drifting (by slip × speed), slipping close past another moving
- * car much faster or slower than it (`nearMiss` of a tank, now and then), and tucked in behind one (`draft`).
+ * by itself (`trickle` a second), faster drifting (by slip × speed, counting no more than `slip` m/s of
+ * slip: a held drift fills under half a tank a second), slipping close past another moving car much
+ * faster or slower than it (`nearMiss` of a tank, now and then), and tucked in behind one (`draft`).
  */
-export const TANK = { burn: 3.5, trickle: 0.02, drift: 0.002, nearMiss: 0.12, draft: 0.2 } as const;
+export const TANK = { burn: 3.5, trickle: 0.02, drift: 0.002, slip: 4.5, nearMiss: 0.12, draft: 0.2 } as const;
 /** A near miss fills the tank once (by TANK.nearMiss), then not again for this long (seconds). */
 export const NEAR_MISS_EVERY = 1.5;
 
@@ -724,7 +740,7 @@ export function tankFill(p: CarPose, kind: CarKind, solids: Box[]): { rate: numb
   const v = Math.abs(p.speed);
   let rate = TANK.trickle;
   let near = false;
-  if (v > 6 && Math.abs(p.slip ?? 0) > 1) rate += TANK.drift * Math.abs(p.slip ?? 0) * v;
+  if (v > 6 && Math.abs(p.slip ?? 0) > 1) rate += TANK.drift * Math.min(TANK.slip, Math.abs(p.slip ?? 0)) * v;
   if (v > 15) {
     const s = Math.sin(p.rotY), c = Math.cos(p.rotY);
     let draft = false;

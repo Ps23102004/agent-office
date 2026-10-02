@@ -47,6 +47,8 @@ export class Driver {
   boosting = false;
   /** A gamepad, as read this frame (gamepad.ts), if there's one plugged in: it drives as well as the keys. */
   pad: Pad | null = null;
+  /** The OS asks for less motion (main.ts reduceMotion): the view doesn't lean into corners, look on into the turn, or swing round a drift. */
+  calm = false;
   /** Holding X: looking back over your shoulder (or the chase camera round in front). */
   private lookingBack = false;
   /** Seconds behind the wheel (or beside it), for how often things happen. */
@@ -429,17 +431,17 @@ export class Driver {
     const speed = Math.abs(pose.speed);
     const ease = (rate: number) => 1 - Math.exp(-dt * rate);
     if (p.view === 'first') {
-      const lead = back ? 0 : Math.max(-0.25, Math.min(0.25, (pose.yaw ?? 0) * 0.2)) * Math.min(1, speed / 5);
+      const lead = back || this.calm ? 0 : Math.max(-0.25, Math.min(0.25, (pose.yaw ?? 0) * 0.2)) * Math.min(1, speed / 5);
       const was = this.lead;
       this.lead += (lead - this.lead) * ease(6);
       p.camYaw += turned + (this.lead - was) + (flipped ? Math.PI : 0);
       // About 2° for each g round the corner, leaning out with the car.
       const g = (speed * (pose.yaw ?? 0)) / 9.81;
-      p.tilt += (Math.max(-0.06, Math.min(0.06, -g * 0.035)) - p.tilt) * ease(8);
+      p.tilt = this.calm ? 0 : p.tilt + (Math.max(-0.06, Math.min(0.06, -g * 0.035)) - p.tilt) * ease(8);
     } else {
       p.tilt = 0;
       // Behind where it's going rather than where it points: half the slide, up to 25°.
-      const sliding = speed > 3 ? Math.max(-0.44, Math.min(0.44, 0.5 * Math.atan2(pose.slip ?? 0, speed))) : 0;
+      const sliding = speed > 3 && !this.calm ? Math.max(-0.44, Math.min(0.44, 0.5 * Math.atan2(pose.slip ?? 0, speed))) : 0;
       // Stiffer the faster it goes, so it never loses the car; looking back snaps round at once.
       const k = flipped ? 1 : ease((2.5 + speed * 0.06) * Math.min(1, speed / 4));
       p.camYaw += wrap(at.rotY + sliding + (back ? 0 : Math.PI) - p.camYaw) * k;

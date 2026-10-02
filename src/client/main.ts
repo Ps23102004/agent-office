@@ -5208,8 +5208,7 @@ function frame(ts?: number) {
   player.speedBoost = caffeine.speed(secs);
   player.jumpBoost = caffeine.jump(secs);
   thud = Math.max(0, thud - dt * 2.5);
-  // Driving, the view rumbles a little with your speed (and on the boost, and sliding).
-  player.jitter = reduceMotion.matches ? 0 : Math.max(caffeine.jitter(secs), thud, driver.rumble);
+  player.jitter = reduceMotion.matches ? 0 : Math.max(caffeine.jitter(secs), thud);
   const mug = caffeine.buzzed(secs);
   // Both hands are on the club at the tee.
   me.holdMug(mug && !golf.active);
@@ -5242,6 +5241,9 @@ function frame(ts?: number) {
   if (title?.active) player.enabled = false;
   // A gamepad drives too (gamepad.ts): the sticks and triggers go to the car; Y gets you out, B back on the track, View swaps the camera, L3 honks.
   driver.pad = readPad();
+  // Driving, the view rumbles a little with your speed (and on the boost, and sliding), and leans and swings with the car: not if the OS asks for less motion.
+  driver.calm = reduceMotion.matches;
+  if (!reduceMotion.matches) player.jitter = Math.max(player.jitter, driver.rumble);
   if (driver.active && driver.pad && player.enabled) {
     const tapped = driver.pad.tapped;
     if (tapped.has('out')) getOut();
