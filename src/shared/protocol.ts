@@ -14,7 +14,7 @@ import type { CustomMap } from './maps/index.js';
 import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { RaceState } from './race.js';
-import type { ArenaState, V3 } from './arena.js';
+import type { ArenaState, ShotResult, V3 } from './arena.js';
 import type { MeetPin, MeetSpotId } from './meet.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
@@ -319,6 +319,9 @@ export interface PeerInfo {
   reading?: boolean;
   /** On the 2D view (/lite: a phone, say, or a slow computer): in the office, but not standing anywhere in it. */
   lite?: boolean;
+  /** In the arena: how far they're looking up (radians, - down), and crouching. */
+  pitch?: number;
+  crouch?: boolean;
 }
 
 /** A styled run of text on a terminal row: [text, fg, bg, flags]. */
@@ -1077,7 +1080,8 @@ export interface SearchResults {
 export type GongWhy = 'hit' | 'merged' | 'queue';
 
 export type ClientMsg =
-  | { t: 'move'; x: number; y: number; z: number; rotY: number; moving: boolean }
+  /** Where you are. In the arena, also how far you're looking up (`pitch`, radians) and whether you're crouching. */
+  | { t: 'move'; x: number; y: number; z: number; rotY: number; moving: boolean; pitch?: number; crouch?: boolean }
   /**
    * You reached out to use something; everyone else sees your character's arm do it. With `smoke`,
    * you lit a cigarette (or put it out) on the balcony instead; with `golf`, you took a club out at
@@ -1335,7 +1339,7 @@ export type ServerMsg =
   | { t: 'projectsDir'; state: ProjectsDirState }
   | { t: 'peer.join'; peer: PeerInfo }
   | { t: 'peer.update'; peer: PeerInfo }
-  | { t: 'peer.move'; id: string; x: number; y: number; z: number; rotY: number; moving: boolean }
+  | { t: 'peer.move'; id: string; x: number; y: number; z: number; rotY: number; moving: boolean; pitch?: number; crouch?: boolean }
   | { t: 'peer.leave'; id: string }
   | { t: 'peer.act'; id: string; smoke?: boolean; golf?: boolean; drink?: DrinkId | null; throwing?: BarGame | null }
   /** Someone on your floor hit a golf ball off the tee (see the client's 'golf'). */
@@ -1391,8 +1395,8 @@ export type ServerMsg =
   | { t: 'race'; state: RaceState }
   /** The arena's match (shared/arena.ts), whenever it changes and as you come in: to everyone in the arena. */
   | { t: 'arena'; state: ArenaState }
-  /** Someone in the arena fired (`by`): from `o` to where it stopped, `end`; who it `hit`, in the head or not, and whether that killed them. */
-  | { t: 'arena.shot'; by: string; o: V3; end: V3; hit?: string; head?: boolean; kill?: boolean }
+  /** Someone in the arena fired (`by`) from `o`: what became of it (shared/arena.ts ShotResult: where it stopped, who it hit, the damage, a kill). */
+  | ({ t: 'arena.shot'; by: string; o: V3 } & ShotResult)
   /** You're back in the arena after being killed: here, facing this way. */
   | { t: 'arena.spawn'; x: number; z: number; rotY: number }
   /** A driver nearby offers you the seat beside them in their car (`car`, on your floor), until `until` (office clock, ms). Answer with car.invite.answer. */

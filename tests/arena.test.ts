@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, EYE_Y, RULES, SPAWNS, rayBox, rayPerson, rayWorld, type V3 } from '../src/shared/arena.js';
+import {
+  ARENA_BOXES,
+  ARENA_CENTER,
+  ARENA_GATE,
+  ARENA_HALF,
+  BODY_R,
+  CITY_ARENA_GATE,
+  CROUCH,
+  EYE_Y,
+  HEAD_C,
+  HEAD_R,
+  PRACTICE_DOWN,
+  PRACTICE_TARGETS,
+  RULES,
+  SPAWNS,
+  nextShot,
+  rayBox,
+  rayPerson,
+  rayWorld,
+  spreadOf,
+  targetAt,
+  type V3,
+} from '../src/shared/arena.js';
 import { CITY_GATE, inGate } from '../src/shared/circuit.js';
 import { RACE_PLAZA, cityPaved } from '../src/shared/city.js';
 import { ArenaControl } from '../src/server/arena.js';
@@ -33,7 +55,7 @@ test('rays: boxes, the ground, and a person, head and body', () => {
   assert.equal(rayBox(o, { x: 1, y: 0, z: 0 }, { minX: 5, maxX: 6, minZ: -1, maxZ: 1, y0: 0, y1: 2 }), 5);
   assert.equal(rayBox(o, { x: 1, y: 0, z: 0 }, { minX: 5, maxX: 6, minZ: 2, maxZ: 3, y0: 0, y1: 2 }), Infinity);
   const feet = { x: 10, y: 0, z: 0 };
-  const body = rayPerson({ x: 0, y: 1, z: 0 }, { x: 1, y: 0, z: 0 }, feet);
+  const body = rayPerson({ x: 0, y: 0.8, z: 0 }, { x: 1, y: 0, z: 0 }, feet);
   assert.ok(body && !body.head && Math.abs(body.t - (10 - 0.42)) < 1e-6);
   const head = rayPerson({ x: 0, y: 1.65, z: 0 }, { x: 1, y: 0, z: 0 }, feet);
   assert.ok(head?.head);
@@ -49,9 +71,10 @@ function match(spots: Record<string, V3>) {
   let now = 1_000_000;
   for (const id of Object.keys(spots)) a.join(id, id.toUpperCase(), now);
   const eye = (id: string) => ({ ...spots[id], y: spots[id].y + EYE_Y });
+  // At the chest (or `dy` up from it: 0.6 is the face).
   const at = (from: string, to: string, dy = 0) => {
     const o = eye(from), t = spots[to];
-    const d = { x: t.x - o.x, y: t.y + 1.0 + dy - o.y, z: t.z - o.z };
+    const d = { x: t.x - o.x, y: t.y + 0.75 + dy - o.y, z: t.z - o.z };
     return { o, d };
   };
   return {
@@ -162,4 +185,148 @@ test('a shot after someone is due back leaves their respawn to the timer; late s
   assert.equal(m2.a.fire('a', o, d, t0 + 210), undefined, 'but not faster than the rifle');
   // Nor from over the top of cover, out of their own eyes' sight.
   assert.equal(m2.a.fire('a', { ...o, y: o.y + 2 }, d, t0 + 1000), undefined);
+});
+
+test('the head is a ball where the Person draws it: low on the face counts, the shoulders beside it don\'t; crouching takes it down', () => {
+  const feet = { x: 10, y: 0, z: 0 };
+  const across = { x: 1, y: 0, z: 0 };
+  // Straight at the face, from its chin up to the crown.
+  for (const y of [1.05, 1.15, 1.25, 1.32, 1.5, 1.62]) assert.equal(rayPerson({ x: 0, y, z: 0 }, across, feet)?.head, true, `face at ${y}`);
+  // Chest and belly: the body.
+  for (const y of [0.3, 0.6, 0.9]) assert.equal(rayPerson({ x: 0, y, z: 0 }, across, feet)?.head, false, `body at ${y}`);
+  // Beside the neck, over the shoulder: nothing there.
+  assert.equal(rayPerson({ x: 0, y: 1.08, z: 0.38 }, across, feet), undefined);
+  // Over the top of the head.
+  assert.equal(rayPerson({ x: 0, y: HEAD_C + HEAD_R + 0.02, z: 0 }, across, feet), undefined);
+  // Crouching, the head comes down: where the face was is clear, and the face is lower.
+  const low = { ...feet, crouch: true };
+  assert.equal(rayPerson({ x: 0, y: 1.6, z: 0 }, across, low), undefined);
+  assert.equal(rayPerson({ x: 0, y: HEAD_C - CROUCH, z: 0 }, across, low)?.head, true);
+  // From above, down onto the head: the head first.
+  const down = rayPerson({ x: 10, y: 5, z: 0.05 }, { x: 0, y: -1, z: 0 }, feet);
+  assert.ok(down?.head && Math.abs(down.t - (5 - HEAD_C - HEAD_R)) < 0.01);
+});
+
+test('shots say what they did: damage and health left, the streak on a kill; someone just back in is shielded, unharmed', () => {
+  const m = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
+  // Safe just after coming in: shielded, no hit, no harm.
+  const safe = m.shoot('a', 'b');
+  assert.equal(safe?.shield, 'b');
+  assert.equal(safe?.hit, undefined);
+  assert.equal(m.a.state().players.find((p) => p.id === 'b')!.hp, RULES.hp);
+  m.wait(RULES.safe * 1000);
+  const first = m.shoot('a', 'b');
+  assert.deepEqual([first?.hit, first?.dmg, first?.hp, first?.head], ['b', RULES.body, RULES.hp - RULES.body, false]);
+  const head = m.shoot('a', 'b', 0.6);
+  assert.deepEqual([head?.dmg, head?.hp, head?.head], [RULES.head, RULES.hp - RULES.body - RULES.head, true]);
+  const kill = m.shoot('a', 'b');
+  assert.ok(kill?.kill);
+  assert.equal(kill.hp, 0);
+  assert.equal(kill.streak, 1, 'the streak counting this kill, before the state catches up');
+  // Firing gives up your own safety straight away.
+  const m2 = match({ a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 30 } });
+  m2.shoot('b', 'a');
+  assert.equal(m2.a.state().players.find((p) => p.id === 'b')!.safeUntil, undefined);
+  assert.equal(m2.shoot('a', 'b')?.hit, 'b');
+});
+
+test('lag: a shot at where the shooter saw someone running counts, looked for that far back; a bot (no round trip) is judged on now', () => {
+  // b runs across a's view at 7.5 m/s, its moves reaching the office every 66 ms.
+  const spots: Record<string, V3> = { a: { x: C.x - 20, y: 0, z: C.z - 30 }, b: { x: C.x - 10, y: 0, z: C.z - 26 } };
+  const a = new ArenaControl((id) => spots[id]);
+  let now = 2_000_000;
+  a.join('a', 'A', now);
+  a.join('b', 'B', now);
+  now += RULES.safe * 1000;
+  const run = 7.5;
+  for (let i = 0; i < 20; i++) {
+    now += 66;
+    spots.b = { x: spots.b.x, y: 0, z: spots.b.z - run * 0.066 };
+    a.moved('b', spots.b, now);
+  }
+  // a's page showed b where they were 100 ms (a's round trip) + the page's easing ago: 1.3 m back.
+  const rtt = 100;
+  const seen = { x: spots.b.x, y: 0, z: spots.b.z + run * (rtt + 100) / 1000 };
+  const o = { x: spots.a.x, y: EYE_Y, z: spots.a.z };
+  const d = { x: seen.x - o.x, y: 0.75 - EYE_Y, z: seen.z - o.z };
+  assert.equal(a.fire('a', o, d, now, rtt)?.hit, 'b', 'rewound: a hit');
+  assert.equal(a.fire('a', o, d, now + RULES.every)?.hit, undefined, 'judged on where b is now: a miss');
+  // Never further back than 300 ms, however slow the connection.
+  const long = { x: spots.b.x, y: 0, z: spots.b.z + run * 0.9 };
+  assert.equal(a.fire('a', o, { x: long.x - o.x, y: 0.75 - EYE_Y, z: long.z - o.z }, now + 2 * RULES.every, 5000)?.hit, undefined);
+});
+
+test('fire rate: holding the trigger fires ten a second at any frame rate, and never two in a burst', () => {
+  for (const fps of [24, 30, 60, 75, 144]) {
+    let due = 0, shots = 0, s = 1;
+    const jitter = () => ((s = (s * 16807) % 2147483647) / 2147483647 - 0.5) * 0.6;
+    for (let now = 0; now < 3000; now += 1000 / fps + jitter()) {
+      if (now < due) continue;
+      shots++;
+      due = nextShot(due, now);
+    }
+    assert.ok(Math.abs(shots - 30) <= 1, `${fps} fps: ${shots} shots in 3 s`);
+  }
+  // Let go a while and pulled again: the next is a whole gap after.
+  assert.equal(nextShot(100, 5000), 5000 + RULES.every);
+});
+
+test('spread: still is tightest, running spreads more than walking, the sights and crouching tighten it', () => {
+  const still = spreadOf(0, true, 0, 0), walk = spreadOf(4.6, true, 0, 0), run = spreadOf(7.5, true, 0, 0);
+  assert.ok(still < walk && walk < run);
+  assert.ok(spreadOf(0, true, 1, 0) < still * 0.2);
+  // Down the sights you still can't run and gun: moving keeps half its spread.
+  assert.ok(spreadOf(4.6, true, 1, 0) > spreadOf(0, true, 1, 0) * 3);
+  assert.ok(spreadOf(4.6, true, 0, 0, true) < walk);
+});
+
+test('practice targets: in warm-up alone, shot down in four, back up after a while; gone once it\'s a match', () => {
+  // Every lane clear of the cover, inside the walls.
+  for (let i = 0; i < PRACTICE_TARGETS; i++) {
+    for (let k = 0; k <= 40; k++) {
+      const p = targetAt(i, k * 400);
+      assert.ok(Math.abs(p.x - C.x) < ARENA_HALF - 1 && Math.abs(p.z - C.z) < ARENA_HALF - 1);
+      for (const b of ARENA_BOXES) assert.ok(!inside(b, p.x, p.z, BODY_R), `target ${i} into a ${b.kind}`);
+    }
+  }
+  const me = { x: C.x - 19, y: 0, z: C.z - 20 };
+  const a = new ArenaControl((id) => (id === 'a' ? me : undefined));
+  let now = 3_000_000;
+  a.join('a', 'A', now);
+  assert.equal(a.state().phase, 'warmup');
+  assert.deepEqual(a.state().targets, [0, 0, 0, 0]);
+  const o = { x: me.x, y: EYE_Y, z: me.z };
+  const shoot = () => {
+    now += RULES.every;
+    const t = targetAt(1, now);
+    return a.fire('a', o, { x: t.x - o.x, y: 0.75 - EYE_Y, z: t.z - o.z }, now, 0);
+  };
+  for (let i = 0; i < 3; i++) assert.equal(shoot()?.target, 1);
+  const down = shoot();
+  assert.ok(down?.kill && down.target === 1 && down.hp === 0);
+  assert.ok(a.state().targets![1] > now);
+  assert.equal(shoot()?.target, undefined, 'down, it can\'t be hit');
+  now += PRACTICE_DOWN * 1000;
+  assert.ok(a.tick(now).changed);
+  assert.equal(a.state().targets![1], 0, 'back up');
+  // Someone else in: a match, and no targets.
+  a.join('b', 'B', now);
+  assert.equal(a.state().phase, 'live');
+  assert.equal(a.state().targets, undefined);
+});
+
+test('coming back in: a spawn out of everyone\'s sight, even when the furthest one is in it', () => {
+  const spots: Record<string, V3> = { a: { x: C.x - 30, y: 0, z: C.z - 30 }, c: { x: C.x - 30, y: 0, z: C.z + 12 } };
+  const a = new ArenaControl((id) => spots[id]);
+  for (const id of ['a', 'b', 'c']) a.join(id, id, 0);
+  const sees = (from: V3, s: { x: number; z: number }) => {
+    const eye = { x: from.x, y: EYE_Y, z: from.z };
+    const dx = s.x - eye.x, dy = 1.1 - eye.y, dz = s.z - eye.z, len = Math.hypot(dx, dy, dz);
+    return rayWorld(eye, { x: dx / len, y: dy / len, z: dz / len }, len) >= len - 0.1;
+  };
+  const near = (s: { x: number; z: number }) => Math.min(...Object.values(spots).map((o) => Math.hypot(o.x - s.x, o.z - s.z)));
+  const furthest = [...SPAWNS].sort((p, q) => near(q) - near(p))[0];
+  assert.ok(sees(spots.a, furthest) || sees(spots.c, furthest), 'the furthest spawn is in sight');
+  const s = a.spawnFor('b');
+  assert.ok(!sees(spots.a, s) && !sees(spots.c, s), `spawn ${s.x - C.x}, ${s.z - C.z} out of sight`);
 });

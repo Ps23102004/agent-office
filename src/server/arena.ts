@@ -1,9 +1,38 @@
-import { BODY_R, EYE_Y, RULES, SPAWNS, idleArena, rayPerson, rayWorld, type ArenaPlayer, type ArenaState, type V3 } from '../shared/arena.js';
+import {
+  BODY_R,
+  PRACTICE_DOWN,
+  PRACTICE_TARGETS,
+  RULES,
+  SPAWNS,
+  eyeY,
+  idleArena,
+  rayPerson,
+  rayWorld,
+  targetAt,
+  type ArenaPlayer,
+  type ArenaState,
+  type Body,
+  type ShotResult,
+  type V3,
+} from '../shared/arena.js';
+
+export type { ShotResult } from '../shared/arena.js';
 
 /** A shot's leaving point more than this far (m) from where the office has the shooter isn't theirs to take. */
 const REACH = 2.5;
-/** People are this much wider to hit than they are (m): where the office has them is a moment behind. */
-const LAG_R = 0.25;
+/** People are this much wider to hit than they are (m): even looked for where they were (see VIEW_LAG), the office has them a little off where the shooter saw them. */
+const LAG_R = 0.15;
+/**
+ * A person fires at the others where their page showed them, which is where they were a moment ago:
+ * their own round trip, plus about this long (ms) that a page draws everyone else behind (main.ts
+ * sends where you are every 66 ms, and everyone else's bodies ease toward that at 12 a second). The
+ * office looks that far back for them (see moved), up to MAX_REWIND, so nobody's shot long after
+ * they're round a corner.
+ */
+const VIEW_LAG = 100;
+const MAX_REWIND = 300;
+/** How long (ms) the office keeps where everyone's been. */
+const TRAIL = 1000;
 /** Slack (ms) for shots and reloads bunched up on their way: the average rate still can't beat RULES.every. */
 const JITTER = RULES.every / 2;
 /** How far (m) the eyes a shot leaves from can be off where the office has them, up or down: a step, a bob, a moment's lag. */
@@ -11,40 +40,42 @@ const REACH_Y = 0.7;
 /** Kills kept in the feed. */
 const FEED = 6;
 
-/** What became of a shot: where it stopped, and who it hit. */
-export interface ShotResult {
-  end: V3;
-  hit?: string;
-  head?: boolean;
-  kill?: boolean;
-}
-
 interface Gun {
   ammo: number;
   /** When the next shot can go (epoch ms): after the last one, or the reload. */
   ready: number;
   /** When the reload's done, while reloading. */
   reloadAt?: number;
-  /** Shot nobody since they came back in (still safe). */
-  safeUntil: number;
   /** When they were last hurt. */
   hurtAt: number;
 }
 
 /**
  * The arena's free-for-all, as the office keeps it: who's in, their health and guns, kills and deaths,
- * the match clock. Who a shot hits is worked out here, from where the office has everyone (`where`).
+ * the match clock, and the practice targets while it's warm-up. Who a shot hits is worked out here,
+ * from where the office has everyone (`where`) and where they've been (`moved`).
  */
 export class ArenaControl {
   private arena: ArenaState = idleArena();
   private guns = new Map<string, Gun>();
+  /** Where each of them has been lately, oldest first (see moved). */
+  private trails = new Map<string, (Body & { t: number })[]>();
+  /** Each practice target's health, and when it's back up after being shot down (0: it's up). */
+  private targetHp: number[] = Array(PRACTICE_TARGETS).fill(RULES.hp);
+  private targetsDown: number[] = Array(PRACTICE_TARGETS).fill(0);
   /** When the clock last moved on. */
   private ticked = 0;
 
-  constructor(private where: (id: string) => V3 | undefined) {}
+  constructor(private where: (id: string) => Body | undefined) {}
 
   state(): ArenaState {
-    return { ...this.arena, players: this.arena.players.map((p) => ({ ...p })), feed: [...this.arena.feed] };
+    const a = this.arena;
+    return {
+      ...a,
+      players: a.players.map((p) => ({ ...p })),
+      feed: [...a.feed],
+      ...(a.phase === 'warmup' ? { targets: [...this.targetsDown] } : {}),
+    };
   }
 
   /** Whether `id` is in it. */
@@ -55,8 +86,8 @@ export class ArenaControl {
   /** `id` came into the arena: in, alive, and safe for a moment. */
   join(id: string, name: string, now: number) {
     if (this.has(id)) return;
-    this.arena.players.push({ id, name, kills: 0, deaths: 0, streak: 0, hp: RULES.hp, alive: true });
-    this.guns.set(id, { ammo: RULES.mag, ready: now, safeUntil: now + RULES.safe * 1000, hurtAt: 0 });
+    this.arena.players.push({ id, name, kills: 0, deaths: 0, streak: 0, hp: RULES.hp, alive: true, safeUntil: now + RULES.safe * 1000 });
+    this.guns.set(id, { ammo: RULES.mag, ready: now, hurtAt: 0 });
     this.settle(now);
   }
 
@@ -66,9 +97,35 @@ export class ArenaControl {
     if (i < 0) return false;
     this.arena.players.splice(i, 1);
     this.guns.delete(id);
+    this.trails.delete(id);
     if (this.arena.phase === 'live' && this.arena.players.length < RULES.players) this.warmup();
     this.settle(now);
     return true;
+  }
+
+  /**
+   * `id` is at `at` as of `now`: tell it every move (a person's 'move', a bot's step), so a shot from
+   * someone who saw them a moment ago is judged against where they were then (see fire).
+   */
+  moved(id: string, at: Body, now: number) {
+    if (!this.has(id)) return;
+    let trail = this.trails.get(id);
+    if (!trail) this.trails.set(id, (trail = []));
+    trail.push({ t: now, x: at.x, y: at.y, z: at.z, crouch: at.crouch });
+    while (trail.length > 2 && trail[1].t < now - TRAIL) trail.shift();
+  }
+
+  /** Where `id` was at `t`: between the two moves the office heard either side of it, or where they are now after the last. */
+  private was(id: string, t: number): Body | undefined {
+    const now = this.where(id);
+    const trail = this.trails.get(id);
+    if (!now || !trail?.length || t >= trail[trail.length - 1].t) return now;
+    let i = trail.length - 1;
+    while (i > 0 && trail[i - 1].t > t) i--;
+    if (i === 0) return trail[0];
+    const a = trail[i - 1], b = trail[i];
+    const k = (t - a.t) / Math.max(1, b.t - a.t);
+    return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, crouch: k < 0.5 ? a.crouch : b.crouch };
   }
 
   /** `id` starts reloading. */
@@ -82,9 +139,11 @@ export class ArenaControl {
 
   /**
    * `id` fires from `o` along `d` at `now`: undefined if they can't (dead, out of rounds, too soon, or
-   * not where they say they are), else what it hit. The office's word, not the page's.
+   * not where they say they are), else what it hit. The office's word, not the page's. `rtt` is a
+   * person's round trip to the office (ms): everyone's judged where that person's page showed them a
+   * moment ago. A bot leaves it out: it sees everyone where they are.
    */
-  fire(id: string, o: V3, d: V3, now: number): ShotResult | undefined {
+  fire(id: string, o: V3, d: V3, now: number, rtt?: number): ShotResult | undefined {
     // Only the reload: respawns, healing and the match clock are the timer's (tick), which tells everyone.
     const g = this.guns.get(id);
     if (g?.reloadAt !== undefined && now >= g.reloadAt - JITTER) {
@@ -98,42 +157,58 @@ export class ArenaControl {
     const len = Math.hypot(d.x, d.y, d.z);
     if (!(len > 0.5) || ![o.x, o.y, o.z].every(Number.isFinite)) return undefined;
     const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
-    if (Math.hypot(o.x - at.x, o.z - at.z) > REACH || Math.abs(o.y - (at.y + EYE_Y)) > REACH_Y) return undefined;
+    const eye = { x: at.x, y: eyeY(at), z: at.z };
+    if (Math.hypot(o.x - at.x, o.z - at.z) > REACH || Math.abs(o.y - eye.y) > REACH_Y) return undefined;
     // Not round a corner or over cover from behind it: the eyes have to see where the shot leaves from.
-    const eye = { x: at.x, y: at.y + EYE_Y, z: at.z };
     const gap = Math.hypot(o.x - eye.x, o.y - eye.y, o.z - eye.z);
     if (gap > 0.05 && rayWorld(eye, { x: (o.x - eye.x) / gap, y: (o.y - eye.y) / gap, z: (o.z - eye.z) / gap }, gap) < gap - 0.05) return undefined;
     g.ammo--;
     // From the last shot's slot, not when this one got here: a late one doesn't push the next back.
     g.ready = Math.max(g.ready, now - JITTER) + RULES.every;
-    g.safeUntil = 0;
+    // Firing gives up being safe.
+    delete me.safeUntil;
+    const back = rtt === undefined ? 0 : Math.min(MAX_REWIND, Math.max(0, rtt) + VIEW_LAG);
     let t = rayWorld(o, dir);
-    let hit: { id: string; head: boolean } | undefined;
+    let near: { id?: string; target?: number; head: boolean } | undefined;
     for (const p of this.arena.players) {
       if (p.id === id || !p.alive) continue;
-      const pos = this.where(p.id);
+      const pos = this.was(p.id, now - back);
       const h = pos && rayPerson(o, dir, pos, BODY_R + LAG_R);
-      if (h && h.t < t) {
-        t = h.t;
-        hit = { id: p.id, head: h.head };
+      if (h && h.t < t) [t, near] = [h.t, { id: p.id, head: h.head }];
+    }
+    // The practice targets go by the office's clock, which the shooter's page had half a round trip ago.
+    if (this.arena.phase === 'warmup') {
+      for (let i = 0; i < PRACTICE_TARGETS; i++) {
+        if (this.targetsDown[i]) continue;
+        const h = rayPerson(o, dir, targetAt(i, now - (rtt ?? 0) / 2), BODY_R + LAG_R);
+        if (h && h.t < t) [t, near] = [h.t, { target: i, head: h.head }];
       }
     }
     const end = { x: o.x + dir.x * t, y: o.y + dir.y * t, z: o.z + dir.z * t };
-    if (!hit) return { end };
-    const victim = this.arena.players.find((p) => p.id === hit.id)!;
-    const vg = this.guns.get(victim.id)!;
-    if (now < vg.safeUntil) return { end, hit: victim.id, head: hit.head };
-    victim.hp -= hit.head ? RULES.head : RULES.body;
-    vg.hurtAt = now;
-    if (victim.hp > 0) return { end, hit: victim.id, head: hit.head };
-    this.killed(me, victim, hit.head, now);
-    return { end, hit: victim.id, head: hit.head, kill: true };
+    if (!near) return { end };
+    const { head } = near;
+    const dmg = head ? RULES.head : RULES.body;
+    if (near.target !== undefined) {
+      const i = near.target;
+      this.targetHp[i] -= dmg;
+      if (this.targetHp[i] > 0) return { end, target: i, head, dmg, hp: this.targetHp[i] };
+      this.targetHp[i] = RULES.hp;
+      this.targetsDown[i] = now + PRACTICE_DOWN * 1000;
+      return { end, target: i, head, dmg, hp: 0, kill: true };
+    }
+    const victim = this.arena.players.find((p) => p.id === near.id)!;
+    if (now < (victim.safeUntil ?? 0)) return { end, shield: victim.id };
+    victim.hp = Math.max(0, victim.hp - dmg);
+    this.guns.get(victim.id)!.hurtAt = now;
+    if (victim.hp > 0) return { end, hit: victim.id, head, dmg, hp: victim.hp };
+    this.killed(me, victim, head, now);
+    return { end, hit: victim.id, head, dmg, hp: 0, kill: true, streak: me.streak };
   }
 
   /**
    * The clock moving on: guns reloaded, the hurt healing, the dead back in (returned, with where they
-   * come back in), the match starting, running out or its results coming down. `changed`: anything
-   * everyone should hear.
+   * come back in), practice targets back up, the match starting, running out or its results coming
+   * down. `changed`: anything everyone should hear.
    */
   tick(now: number): { changed: boolean; spawned: { id: string; x: number; z: number; rotY: number }[] } {
     const a = this.arena;
@@ -149,16 +224,22 @@ export class ArenaControl {
       }
       if (!p.alive && now >= (p.respawnAt ?? 0) && a.phase !== 'over') {
         const s = this.spawnFor(p.id);
-        Object.assign(p, { alive: true, hp: RULES.hp });
+        Object.assign(p, { alive: true, hp: RULES.hp, safeUntil: now + RULES.safe * 1000 });
         delete p.respawnAt;
-        Object.assign(g, { ammo: RULES.mag, ready: now, safeUntil: now + RULES.safe * 1000, hurtAt: 0 });
+        Object.assign(g, { ammo: RULES.mag, ready: now, hurtAt: 0 });
         delete g.reloadAt;
+        this.trails.delete(p.id);
         spawned.push({ id: p.id, ...s });
         changed = true;
       } else if (p.alive && p.hp < RULES.hp && now - g.hurtAt >= RULES.healAfter * 1000) {
         p.hp = Math.min(RULES.hp, p.hp + RULES.heal * dt);
         changed = true;
       }
+    }
+    for (let i = 0; i < PRACTICE_TARGETS; i++) {
+      if (!this.targetsDown[i] || now < this.targetsDown[i]) continue;
+      this.targetsDown[i] = 0;
+      changed = true;
     }
     if (a.phase === 'live' && now >= (a.endsAt ?? Infinity)) {
       this.over(now);
@@ -173,14 +254,15 @@ export class ArenaControl {
     return { changed, spawned };
   }
 
-  /** Where `id` should come back in: the spawn furthest from anyone alive to shoot them. */
+  /** Where `id` should come back in: a spawn nobody alive can see, the furthest from them; else just the furthest. */
   spawnFor(id: string): { x: number; z: number; rotY: number } {
-    const others = this.arena.players.filter((p) => p.id !== id && p.alive).map((p) => this.where(p.id)).filter((p): p is V3 => !!p);
+    const others = this.arena.players.filter((p) => p.id !== id && p.alive).map((p) => this.where(p.id)).filter((p): p is Body => !!p);
     let best = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
-    let far = -1;
+    let score = -Infinity;
     for (const s of SPAWNS) {
       const near = others.length ? Math.min(...others.map((o) => Math.hypot(o.x - s.x, o.z - s.z))) : Math.random();
-      if (near > far) [far, best] = [near, s];
+      const v = near - (others.some((o) => sees(o, s)) ? 1000 : 0);
+      if (v > score) [score, best] = [v, s];
     }
     return best;
   }
@@ -188,6 +270,7 @@ export class ArenaControl {
   private killed(killer: ArenaPlayer, victim: ArenaPlayer, head: boolean, now: number) {
     const a = this.arena;
     Object.assign(victim, { hp: 0, alive: false, respawnAt: now + RULES.respawn * 1000, streak: 0 });
+    this.trails.delete(victim.id);
     a.feed.push({ at: now, killer: killer.name, victim: victim.name, head });
     if (a.feed.length > FEED) a.feed.shift();
     if (a.phase !== 'live') return;
@@ -221,4 +304,12 @@ export class ArenaControl {
     delete this.arena.endsAt;
     delete this.arena.winner;
   }
+}
+
+/** Whether someone standing at `o` can see a person coming in at spawn `s` (their eyes to the newcomer's chest). */
+function sees(o: Body, s: { x: number; z: number }): boolean {
+  const eye = { x: o.x, y: eyeY(o), z: o.z };
+  const dx = s.x - eye.x, dy = 1.1 - eye.y, dz = s.z - eye.z;
+  const len = Math.hypot(dx, dy, dz);
+  return rayWorld(eye, { x: dx / len, y: dy / len, z: dz / len }, len) >= len - 0.1;
 }

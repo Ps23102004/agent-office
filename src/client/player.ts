@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FLOOR, SLAB, STREET_Y, WALL_T, WING, inWing, wingMinZ, type SeatPlace } from '../shared/layout';
 import { citySolids, solidHeight } from '../shared/city';
+import { CROUCH } from '../shared/arena';
 import type { ViewMode } from './state';
 import type { Collider } from './world/office';
 
@@ -14,6 +15,14 @@ const WALK = 4.6;
 const RUN = 7.5;
 const JUMP_V = 6.4;
 const GRAVITY = 18;
+/** In the arena: the highest ledge (m above your feet) you climb up onto by jumping at it, and how long that takes (s). */
+const MANTLE = 1.45;
+const MANTLE_T = 0.32;
+/** How far past you (m) a ledge can be, to climb up onto it. */
+const LEDGE = 0.45;
+/** In the arena: crouched you go at this much of walking pace; from a run, crouching slides you along, this fast (m/s) for this long (s), and then not again for `rest`. */
+const CROUCHED = 0.5;
+const SLIDE = { speed: 9.5, time: 0.6, rest: 0.9 };
 /** Camera height above your feet in first person (the Person's eyes). */
 export const EYE_HEIGHT = 1.4;
 /** The Person's hips above their feet, standing. Sitting puts them on the seat, and your eyes move with them. */
@@ -46,6 +55,21 @@ export class PlayerController {
   speedBoost = 1;
   /** Jump speed, as a multiple of normal. */
   jumpBoost = 1;
+  /** The fastest you go (m/s): the arena holds you to a walk while you fire, slower down the sights. */
+  speedCap = Infinity;
+  /**
+   * The arena's moves, while you're there (client/arena.ts): C held crouches you (lower, slower; from a
+   * run, a slide first), and jumping at a ledge up to MANTLE high climbs you up onto it.
+   */
+  arena = false;
+  /** Crouching (C held, in the arena), and how far down you are, 0 to 1, eased (your eyes come down CROUCH). */
+  crouching = false;
+  crouchK = 0;
+  /** A slide under way: which way, and how long it has left (s); and how long till the next can start. */
+  private slide: { x: number; z: number; t: number } | null = null;
+  private slideRest = 0;
+  /** Climbing up onto a ledge: from where, to where, and how far into it (s). */
+  private climb: { from: THREE.Vector3; to: THREE.Vector3; t: number } | null = null;
   /** 0 (steady) to 1: how hard the view trembles after one coffee too many. */
   jitter = 0;
   /** How far below the floor you're on the street is: further down the higher your floor (see streetBelow). */
@@ -397,6 +421,7 @@ export class PlayerController {
       this.stand();
       this.onStand?.();
     }
+    if (this.climb && this.climbStep(dt)) return;
     let ix = 0;
     let iz = 0;
     if (this.enabled) {
@@ -407,13 +432,32 @@ export class PlayerController {
     }
     const steering = ix !== 0 || iz !== 0;
     this.moving = steering;
+    const running = k.has('ShiftLeft') || k.has('ShiftRight');
+    const crouch = this.arena && this.enabled && k.has('KeyC');
+    // Crouching from a run, on your feet: a slide, the way you were going.
+    if (crouch && !this.crouching && running && steering && this.grounded && this.slideRest <= 0 && this.speedCap >= RUN) {
+      const len = Math.hypot(ix, iz);
+      const sin = Math.sin(this.camYaw), cos = Math.cos(this.camYaw);
+      this.slide = { x: (ix * cos + iz * sin) / len, z: (-ix * sin + iz * cos) / len, t: SLIDE.time };
+      this.slideRest = SLIDE.rest;
+    }
+    this.crouching = crouch;
+    this.crouchK += ((crouch ? 1 : 0) - this.crouchK) * Math.min(1, dt * 12);
+    this.slideRest -= dt;
+    if (this.slide && (!crouch || (this.slide.t -= dt) <= 0)) this.slide = null;
+    if (this.slide) {
+      const v = WALK * CROUCHED + (SLIDE.speed - WALK * CROUCHED) * (this.slide.t / SLIDE.time);
+      this.tryMove(this.pos.x + this.slide.x * v * dt, this.pos.z);
+      this.tryMove(this.pos.x, this.pos.z + this.slide.z * v * dt);
+      this.moving = true;
+    }
     if (this.path && (steering || (this.enabled && k.has('Space')))) {
       this.path = null;
       this.onPathEnd?.('cancelled');
     }
     if (this.path && this.enabled) this.followPath(dt);
     if (this.view === 'first') this.facing = Math.atan2(Math.sin(this.camYaw + Math.PI), Math.cos(this.camYaw + Math.PI));
-    if (steering) {
+    if (steering && !this.slide) {
       const len = Math.hypot(ix, iz);
       ix /= len;
       iz /= len;
@@ -425,9 +469,14 @@ export class PlayerController {
       const cos = Math.cos(this.camYaw + stagger);
       const dx = ix * cos + iz * sin;
       const dz = -ix * sin + iz * cos;
-      const speed = (k.has('ShiftLeft') || k.has('ShiftRight') ? RUN : WALK) * this.speedBoost;
+      const speed = Math.min(this.speedCap, (crouch ? WALK * CROUCHED : running ? RUN : WALK) * this.speedBoost);
       this.tryMove(this.pos.x + dx * speed * dt, this.pos.z);
       this.tryMove(this.pos.x, this.pos.z + dz * speed * dt);
+      // Jumping at a ledge in the arena: up onto it.
+      if (this.arena && this.enabled && k.has('Space') && this.mantle(dx, dz)) {
+        this.climbStep(dt);
+        return;
+      }
       if (this.view === 'third') {
         const want = Math.atan2(dx, dz);
         let diff = want - this.facing;
@@ -463,11 +512,57 @@ export class PlayerController {
     }
     this.stepOffset *= Math.exp(-dt * 16);
     const walking = this.moving && this.grounded;
-    this.walkPhase += dt * (walking ? (k.has('ShiftLeft') || k.has('ShiftRight') ? 14 : 11) * this.speedBoost : 0);
+    this.walkPhase += dt * (walking && !this.slide ? (running && !crouch ? 14 : 11) * this.speedBoost : 0);
     const bob = walking ? Math.abs(Math.sin(this.walkPhase)) * 0.035 : 0;
     this.bob += (bob - this.bob) * Math.min(1, dt * 18);
     this.jitterT += dt;
     this.updateCamera();
+  }
+
+  /**
+   * Whether there's a ledge to climb up onto just ahead the way you're going (dx, dz, a unit vector):
+   * its top no more than MANTLE over your feet (and more than a step), with room to stand on it. If so,
+   * the climb starts, to a body's width in past its edge.
+   */
+  private mantle(dx: number, dz: number): boolean {
+    const c = this.blocker(this.pos.x + dx * LEDGE, this.pos.z + dz * LEDGE, this.pos.y);
+    const up = c ? c.top - this.pos.y : 0;
+    if (!c || up <= STEP || up > MANTLE) return false;
+    // How far you'd go before you touched it.
+    let free = 0, blocked = LEDGE;
+    for (let i = 0; i < 10; i++) {
+      const m = (free + blocked) / 2;
+      if (this.blocker(this.pos.x + dx * m, this.pos.z + dz * m, this.pos.y)) blocked = m;
+      else free = m;
+    }
+    const go = blocked + 2 * RADIUS + 0.05;
+    const x = this.pos.x + dx * go, z = this.pos.z + dz * go;
+    if (this.blocker(x, z, c.top) || groundAt(this.colliders, x, z, c.top) < c.top - 0.01 || c.top + HEIGHT > ceilingAt(this.colliders, x, z, c.top)) return false;
+    this.climb = { from: this.pos.clone(), to: new THREE.Vector3(x, c.top, z), t: 0 };
+    this.slide = null;
+    return true;
+  }
+
+  /** A frame of climbing up onto a ledge: up first, then in over its edge. False once you're up there. */
+  private climbStep(dt: number): boolean {
+    const c = this.climb!;
+    c.t += dt;
+    const k = Math.min(1, c.t / MANTLE_T);
+    const rise = 1 - (1 - Math.min(1, k / 0.6)) ** 2;
+    const over = Math.max(0, (k - 0.45) / 0.55);
+    this.pos.set(c.from.x + (c.to.x - c.from.x) * over, c.from.y + (c.to.y - c.from.y) * rise, c.from.z + (c.to.z - c.from.z) * over);
+    this.vy = 0;
+    this.moving = true;
+    this.grounded = k >= 1;
+    if (k >= 1) this.climb = null;
+    this.jitterT += dt;
+    this.updateCamera();
+    return !!this.climb;
+  }
+
+  /** Whether you're climbing up onto a ledge (the arena's hands drop the rifle a little). */
+  get climbing(): boolean {
+    return !!this.climb;
   }
 
   /** A step along `path`: toward its next corner, turning (and in first person, looking) the way you go. */
@@ -508,7 +603,7 @@ export class PlayerController {
 
   updateCamera(snap = false) {
     if (this.view === 'first') {
-      this.camera.position.set(this.pos.x, this.pos.y + EYE_HEIGHT + this.bob + this.stepOffset + this.lift, this.pos.z);
+      this.camera.position.set(this.pos.x, this.pos.y + EYE_HEIGHT - CROUCH * this.crouchK + this.bob + this.stepOffset + this.lift, this.pos.z);
       this.camera.rotation.set(this.lookPitch, this.camYaw, 0);
       this.shake();
       return;

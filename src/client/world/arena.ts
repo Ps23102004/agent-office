@@ -21,8 +21,12 @@ export interface ArenaWorld {
   pickables: THREE.Object3D[];
   /** Each frame while you're there: the shots fading, the gate's shimmer. */
   update(dt: number, t: number): void;
-  /** A shot from `o` to `end`: a streak of light, and sparks where it stopped (not on someone it `hit`). */
-  shot(o: V3, end: V3, hit: boolean): void;
+  /**
+   * A shot from `o` (its muzzle) to `end`: a streak of light, and a puff where it stopped: sparks off
+   * the yard, white off someone it hit in the `body`, gold off a `head`, blue off someone still safe
+   * (`shield`).
+   */
+  shot(o: V3, end: V3, hit?: 'body' | 'head' | 'shield'): void;
 }
 
 function block(into: THREE.Object3D, w: number, h: number, l: number, color: string, x: number, y: number, z: number, cast = true) {
@@ -131,7 +135,12 @@ interface Fx {
   mesh: THREE.Mesh;
   life: number;
   max: number;
+  /** How much a puff grows as it fades. */
+  grow?: number;
 }
+
+/** A shot's puff where it stopped (see ArenaWorld.shot): its colour and how big it gets, off the yard or off someone. */
+const PUFF = { yard: ['#ffd27a', 1.4], body: ['#f4f1ea', 2.4], head: ['#ffd84d', 3], shield: ['#6ec6ff', 3.4] } as const;
 
 export function buildArena(): ArenaWorld {
   const group = new THREE.Group();
@@ -211,12 +220,12 @@ export function buildArena(): ArenaWorld {
         f.life -= dt;
         const k = Math.max(0, f.life / f.max);
         (f.mesh.material as THREE.MeshBasicMaterial).opacity = k;
-        if (f.mesh.geometry === spark) f.mesh.scale.setScalar(0.6 + (1 - k) * 1.4);
+        if (f.mesh.geometry === spark) f.mesh.scale.setScalar(0.6 + (1 - k) * (f.grow ?? 1.4));
         f.mesh.visible = f.life > 0;
       }
     },
     shot(o, end, hit) {
-      from.set(o.x, o.y - 0.12, o.z);
+      from.set(o.x, o.y, o.z);
       to.set(end.x, end.y, end.z);
       const len = from.distanceTo(to);
       if (len > 0.5) {
@@ -227,18 +236,24 @@ export function buildArena(): ArenaWorld {
         tr.life = tr.max;
         tr.mesh.visible = true;
       }
-      if (hit) return;
+      const [color, grow] = PUFF[hit ?? 'yard'];
       const sp = sparks[si++ % sparks.length];
+      (sp.mesh.material as THREE.MeshBasicMaterial).color.set(color);
+      sp.grow = grow;
       sp.mesh.position.copy(to);
-      sp.life = sp.max;
+      sp.life = sp.max * (hit ? 1.5 : 1);
       sp.mesh.visible = true;
     },
   };
 }
 
+/** How high over the rifle's grip its sight's dot is (m, before it's scaled): where your eye goes, aiming down the sights. */
+export const SIGHT_Y = 0.16;
+
 /**
  * A rifle, its muzzle pointing along -z (as in camera space; turn it round to point a character's +z),
- * its grip at the origin. `muzzle`: where the flash goes.
+ * its grip at the origin. `muzzle`: where the flash goes. On top, a red-dot sight: an open ring you see
+ * the yard through, with a small glowing dot floating in it.
  */
 export function rifle(): { group: THREE.Group; muzzle: THREE.Object3D } {
   const parts = new THREE.Group();
@@ -250,9 +265,13 @@ export function rifle(): { group: THREE.Group; muzzle: THREE.Object3D } {
   block(parts, 0.045, 0.16, 0.07, metal, 0, -0.12, -0.17); // magazine
   block(parts, 0.04, 0.11, 0.05, tan, 0, -0.08, 0.02); // grip
   block(parts, 0.05, 0.08, 0.2, tan, 0, 0.01, 0.17); // stock
-  block(parts, 0.025, 0.035, 0.12, light, 0, 0.11, -0.12); // sight rail
-  block(parts, 0.03, 0.04, 0.03, '#e03131', 0, 0.13, -0.16); // red dot
+  block(parts, 0.03, 0.012, 0.12, light, 0, 0.11, -0.12); // sight rail
+  block(parts, 0.012, 0.03, 0.014, metal, 0, 0.116, -0.15); // the sight's post
   const group = mergeColored(parts);
+  const ring = mesh(new THREE.TorusGeometry(0.024, 0.0032, 6, 28), toon(metal), 0, SIGHT_Y, -0.15, false);
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 12), new THREE.MeshBasicMaterial({ color: '#ff2d2d', toneMapped: false }));
+  dot.position.set(0, SIGHT_Y, -0.15);
+  group.add(ring, dot);
   const muzzle = new THREE.Object3D();
   muzzle.position.set(0, 0.075, -0.8);
   group.add(muzzle);

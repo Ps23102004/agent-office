@@ -112,6 +112,8 @@ interface Client {
   typingAt: Map<string, number>;
   /** Cleared at each heartbeat ping and set again by the pong; still clear at the next one means gone. */
   isAlive: boolean;
+  /** Their round trip to the office (ms), smoothed, measured while they're in the arena: how late they see everyone (see ArenaControl.fire). */
+  rtt?: number;
 }
 
 const SLOW_CLIENT_BYTES = 8 * 1024 * 1024;
@@ -266,7 +268,7 @@ export async function startServer(cfg: Config) {
   // The arena, a place of its own too (shared/arena.ts): its free-for-all (server/arena.ts), judged from where the office has everyone in it.
   const arena = new ArenaControl((id) => {
     const p = clients.get(id)?.peer;
-    return p && p.floor === ARENA ? { x: p.x, y: p.y, z: p.z } : undefined;
+    return p && p.floor === ARENA ? { x: p.x, y: p.y, z: p.z, crouch: p.crouch } : undefined;
   });
   /** When each person (account, or name) last posted a meeting spot. */
   const meetAt = new Map<string, number>();
@@ -1123,7 +1125,12 @@ export async function startServer(cfg: Config) {
     if (maps.reload()) mapNews(mapWas);
     clients.set(id, client);
     if (account) accounts.seen(account.id);
-    ws.on('pong', () => (client.isAlive = true));
+    ws.on('pong', (data) => {
+      client.isAlive = true;
+      // The arena's pings carry when they went (see arenaTimer); the heartbeat's carry nothing.
+      const at = Number(data.toString());
+      if (at > 0) client.rtt = client.rtt === undefined ? Date.now() - at : client.rtt * 0.7 + (Date.now() - at) * 0.3;
+    });
 
     sendTo(client, {
       t: 'welcome',
@@ -1228,7 +1235,10 @@ export async function startServer(cfg: Config) {
   /** The arena's match changed: everyone in it hears, at most four times a second (kills straight away). */
   let arenaDirty = false;
   const arenaChanged = () => void (arenaDirty = true);
+  let arenaTicks = 0;
   const arenaTimer = setInterval(() => {
+    // Every two seconds, how long a round trip to each of them takes (the pong's in the connection's handler).
+    if (++arenaTicks % 8 === 0) for (const c of clients.values()) if (c.peer.floor === ARENA && c.ws.readyState === WebSocket.OPEN) c.ws.ping(String(Date.now()));
     const { changed, spawned } = arena.tick(Date.now());
     for (const s of spawned) {
       const c = clients.get(s.id);
@@ -1477,8 +1487,15 @@ export async function startServer(cfg: Config) {
           p.x = Math.min(ARENA_CENTER.x + lim, Math.max(ARENA_CENTER.x - lim, p.x));
           p.z = Math.min(ARENA_CENTER.z + lim, Math.max(ARENA_CENTER.z - lim, p.z));
           p.y = Math.min(6.5, Math.max(0, p.y));
+          // Where they look and how low they are, for everyone else's view of them and for the shots at them.
+          p.pitch = Math.min(1.5, Math.max(-1.5, num(msg.pitch)));
+          p.crouch = !!msg.crouch;
+          arena.moved(c.id, p, Date.now());
+        } else {
+          delete p.pitch;
+          delete p.crouch;
         }
-        toNeighbors(c, { t: 'peer.move', id: c.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving }, true);
+        toNeighbors(c, { t: 'peer.move', id: c.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving, ...(p.floor === ARENA ? { pitch: p.pitch, crouch: p.crouch } : {}) }, true);
         break;
       }
       case 'act': {
@@ -1720,7 +1737,7 @@ export async function startServer(cfg: Config) {
           return { x: num(o.x), y: num(o.y), z: num(o.z) };
         };
         const o = v(msg.o);
-        const shot = arena.fire(c.id, o, v(msg.d), Date.now());
+        const shot = arena.fire(c.id, o, v(msg.d), Date.now(), c.rtt ?? 0);
         if (!shot) break;
         toArena({ t: 'arena.shot', by: c.id, o, ...shot });
         if (shot.hit) arenaChanged();

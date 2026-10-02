@@ -710,7 +710,7 @@ const arenaPlay = new ArenaPlay({
   placeAt: (at) => placeAt(at),
   locked: () => player.locked,
 });
-arenaPlay.setPeople((id) => remotes.get(id)?.person.root);
+arenaPlay.setPeople((id) => remotes.get(id)?.person);
 $('hud').append(arenaPlay.hud.el);
 
 /** Who's at a game's line up here already, if anyone. */
@@ -3463,7 +3463,7 @@ const FEELINGS = ['😌 You feel sober again', '🥴 You’re feeling a little t
 function drinking(now: number) {
   const secs = now / 1000;
   const amount = booze.amount(secs);
-  player.drunk = reduceMotion.matches ? 0 : Math.min(1.3, amount);
+  player.drunk = reduceMotion.matches || atArena ? 0 : Math.min(1.3, amount);
   // W6: a Night Owl drink stays at the bar: put down once you've been out of it (and off its terrace) a moment.
   if (upTop || (inOffice() && office.venues.at() === 'bar')) barLeftAt = 0;
   else if (!barLeftAt) barLeftAt = secs;
@@ -5127,7 +5127,7 @@ const shadowMe = new THREE.Vector3();
 const dogTick = decorTicker();
 const holidayTick = decorTicker();
 applyGraphics();
-let lastSent = { x: 0, y: 0, z: 0, rotY: 0, moving: false, at: 0 };
+let lastSent = { x: 0, y: 0, z: 0, rotY: 0, moving: false, at: 0, pitch: 0, crouch: false };
 let spotSavedAt = 0;
 let speakTick = 0;
 /** Which half-stride your walk is on, so each one plays a footstep. */
@@ -5213,10 +5213,11 @@ function frame(ts?: number) {
 
   // Coffee: quicker feet, higher jumps, a mug in hand, and maybe the jitters.
   const secs = now / 1000;
-  player.speedBoost = caffeine.speed(secs);
-  player.jumpBoost = caffeine.jump(secs);
+  // Not in the arena: everyone there's on the same legs and as steady as each other.
+  player.speedBoost = atArena ? 1 : caffeine.speed(secs);
+  player.jumpBoost = atArena ? 1 : caffeine.jump(secs);
   thud = Math.max(0, thud - dt * 2.5);
-  player.jitter = reduceMotion.matches ? 0 : Math.max(caffeine.jitter(secs), thud);
+  player.jitter = reduceMotion.matches || atArena ? 0 : Math.max(caffeine.jitter(secs), thud);
   const mug = caffeine.buzzed(secs);
   // Both hands are on the club at the tee.
   me.holdMug(mug && !golf.active);
@@ -5358,10 +5359,13 @@ function frame(ts?: number) {
     fallV = 0;
   }
 
-  const moved = Math.abs(player.pos.x - lastSent.x) + Math.abs(player.pos.y - lastSent.y) + Math.abs(player.pos.z - lastSent.z) > 0.01 || Math.abs(player.facing - lastSent.rotY) > 0.02;
+  // In the arena, where you're looking up or down and whether you're crouching too: how everyone else sees you hold your rifle, and how low you are to hit.
+  const pitch = atArena ? player.lookPitch : 0;
+  const crouch = atArena && player.crouching;
+  const moved = Math.abs(player.pos.x - lastSent.x) + Math.abs(player.pos.y - lastSent.y) + Math.abs(player.pos.z - lastSent.z) > 0.01 || Math.abs(player.facing - lastSent.rotY) > 0.02 || Math.abs(pitch - lastSent.pitch) > 0.03 || crouch !== lastSent.crouch;
   if ((moved || player.moving !== lastSent.moving) && now - lastSent.at > 66) {
-    lastSent = { x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY: player.facing, moving: player.moving, at: now };
-    net.send({ t: 'move', x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY: player.facing, moving: player.moving });
+    lastSent = { x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY: player.facing, moving: player.moving, at: now, pitch, crouch };
+    net.send({ t: 'move', x: player.pos.x, y: player.pos.y, z: player.pos.z, rotY: player.facing, moving: player.moving, ...(atArena ? { pitch, crouch } : {}) });
   }
   // Where you are, to come back to next time.
   if (now - spotSavedAt > 1000) {
