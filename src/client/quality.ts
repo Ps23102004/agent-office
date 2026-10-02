@@ -20,12 +20,17 @@ export interface Quality {
   weather: number;
   /** How often (ms) a laptop screen is repainted when it's near, in between and far off. */
   laptopMs: [near: number, mid: number, far: number];
+  /**
+   * The ground's and walls' grain up close (world/surface.ts), in pixels a side of its tile; and
+   * under 512, the extras that cost the most to draw for what they add (the circuit's see-through fences) are left out.
+   */
+  detail: 256 | 512;
 }
 
 export const QUALITY: Record<Graphics, Quality> = {
-  battery: { fps: 30, pixelRatio: 1.25, shadowSize: 1024, shadowEvery: 500, shadowMoveEvery: 100, decorHz: 15, weather: 0.5, laptopMs: [500, 500, 3000] },
-  balanced: { fps: 60, pixelRatio: 1.5, shadowSize: 2048, shadowEvery: 250, shadowMoveEvery: 50, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000] },
-  full: { fps: Infinity, pixelRatio: 2, shadowSize: 2048, shadowEvery: 0, shadowMoveEvery: 0, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000] },
+  battery: { fps: 30, pixelRatio: 1.25, shadowSize: 1024, shadowEvery: 500, shadowMoveEvery: 100, decorHz: 15, weather: 0.5, laptopMs: [500, 500, 3000], detail: 256 },
+  balanced: { fps: 60, pixelRatio: 1.5, shadowSize: 2048, shadowEvery: 250, shadowMoveEvery: 50, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000], detail: 512 },
+  full: { fps: Infinity, pixelRatio: 2, shadowSize: 2048, shadowEvery: 0, shadowMoveEvery: 0, decorHz: 0, weather: 1, laptopMs: [150, 600, 2000], detail: 512 },
 };
 
 /** The level in force. One object that's changed in place, so what reads it always sees the current one. */

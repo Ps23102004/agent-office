@@ -3,18 +3,25 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
 import { RACE_PLAZA, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
-import { decorTicker } from '../quality';
+import { racingLine, rubber } from '../../shared/racingline';
+import { decorTicker, quality } from '../quality';
 import { Fleet, supercar } from './cars';
 import { loadModel, type ModelName } from './models';
 import type { Collider, Interactable } from './office';
-import { mergeColored, mesh, textPlane, toon, toonVertex } from './toon';
+import { Decals, decalUV, detail, type Grain } from './surface';
+import { gradientMap, mergeColored, mesh, textPlane, toon, toonVertexUnique } from './toon';
 import type { CarDef } from '../../shared/garage';
 
 // The race circuit (shared/circuit.ts), drawn: the track with its kerbs, gravel and white lines, the
-// grid and the chequered start line under the gantry and its five red lights, tyre walls and barriers
-// round the grass, sponsor boards (textures made for it: public/textures/race-sponsors-*.jpg),
+// rubber down the racing line and skid marks into the corners you brake for, the grid's boxes and
+// the chequered start line under the gantry and its five red lights, the pit lane's markings, tyre
+// walls and Armco barriers round the grass, catch fencing in front of the grandstands and a fence
+// round the grounds, sponsor boards (textures made for it: public/textures/race-sponsors-*.jpg),
 // grandstands full of a cheering crowd, braking boards and chevrons at the corners, the pit garages
-// along the paddock, trees, and the circuit's own cars waiting in the paddock (and your best lap's ghost). The grandstands, garages, trees and the like are Kenney's Racing
+// along the paddock, trees, hills on the horizon, and the circuit's own cars waiting in the paddock
+// (and your best lap's ghost). Every surface you drive on is level with the cars (y = 0), each one a
+// mesh with its own grain (surface.ts), drawn over the one under it by polygonOffset rather than a
+// few millimetres up, which would flicker far off. The grandstands, garages, trees and the like are Kenney's Racing
 // Kit (CC0, see CREDITS.md), painted in the office's toon colors and merged, so the whole place is a
 // couple of dozen draw calls, its cars aside. Also the gate on the plaza in the city that gets you here.
 
@@ -31,6 +38,10 @@ const BAND = TRACK.width / 2 + TRACK.runoff;
 const RAIL = BAND + 1;
 const TYRES = BAND + 0.45;
 const BOARDS = RAIL + 0.35;
+/** Braking boards and chevrons, behind the sponsor boards and up over them. */
+const SIGNS = RAIL + 1.6;
+/** Half a grandstand's width (Kenney's is 9.7 m across at TILE). */
+const STAND = 4.9;
 
 export interface Circuit {
   group: THREE.Group;
@@ -48,45 +59,61 @@ export interface Circuit {
   ghost(def: CarDef | null, at: { x: number; z: number; rotY: number } | null): void;
 }
 
+const UP = [0, 1, 0] as const;
+
 /** Vertex-colored flat pieces of ground, all in one mesh: triangles facing up. */
 class Flat {
   pos: number[] = [];
   col: number[] = [];
+  norm: number[] = [];
   private c = new THREE.Color();
 
-  tri(a: THREE.Vector3Like, b: THREE.Vector3Like, c: THREE.Vector3Like, color: string) {
+  /** `n`: the normal it's lit with, when that isn't straight up (a kerb's slope). Colors: one, or one a corner. */
+  tri(a: THREE.Vector3Like, b: THREE.Vector3Like, c: THREE.Vector3Like, color: string | readonly THREE.Color[], n: readonly number[] = UP) {
     // Wound anticlockwise seen from above, so it faces up.
     const up = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z) > 0;
-    const [p, q] = up ? [b, c] : [c, b];
-    this.pos.push(a.x, a.y, a.z, p.x, p.y, p.z, q.x, q.y, q.z);
-    this.c.set(color);
-    for (let i = 0; i < 3; i++) this.col.push(this.c.r, this.c.g, this.c.b);
+    const cols = typeof color === 'string' ? [this.c.set(color), this.c, this.c] : color;
+    const order = up ? [0, 1, 2] : [0, 2, 1];
+    const pts = [a, b, c];
+    for (const i of order) {
+      this.pos.push(pts[i].x, pts[i].y, pts[i].z);
+      this.col.push(cols[i].r, cols[i].g, cols[i].b);
+      this.norm.push(n[0], n[1], n[2]);
+    }
   }
 
-  quad(a: THREE.Vector3Like, b: THREE.Vector3Like, c: THREE.Vector3Like, d: THREE.Vector3Like, color: string) {
-    this.tri(a, b, c, color);
-    this.tri(a, c, d, color);
+  quad(a: THREE.Vector3Like, b: THREE.Vector3Like, c: THREE.Vector3Like, d: THREE.Vector3Like, color: string | readonly THREE.Color[], n: readonly number[] = UP) {
+    const cols = typeof color === 'string' ? color : [color[0], color[1], color[2], color[3]];
+    this.tri(a, b, c, typeof cols === 'string' ? cols : [cols[0], cols[1], cols[2]], n);
+    this.tri(a, c, d, typeof cols === 'string' ? cols : [cols[0], cols[2], cols[3]], n);
   }
 
   /** A band along the track from `s0` to `s1` (m round it), `from` to `to` metres off the centre line (+ is the left). */
-  band(s0: number, s1: number, from: number, to: number, y: number, color: string) {
+  band(s0: number, s1: number, from: number, to: number, y: number, color: string | readonly THREE.Color[], n: readonly number[] = UP, yTo = y) {
     const a = pointAt(s0), b = pointAt(s1);
-    const at = (p: { x: number; z: number; tx: number; tz: number }, d: number) => ({ x: p.x + p.tz * d, y, z: p.z - p.tx * d });
-    this.quad(at(a, from), at(b, from), at(b, to), at(a, to), color);
+    const at = (p: { x: number; z: number; tx: number; tz: number }, d: number, h: number) => ({ x: p.x + p.tz * d, y: h, z: p.z - p.tx * d });
+    this.quad(at(a, from, y), at(b, from, y), at(b, to, yTo), at(a, to, yTo), color, n);
   }
 
-  mesh(): THREE.Mesh {
+  /** As one mesh in `mat` (vertex-colored), drawn `offset` steps behind (+) or in front of (-) what it's level with. */
+  mesh(mat: THREE.Material = toonVertexUnique(), offset = 0): THREE.Mesh {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    const n = new Float32Array(this.pos.length);
-    for (let i = 1; i < n.length; i += 3) n[i] = 1;
-    geo.setAttribute('normal', new THREE.BufferAttribute(n, 3));
-    const m = new THREE.Mesh(geo, toonVertex());
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(this.norm, 3));
+    if (offset) {
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = offset;
+      mat.polygonOffsetUnits = offset;
+    }
+    const m = new THREE.Mesh(geo, mat);
     m.receiveShadow = true;
     return m;
   }
 }
+
+/** A vertex-colored material with the surface `grain` on it (surface.ts). */
+const ground = (grain: Grain) => detail(toonVertexUnique(), grain);
 
 /** How sharply the track turns `s` metres round (1 / radius), and which way: + to the left. */
 function bend(s: number): number {
@@ -140,8 +167,9 @@ export function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Colli
   }
   const label = textPlane(sign, { size: 64, bg: '#ffd166', color: '#2b2d42' });
   label.scale.setScalar(1.6);
-  const face = at(0, -0.9);
-  label.position.set(face.x, y0 + H - 1.2, face.z);
+  // On the beam's face, over its chequers, in the middle of it.
+  const face = at(0, -0.48);
+  label.position.set(face.x, y0 + H + 0.7, face.z);
   // Facing whoever's coming to go through it.
   label.rotation.y = g.rotY + Math.PI;
   const shimmer = new THREE.Mesh(
@@ -168,17 +196,18 @@ export function buildCityGate(street: number): { group: THREE.Group; colliders: 
   const colliders: Collider[] = [];
   const solid = new THREE.Group();
   const p = RACE_PLAZA;
-  // Paving, a chequered strip up to the gate and a racing-red runway through it.
-  const ground = new Flat();
-  const corner = (x: number, z: number, y = 0.03) => ({ x, y, z });
-  ground.quad(corner(p.minX, p.minZ), corner(p.maxX, p.minZ), corner(p.maxX, p.maxZ), corner(p.minX, p.maxZ), '#c9ccd3');
+  // Paving, a racing-red runway through the gate and a chequered strip across it: all level with the
+  // street (the cars drive over them), each drawn over the one under it.
+  const paving = new Flat(), runway = new Flat(), paint = new Flat();
+  const corner = (x: number, z: number) => ({ x, y: 0, z });
+  paving.quad(corner(p.minX, p.minZ), corner(p.maxX, p.minZ), corner(p.maxX, p.maxZ), corner(p.minX, p.maxZ), '#c9ccd3');
   const g = CITY_GATE;
-  ground.quad(corner(g.x - 5, p.minZ + 2, 0.04), corner(g.x + 5, p.minZ + 2, 0.04), corner(g.x + 5, p.maxZ, 0.04), corner(g.x - 5, p.maxZ, 0.04), '#d6455d');
+  runway.quad(corner(g.x - 5, p.minZ + 2), corner(g.x + 5, p.minZ + 2), corner(g.x + 5, p.maxZ), corner(g.x - 5, p.maxZ), '#d6455d');
   for (let i = 0; i < 10; i++) for (let j = 0; j < 2; j++) {
     const x = g.x - 5 + i, z = g.z + 3 + j;
-    ground.quad(corner(x, z, 0.05), corner(x + 1, z, 0.05), corner(x + 1, z + 1, 0.05), corner(x, z + 1, 0.05), (i + j) % 2 ? '#212529' : '#f8f9fa');
+    paint.quad(corner(x, z), corner(x + 1, z), corner(x + 1, z + 1), corner(x, z + 1), (i + j) % 2 ? '#212529' : '#f8f9fa');
   }
-  group.add(ground.mesh());
+  group.add(paving.mesh(ground('slab')), runway.mesh(ground('runoff'), -1), paint.mesh(toonVertexUnique(), -2));
   const { sign, shimmer } = gate(g, '🏁 Race circuit', solid, colliders, street);
   // The gate's colliders were made from the street (`street`), its meshes from 0: they go up with the group.
   sign.position.y -= street;
@@ -192,6 +221,144 @@ export function buildCityGate(street: number): { group: THREE.Group; colliders: 
 /** Three tyres on top of each other (for the city gate's decoration: the circuit's are instanced). */
 function tyreStack(into: THREE.Object3D, x: number, z: number, color: string) {
   for (let k = 0; k < 3; k++) into.add(mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.28, 14), toon(k === 1 ? color : '#2b2d42'), x, 0.15 + k * 0.3, z));
+}
+
+// ---- Fences and the horizon -------------------------------------------------------------------------
+
+/** How far apart a chain-link fence's wires cross (m): a tile of chainLink is 8 of them. */
+const LINK = 0.075;
+
+let linkTex: THREE.CanvasTexture | null = null;
+/** Chain-link: galvanised wire in diamonds, see-through between. Repeating. */
+function chainLink(): THREE.CanvasTexture {
+  if (linkTex) return linkTex;
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  g.strokeStyle = '#c3c9d1';
+  g.lineWidth = 2.5;
+  for (let k = -S; k <= S * 2; k += S / 8) {
+    g.beginPath();
+    g.moveTo(k, 0);
+    g.lineTo(k + S, S);
+    g.moveTo(k, S);
+    g.lineTo(k + S, 0);
+    g.stroke();
+  }
+  linkTex = new THREE.CanvasTexture(c);
+  linkTex.colorSpace = THREE.SRGBColorSpace;
+  linkTex.wrapS = linkTex.wrapT = THREE.RepeatWrapping;
+  linkTex.anisotropy = 4;
+  return linkTex;
+}
+
+/** Chain-link fencing, as one mesh: a panel from (ax, az) to (bx, bz) for each, `h` high, seen from either side. */
+function fencing(panels: { ax: number; az: number; bx: number; bz: number; h: number }[]): THREE.Mesh {
+  const pos: number[] = [], uv: number[] = [], norm: number[] = [];
+  const tile = LINK * 8;
+  for (const p of panels) {
+    const len = Math.hypot(p.bx - p.ax, p.bz - p.az);
+    const nx = (p.bz - p.az) / len, nz = -(p.bx - p.ax) / len;
+    const c = [[p.ax, 0, p.az, 0, 0], [p.bx, 0, p.bz, len, 0], [p.bx, p.h, p.bz, len, p.h], [p.ax, p.h, p.az, 0, p.h]];
+    for (const i of [0, 1, 2, 0, 2, 3]) {
+      pos.push(c[i][0], c[i][1], c[i][2]);
+      uv.push(c[i][3] / tile, c[i][4] / tile);
+      norm.push(nx, 0, nz);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+  const mat = new THREE.MeshToonMaterial({ map: chainLink(), gradientMap: gradientMap(), alphaTest: 0.5, side: THREE.DoubleSide });
+  mat.userData.outlineParameters = { visible: false };
+  const m = new THREE.Mesh(geo, mat);
+  m.receiveShadow = true;
+  return m;
+}
+
+/** A ridge line round the horizon, `n` heights a lap, each between 0 and about the sum of the octaves' weights. */
+function ridge(n: number, octaves: [cells: number, weight: number][], r: () => number): Float32Array {
+  const out = new Float32Array(n);
+  for (const [cells, w] of octaves) {
+    const lat = Array.from({ length: cells }, () => r());
+    for (let i = 0; i < n; i++) {
+      const f = (i * cells) / n;
+      const i0 = Math.floor(f);
+      const t = (f - i0) * (f - i0) * (3 - 2 * (f - i0));
+      out[i] += (lat[i0 % cells] * (1 - t) + lat[(i0 + 1) % cells] * t) * w;
+    }
+  }
+  return out;
+}
+
+/**
+ * Hills far off all round, and woods in front of them, in the haze: so the circuit's grass doesn't
+ * just stop at the sky. Shapes only (no texture), colored the sky's color darkened, and drawn at the
+ * very back, only where nothing else is: they ride along with you, so they look infinitely far off.
+ */
+function horizon(): THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> {
+  const pos: number[] = [], layer: number[] = [];
+  const r = rng(30303);
+  const ring = (n: number, radius: number, base: number, heights: Float32Array, k: number) => {
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+      const h0 = base + heights[i], h1 = base + heights[(i + 1) % n];
+      const p = [[a0, -60], [a1, -60], [a1, h1], [a0, -60], [a1, h1], [a0, h0]];
+      for (const [a, y] of p) {
+        pos.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
+        layer.push(k);
+      }
+    }
+  };
+  ring(256, 600, 8, ridge(256, [[3, 26], [7, 14], [19, 6], [53, 2]], r), 0);
+  // Treetops: a jagged line, a crown every couple of degrees.
+  const woods = ridge(720, [[11, 5], [41, 3]], r);
+  for (let i = 0; i < woods.length; i += 2) woods[i] += 1 + r() * 1.6;
+  ring(720, 560, 1, woods, 1);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('layer', new THREE.Float32BufferAttribute(layer, 1));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { horizon: { value: new THREE.Color() }, haze: { value: 1 } },
+    vertexShader: /* glsl */ `
+      attribute float layer;
+      varying float vLayer;
+      void main() {
+        vLayer = layer;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+        // At the very back of the depth buffer: only where nothing's been drawn.
+        gl_Position.z = gl_Position.w * 0.99999;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 horizon;
+      uniform float haze;
+      varying float vLayer;
+      void main() {
+        vec3 tint = mix( vec3( 0.8, 0.87, 0.93 ), vec3( 0.58, 0.72, 0.62 ), vLayer );
+        gl_FragColor = vec4( mix( horizon, horizon * tint, haze ), 1.0 );
+        #include <colorspace_fragment>
+      }`,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  mat.userData.outlineParameters = { visible: false };
+  const m = new THREE.Mesh(geo, mat);
+  // After everything else that's solid, so the depth buffer says where nothing is.
+  m.renderOrder = 1000;
+  m.frustumCulled = false;
+  const at = new THREE.Vector3();
+  m.onBeforeRender = (_r, scene, camera) => {
+    camera.getWorldPosition(at);
+    m.position.set(at.x, 0, at.z);
+    m.updateMatrixWorld();
+    if (scene.background instanceof THREE.Color) mat.uniforms.horizon.value.copy(scene.background);
+    // Lost in fog or rain, as the haze closes in.
+    const fog = scene.fog as THREE.Fog | null;
+    mat.uniforms.haze.value = fog ? THREE.MathUtils.smoothstep(fog.far, 40, 230) : 1;
+  };
+  return m;
 }
 
 // ---- The circuit ---------------------------------------------------------------------------------
@@ -236,9 +403,9 @@ function layout(): { stands: Placed[]; props: Placed[] } {
       const p = pointAt(s);
       // The outside of the corner, unless told which side.
       const out = side || (bend(s) > 0 ? -1 : 1);
-      const off = BAND + TILE / 2 + 2.5;
+      const off = BAND + STAND + 2.5;
       const x = p.x + p.tz * off * out, z = p.z - p.tx * off * out;
-      if (!clear(x, z, TILE / 2)) continue;
+      if (!clear(x, z, STAND)) continue;
       // Facing the track: toward the centre line.
       stands.push({ prop: covered(s) ? 'covered' : 'stand', x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), scale: TILE });
     }
@@ -256,14 +423,14 @@ function layout(): { stands: Placed[]; props: Placed[] } {
   // Tents for the teams at the paddock's east end, and floodlights along it.
   for (let i = 0; i < 3; i++) props.push({ prop: 'tent', x: PADDOCK.maxX - 12, z: PADDOCK.minZ + 8 + i * 9, rotY: -Math.PI / 2, scale: 5 });
   for (let x = PADDOCK.minX + 20; x < PADDOCK.maxX; x += 45) props.push({ prop: 'lamp', x, z: PADDOCK.minZ + 1.5, rotY: 0, scale: 11 });
-  // Banner towers on the outside of the corners.
+  // Banner towers on the outside of the corners: behind the boards and the signs (SIGNS), and clear of the stands.
   for (const c of corners) {
     const s = Math.round((c.s0 + c.s1) / 2);
     const p = pointAt(s);
     const out = bend(s) > 0 ? -1 : 1;
-    const off = BAND + 3;
+    const off = BAND + 5.5;
     const x = p.x + p.tz * off * out, z = p.z - p.tx * off * out;
-    if (clear(x, z, 1)) props.push({ prop: s % 2 ? 'towerRed' : 'towerGreen', x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), scale: 6 });
+    if (clear(x, z, 1.7) && !stands.some((t) => Math.hypot(t.x - x, t.z - z) < STAND + 2.5)) props.push({ prop: s % 2 ? 'towerRed' : 'towerGreen', x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), scale: 6 });
   }
   // Trees round about, outside everything, the same for everyone.
   const r = rng(20261001);
@@ -367,30 +534,59 @@ export function buildCircuit(): Circuit {
   );
 
   // ---- The ground: grass, the paddock, the track, kerbs, gravel, lines, the grid and the start line.
-  const flat = new Flat();
-  const g = (x: number, z: number, y: number) => ({ x, y, z });
-  flat.quad(g(far.minX - 400, far.minZ - 400, -0.05), g(far.maxX + 400, far.minZ - 400, -0.05), g(far.maxX + 400, far.maxZ + 400, -0.05), g(far.minX - 400, far.maxZ + 400, -0.05), '#8ccf6a');
-  // Mown stripes across the infield and round about.
-  for (let x = far.minX; x < far.maxX; x += 24) flat.quad(g(x, far.minZ, -0.04), g(x + 12, far.minZ, -0.04), g(x + 12, far.maxZ, -0.04), g(x, far.maxZ, -0.04), '#9ad677');
+  // All at y = 0, a mesh a surface, each over the one it's laid on (Flat.mesh's offset).
+  const grass = new Flat(), runoff = new Flat(), gravel = new Flat(), paddock = new Flat(), asphalt = new Flat(), kerbs = new Flat(), paint = new Flat();
+  const g = (x: number, z: number, y = 0) => ({ x, y, z });
+  // Grass all round, mown in stripes (the shader's: see surface.ts 'lawn').
+  grass.quad(g(far.minX - 400, far.minZ - 400), g(far.maxX + 400, far.minZ - 400), g(far.maxX + 400, far.maxZ + 400), g(far.minX - 400, far.maxZ + 400), '#8ccf6a');
   const P = PADDOCK;
-  flat.quad(g(P.minX, P.minZ, 0), g(P.maxX, P.minZ, 0), g(P.maxX, P.maxZ, 0), g(P.minX, P.maxZ, 0), '#a4a8b3');
+  paddock.quad(g(P.minX, P.minZ), g(P.maxX, P.minZ), g(P.maxX, P.maxZ), g(P.minX, P.maxZ), '#a4a8b3');
   // Parking bays in front of the garages, where the circuit's cars wait.
   for (const def of CIRCUIT_CARS) {
-    for (const dx of [-3, 3]) flat.quad(g(def.x + dx - 0.12, def.z - 3, 0.02), g(def.x + dx + 0.12, def.z - 3, 0.02), g(def.x + dx + 0.12, def.z + 3, 0.02), g(def.x + dx - 0.12, def.z + 3, 0.02), '#f8f9fa');
+    for (const dx of [-3, 3]) paint.quad(g(def.x + dx - 0.12, def.z - 3), g(def.x + dx + 0.12, def.z - 3), g(def.x + dx + 0.12, def.z + 3), g(def.x + dx - 0.12, def.z + 3), '#f8f9fa');
+  }
+  // The pit lane, along the front of the paddock behind the pit wall: its edge line, PIT LANE and its speed limit at either end.
+  const W0 = PIT_WALL;
+  const laneZ = W0.minZ - 9;
+  paint.quad(g(W0.minX, laneZ - 0.12), g(W0.maxX, laneZ - 0.12), g(W0.maxX, laneZ + 0.12), g(W0.minX, laneZ + 0.12), '#f8f9fa');
+  for (let x = W0.minX - 24; x < W0.minX; x += 3) paint.quad(g(x, laneZ - 0.12), g(x + 1.5, laneZ - 0.12), g(x + 1.5, laneZ + 0.12), g(x, laneZ + 0.12), '#f8f9fa');
+  for (let x = W0.maxX; x < W0.maxX + 24; x += 3) paint.quad(g(x, laneZ - 0.12), g(x + 1.5, laneZ - 0.12), g(x + 1.5, laneZ + 0.12), g(x, laneZ + 0.12), '#f8f9fa');
+  const marks = new Decals();
+  for (const [x, dir] of [[W0.minX + 8, 1], [W0.maxX - 8, -1]] as const) {
+    // Read by whoever's driving in: along the lane, heading east at the west end and west at the east.
+    marks.flat(decalUV('pit'), x, 0, laneZ + 4.5, 7.6, 1.9, (dir * Math.PI) / 2);
+    marks.flat(decalUV('limit'), x + dir * 6, 0, laneZ + 4.5, 2.4, 2.4, (dir * Math.PI) / 2);
   }
   const step = L / points.length;
+  const shade = (k: number) => new THREE.Color('#5d616d').multiplyScalar(1 - 0.28 * k);
+  /** Whether `s` m round is in a hard braking zone: the 80 m into a corner you brake for. */
+  const brakingZone = (s: number) => corners.some((c) => c.brake && s > c.s0 - 80 && s <= c.s0 + 10);
+  const ACROSS = 8;
   for (let i = 0; i < points.length; i++) {
     const s0 = i * step, s1 = s0 + step;
     const k = bend(s0 + step / 2);
-    flat.band(s0, s1, -EDGE, EDGE, 0, '#5d616d');
+    // The asphalt, in strips across, darker where the rubber's down along the racing line (and heavier in the braking zones).
+    const heavy = brakingZone(s0) ? 1.35 : 1;
+    for (let j = 0; j < ACROSS; j++) {
+      const d0 = -EDGE + (j * 2 * EDGE) / ACROSS, d1 = d0 + (2 * EDGE) / ACROSS;
+      const c = (s: number, d: number) => shade(Math.min(1, rubber(s, d) * heavy + 0.08));
+      asphalt.band(s0, s1, d0, d1, 0, [c(s0, d0), c(s1, d0), c(s1, d1), c(s0, d1)]);
+    }
     // White lines inside the edges.
-    flat.band(s0, s1, EDGE - 0.6, EDGE - 0.3, 0.02, '#f8f9fa');
-    flat.band(s0, s1, -EDGE + 0.3, -EDGE + 0.6, 0.02, '#f8f9fa');
-    // Kerbs where it bends, red and white, both sides; gravel on the outside of the tight ones.
+    paint.band(s0, s1, EDGE - 0.6, EDGE - 0.3, 0, '#f8f9fa');
+    paint.band(s0, s1, -EDGE + 0.3, -EDGE + 0.6, 0, '#f8f9fa');
+    // Kerbs where it bends, both sides: a metre of white and a metre of red, rising a centimetre to the
+    // outside and lit as if they rose more (their slope is what you see of a kerb).
     if (Math.abs(k) > 1 / 160) {
-      const color = Math.floor(s0 / 3) % 2 ? '#e63946' : '#f8f9fa';
-      flat.band(s0, s1, EDGE, EDGE + TRACK.curb, 0.005, color);
-      flat.band(s0, s1, -EDGE - TRACK.curb, -EDGE, 0.005, color);
+      const p = pointAt(s0 + step / 2);
+      for (const side of [-1, 1]) {
+        const tilt = 0.22;
+        const n = [-side * p.tz * Math.sin(tilt), Math.cos(tilt), side * p.tx * Math.sin(tilt)];
+        for (let h = 0; h < 2; h++) {
+          const a = s0 + (h * step) / 2, b = a + step / 2;
+          kerbs.band(a, b, side * EDGE, side * (EDGE + TRACK.curb), 0, h ? '#e63946' : '#f8f9fa', n, 0.01);
+        }
+      }
     }
     // Gravel round the outside of the slow corners; a wide run-off of pale asphalt round the fast ones.
     const c = corners.find((c) => s0 > c.s0 - 10 && s0 < c.s1 + 10 && c.r < 200);
@@ -398,20 +594,48 @@ export function buildCircuit(): Circuit {
       const out = c.turn > 0 ? 1 : -1;
       const slow = c.r < 70;
       const a = EDGE + TRACK.curb, b = a + (slow ? 10 : 13);
-      flat.band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, -0.02, slow ? '#ecd9a0' : '#8f949e');
+      (slow ? gravel : runoff).band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, 0, slow ? '#e4d3a0' : '#8f949e');
     }
   }
-  // The chequered start line, and the grid's slots behind it.
+  // Skid marks into the corners you brake for: pairs of tyres' streaks along the racing line, fading in and out.
+  const skid = decalUV('skid');
+  const sr = rng(4242);
+  for (const c of corners) {
+    if (!c.brake) continue;
+    for (let n = 0; n < 4; n++) {
+      const from = c.s0 - 85 + sr() * 30, len = 30 + sr() * 35, wander = (sr() - 0.5) * 2.4;
+      for (const wheel of [-0.8, 0.8]) {
+        for (let s = from; s < from + len; s += 2) {
+          const d = racingLine(s) + wander + wheel + Math.sin(s * 0.11 + n) * 0.15;
+          const a = pointAt(s), b = pointAt(s + 2);
+          const at = (p: typeof a, dd: number) => [p.x + p.tz * dd, 0, p.z - p.tx * dd];
+          marks.quad(at(a, d - 0.14), at(a, d + 0.14), at(b, d + 0.14), at(b, d - 0.14), skid, UP);
+        }
+      }
+    }
+  }
+  // The chequered start line, and the grid's boxes behind it: a bar across the front of each, its sides running back, its number.
   for (let i = 0; i < 12; i++) {
-    for (let j = 0; j < 2; j++) flat.band(-1 + j, j, -EDGE + i, -EDGE + i + 1, 0.025, (i + j) % 2 ? '#212529' : '#f8f9fa');
+    for (let j = 0; j < 2; j++) paint.band(-1 + j, j, -EDGE + i, -EDGE + i + 1, 0, (i + j) % 2 ? '#212529' : '#f8f9fa');
   }
   for (let slot = 0; slot < RACE.slots; slot++) {
     const p = gridPose(slot);
     const np = nearestProgress(p.x, p.z);
-    flat.band(np.s + 2.6, np.s + 2.9, np.d - 1.3, np.d + 1.3, 0.025, '#f8f9fa');
-    flat.band(np.s - 2.4, np.s + 2.9, np.d + (np.d > 0 ? 1.3 : -1.6), np.d + (np.d > 0 ? 1.6 : -1.3), 0.025, '#f8f9fa');
+    paint.band(np.s + 2.6, np.s + 2.9, np.d - 1.4, np.d + 1.4, 0, '#f8f9fa');
+    for (const side of [-1, 1]) paint.band(np.s + 1.4, np.s + 2.9, np.d + side * 1.4 - 0.12, np.d + side * 1.4 + 0.12, 0, '#f8f9fa');
+    const num = pointAt(np.s + 1.6);
+    marks.flat(decalUV('digit', slot), num.x + num.tz * np.d, 0, num.z - num.tx * np.d, 1.1, 1.1, Math.atan2(num.tx, num.tz));
   }
-  group.add(flat.mesh());
+  group.add(
+    grass.mesh(ground('lawn'), 3),
+    paddock.mesh(ground('slab'), 1.5),
+    gravel.mesh(ground('gravel'), 1.5),
+    runoff.mesh(ground('runoff'), 1.5),
+    asphalt.mesh(ground('asphalt')),
+    kerbs.mesh(),
+    paint.mesh(toonVertexUnique(), -1),
+    marks.mesh(),
+  );
 
   // ---- What stands: barriers, the pit wall, the gantry, the gate home. Merged at the end.
   const solid = new THREE.Group();
@@ -432,7 +656,10 @@ export function buildCircuit(): Circuit {
       // None round the inside of a tight corner, or where it would stand on another part of the track's grass.
       if (inPaddock(ax, az) || inPaddock(bx, bz) || !railClear((ax + bx) / 2, (az + bz) / 2)) continue;
       const len = Math.hypot(bx - ax, bz - az);
-      box(solid, 0.35, 0.9, len + 0.05, (i / 2) % 2 ? '#f8f9fa' : '#1d3557', (ax + bx) / 2, 0, (az + bz) / 2, Math.atan2(bx - ax, bz - az));
+      // Armco: two galvanised rails on a post every few metres, the post behind them.
+      const rot = Math.atan2(bx - ax, bz - az);
+      for (const y of [0.3, 0.62]) box(solid, 0.12, 0.3, len + 0.05, '#b9c0c8', (ax + bx) / 2, y, (az + bz) / 2, rot);
+      box(solid, 0.14, 0.95, 0.14, '#5c636e', ax + a.tz * side * 0.14, 0, az - a.tx * side * 0.14, rot);
       // Tyre walls in front of it on the outside of the corners, and at the end of the braking zones.
       const outside = k > 0 ? -1 : 1;
       if ((Math.abs(k) > 1 / 110 && side === outside) || braking(s) === side) {
@@ -470,14 +697,14 @@ export function buildCircuit(): Circuit {
     const p = across(-span / 2 + (i + 0.5) * (span / cells), face * 0.62);
     box(solid, 0.04, 0.6, span / cells, (i + j) % 2 ? '#212529' : '#f8f9fa', p.x, gantryY + j * 0.6, p.z, lineRot + Math.PI / 2, false);
   }
-  // The lights' housing, facing the grid.
-  const pod = across(0, -0.9);
-  box(solid, 0.5, 0.9, 5.2, '#212529', pod.x, gantryY + 1.25, pod.z, lineRot + Math.PI / 2);
+  // The lights' housing, facing the grid: standing on the beam, at its front edge.
+  const pod = across(0, -0.35);
+  box(solid, 0.5, 0.9, 5.2, '#212529', pod.x, gantryY + 1.2, pod.z, lineRot + Math.PI / 2);
   const lights = new THREE.InstancedMesh(new THREE.SphereGeometry(0.34, 12, 8), new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }), 5);
   const m4 = new THREE.Matrix4();
   for (let i = 0; i < 5; i++) {
-    const p = across((i - 2) * 1.0, -1.2);
-    lights.setMatrixAt(i, m4.makeTranslation(p.x, gantryY + 1.7, p.z));
+    const p = across((i - 2) * 1.0, -0.62);
+    lights.setMatrixAt(i, m4.makeTranslation(p.x, gantryY + 1.65, p.z));
     lights.setColorAt(i, new THREE.Color('#3a1010'));
   }
   lights.castShadow = false;
@@ -489,18 +716,51 @@ export function buildCircuit(): Circuit {
 
   // ---- The layout: grandstands (solid to walk into), props.
   const { stands, props } = layout();
-  for (const s of stands) {
-    const hx = TILE / 2, hz = TILE / 2;
-    colliders.push({ minX: s.x - hx, maxX: s.x + hx, minZ: s.z - hz, maxZ: s.z + hz, top: 6.5 });
+  for (const s of stands) colliders.push({ minX: s.x - STAND, maxX: s.x + STAND, minZ: s.z - STAND, maxZ: s.z + STAND, top: 6.5 });
+
+  // ---- Fences: catch fencing along the barrier in front of each grandstand, and round the grounds (which
+  // were only ever colliders). Chain-link on posts; left out on the Battery setting (see update).
+  const panels: { ax: number; az: number; bx: number; bz: number; h: number }[] = [];
+  const post = (x: number, z: number, h: number) => box(solid, 0.1, h, 0.1, '#6c757d', x, 0, z, 0, false);
+  for (const st of stands) {
+    const np = nearestProgress(st.x, st.z);
+    const d = Math.sign(np.d) * (RAIL + 0.7);
+    for (let s = np.s - STAND - 1; s < np.s + STAND + 1; s += 4) {
+      const a = pointAt(s), b = pointAt(s + 4);
+      const ax = a.x + a.tz * d, az = a.z - a.tx * d, bx = b.x + b.tz * d, bz = b.z - b.tx * d;
+      panels.push({ ax, az, bx, bz, h: 4.2 });
+      post(ax, az, 4.3);
+    }
   }
+  const edges: [number, number, number, number][] = [
+    [far.minX, far.minZ, far.maxX, far.minZ],
+    [far.maxX, far.minZ, far.maxX, far.maxZ],
+    [far.maxX, far.maxZ, far.minX, far.maxZ],
+    [far.minX, far.maxZ, far.minX, far.minZ],
+  ];
+  for (const [ax, az, bx, bz] of edges) {
+    const len = Math.hypot(bx - ax, bz - az), n = Math.ceil(len / 6);
+    for (let k = 0; k < n; k++) {
+      const f0 = k / n, f1 = (k + 1) / n;
+      panels.push({ ax: ax + (bx - ax) * f0, az: az + (bz - az) * f0, bx: ax + (bx - ax) * f1, bz: az + (bz - az) * f1, h: 2.6 });
+      post(ax + (bx - ax) * f0, az + (bz - az) * f0, 2.7);
+    }
+  }
+  const fences = fencing(panels);
+  group.add(fences);
+  const sky = horizon();
+  group.add(sky);
 
   // ---- Sponsor boards: on the pit wall, along the barriers across from it, and round the corners.
   /** `free`: standing on its own at the barriers, with a back and legs (the pit wall's are on the wall). */
   const boards: { x: number; z: number; rotY: number; banner: number; free?: boolean }[] = [];
   for (let x = W.minX + 6, k = 0; x < W.maxX - 4; x += 10, k++) boards.push({ x, z: W.maxZ + 0.02, rotY: 0, banner: k });
+  /** Not in a grandstand's way. */
+  const open = (x: number, z: number) => !stands.some((t) => Math.hypot(t.x - x, t.z - z) < STAND + 1.5);
   for (let s = L - 90, k = 3; s < L + 140; s += 10, k++) {
     const p = pointAt(s);
-    boards.push({ x: p.x - p.tz * BOARDS, z: p.z + p.tx * BOARDS, rotY: Math.atan2(p.tz, -p.tx), banner: k, free: true });
+    const x = p.x - p.tz * BOARDS, z = p.z + p.tx * BOARDS;
+    if (open(x, z)) boards.push({ x, z, rotY: Math.atan2(p.tz, -p.tx), banner: k, free: true });
   }
   for (const c of corners) {
     if (c.r > 120) continue;
@@ -510,7 +770,7 @@ export function buildCircuit(): Circuit {
       const out = c.turn > 0 ? 1 : -1;
       const d = BOARDS * out;
       const x = p.x + p.tz * d, z = p.z - p.tx * d;
-      if (railClear(x, z)) boards.push({ x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), banner: j + Math.round(c.s0), free: true });
+      if (railClear(x, z) && open(x, z)) boards.push({ x, z, rotY: Math.atan2(-p.tz * out, p.tx * out), banner: j + Math.round(c.s0), free: true });
     }
   }
   const loader = new THREE.TextureLoader();
@@ -537,21 +797,24 @@ export function buildCircuit(): Circuit {
     for (const b of mine) if (b.free) {
       const back = { x: b.x - Math.sin(b.rotY) * 0.08, z: b.z - Math.cos(b.rotY) * 0.08 };
       box(solid, 8, 2, 0.12, '#495057', back.x, 1.1, back.z, b.rotY);
+      for (const side of [-1, 1]) box(solid, 0.12, 1.1, 0.12, '#495057', back.x + Math.cos(b.rotY) * 3.4 * side, 0, back.z - Math.sin(b.rotY) * 3.4 * side, b.rotY);
     }
   }
 
   // ---- Braking boards (150, 100 and 50 m to go) before the corners you stop for, and chevrons round
-  // the outside of the tight ones: on posts behind the barrier, facing the cars coming. One mesh a sign.
+  // the outside of the tight ones: on posts behind the barrier and the sponsor boards, up over them,
+  // facing the cars coming. One mesh a sign.
+  const SIGN_Y = 3.3;
   const signs = new Map<string, { x: number; z: number; rotY: number }[]>();
   const sign = (label: string, s: number, out: 1 | -1, face: number) => {
     const p = pointAt(s);
-    const d = (RAIL + 0.8) * out;
+    const d = SIGNS * out;
     const x = p.x + p.tz * d, z = p.z - p.tx * d;
     if (!railClear(x, z)) return;
     // Facing whoever's `face` m back round the track.
     const from = pointAt(s - face);
     const rotY = Math.atan2(from.x - x, from.z - z);
-    box(solid, 0.15, 2.2, 0.15, '#495057', x - Math.sin(rotY) * 0.1, 0, z - Math.cos(rotY) * 0.1);
+    box(solid, 0.15, SIGN_Y, 0.15, '#495057', x - Math.sin(rotY) * 0.1, 0, z - Math.cos(rotY) * 0.1);
     (signs.get(label) ?? signs.set(label, []).get(label)!).push({ x, z, rotY });
   };
   for (const c of corners) {
@@ -565,7 +828,7 @@ export function buildCircuit(): Circuit {
     // A couple of metres across, its own shape.
     const { width, height } = proto.geometry.parameters;
     const w = 2.2, h = (2.2 * height) / width;
-    group.add(new THREE.Mesh(mergeAll(spots.map((p) => new THREE.PlaneGeometry(w, h).rotateY(p.rotY).translate(p.x, 2.2 + h / 2, p.z))), proto.material));
+    group.add(new THREE.Mesh(mergeAll(spots.map((p) => new THREE.PlaneGeometry(w, h).rotateY(p.rotY).translate(p.x, SIGN_Y + h / 2, p.z))), proto.material));
     proto.geometry.dispose();
   }
 
@@ -632,6 +895,7 @@ export function buildCircuit(): Circuit {
   let shown = '';
   const update: Circuit['update'] = (dt, t, race, now, cars) => {
     pulse(home.shimmer, t);
+    fences.visible = quality.detail >= 512;
     // The start lights: one more red each second of the countdown, all out at the start; green a moment after.
     let lit = 0;
     let color = red;

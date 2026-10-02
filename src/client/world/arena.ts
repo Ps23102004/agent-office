@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, WALL_H, type ArenaBox, type V3 } from '../../shared/arena';
-import { RACE_PLAZA } from '../../shared/city';
+import { CITY_GATE } from '../../shared/circuit';
 import { gate, pulse } from './circuit';
 import type { Collider, Interactable } from './office';
-import { mergeColored, mesh, toon } from './toon';
+import { Decals, LINE_COUNT, decalUV, detail } from './surface';
+import { mergeColored, mesh, toon, toonUnique, toonVertexUnique } from './toon';
 
-// The arena (shared/arena.ts), drawn: a concrete container yard inside high walls striped yellow and
-// black at the top, shipping containers in four paints with their ribs and doors, wooden crates,
-// concrete barriers, floodlight masts in the corners, and stacks of containers outside the walls to
-// look at. All of it merged into a couple of draw calls. Also the shots (tracers, sparks), the
+// The arena (shared/arena.ts), drawn: a concrete container yard laid in slabs inside high walls of
+// concrete panels striped yellow and black at the top, shipping containers in four paints with their
+// corrugations, rust, doors and shipping lines' names, wooden crates, concrete barriers, floodlight
+// masts in the corners, and stacks of containers outside the walls to look at. All of it merged
+// into a few draw calls, a surface (surface.ts) each. Also the shots (tracers, sparks), the
 // rifle you hold and the ones everyone else holds, and the arena's gate on the race plaza in the city.
 
 const CONTAINER_PAINT = ['#c0392b', '#2e6f9e', '#3f8f5a', '#d9822b'];
@@ -52,6 +54,32 @@ function container(into: THREE.Object3D, b: ArenaBox) {
     if (alongX) block(into, 0.05, h - 0.3, 0.07, '#d0d3d6', cx + end, b.y0 + 0.15, cz + k * wid * 0.5, false);
     else block(into, 0.07, h - 0.3, 0.05, '#d0d3d6', cx + k * wid * 0.5, b.y0 + 0.15, cz + end, false);
   }
+}
+
+/**
+ * What's painted on a container in box `b`: its shipping line's name down both long sides, and at
+ * the door end its owner code and its plate. Just off its ribs and bars.
+ */
+function containerDecals(into: Decals, b: ArenaBox) {
+  const w = b.maxX - b.minX, l = b.maxZ - b.minZ, h = b.y1 - b.y0;
+  const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+  const alongX = w > l;
+  const len = alongX ? w : l, wid = alongX ? l : w;
+  const line = b.paint % LINE_COUNT;
+  const name = Math.min(len * 0.62, 6);
+  for (const side of [-1, 1]) {
+    const off = side * (wid / 2 + 0.075);
+    const n: [number, number] = alongX ? [0, side] : [side, 0];
+    into.wall(decalUV('line', line), alongX ? cx : cx + off, b.y0 + h * 0.62, alongX ? cz + off : cz, name, name / 6, n);
+  }
+  const door = len / 2 + 0.11;
+  const n: [number, number] = alongX ? [1, 0] : [0, 1];
+  const at = (across: number) => (alongX ? { x: cx + door, z: cz + across } : { x: cx + across, z: cz + door });
+  // Seen from in front of the doors, the code's top right and the plate low down on the left.
+  const code = at(-n[1] * 0 + (alongX ? -1 : 1) * wid * 0.22);
+  into.wall(decalUV('code', line), code.x, b.y1 - 0.5, code.z, 1.1, 0.55, n);
+  const plate = at((alongX ? 1 : -1) * wid * 0.3);
+  into.wall(decalUV('plate'), plate.x, b.y0 + 0.9, plate.z, 0.36, 0.36, n);
 }
 
 /** A wooden crate: planks round a frame. */
@@ -112,18 +140,34 @@ export function buildArenaCityGate(street: number): { group: THREE.Group; collid
   const colliders: Collider[] = [];
   const solid = new THREE.Group();
   const g = CITY_ARENA_GATE;
-  // A dark runway up to it across the plaza's paving, hazard-striped at its edges.
-  const len = RACE_PLAZA.maxX - g.x + 8;
-  block(solid, len, 0.04, g.width, '#3d4147', g.x - len / 2 + 2, 0.02, g.z, false);
-  for (const side of [-1, 1]) for (let k = 0; k < len / 1; k++) block(solid, 1, 0.045, 0.3, k % 2 ? '#212529' : '#f4c430', g.x + 2 - len + k + 0.5, 0.02, g.z + side * (g.width / 2 - 0.15), false);
+  // A dark runway up to it across the plaza's paving, hazard-striped at its edges: level with the
+  // street (cars cross it), drawn over the paving, and stopping short of the race gate's red runway.
+  const x0 = CITY_GATE.x + 6, x1 = g.x + 2;
+  const flat = new THREE.Group();
+  flat.add(mesh(new THREE.PlaneGeometry(x1 - x0, g.width).rotateX(-Math.PI / 2), toon('#3d4147'), (x0 + x1) / 2, 0, g.z, false));
+  for (const side of [-1, 1]) for (let x = x0; x < x1 - 0.01; x++) {
+    flat.add(mesh(new THREE.PlaneGeometry(1, 0.3).rotateX(-Math.PI / 2), toon((x - x0) % 2 ? '#212529' : '#f4c430'), x + 0.5, 0, g.z + side * (g.width / 2 - 0.15), false));
+  }
+  const runway = mergeColored(flat, paintOver(toonVertexUnique(), -1));
+  // The stripes over the runway: a step further forward.
+  const stripes = runway.children[0] as THREE.Mesh;
+  stripes.receiveShadow = true;
   const { sign, shimmer } = gate(g, '🎯 Arena', solid, colliders, street, ['#3d4147', '#f4c430']);
   sign.position.y -= street;
   shimmer.position.y -= street;
   (shimmer.material as THREE.MeshBasicMaterial).color.set('#ff6b6b');
   // Sandbags either side.
   for (const side of [-1, 1]) for (let k = 0; k < 3; k++) block(solid, 0.9, 0.4, 0.5, '#c2a878', g.x - 2, k * 0.4, g.z + side * (g.width / 2 + 2.4) + (k % 2) * 0.2);
-  group.add(mergeColored(solid), sign, shimmer);
+  group.add(mergeColored(solid), runway, sign, shimmer);
   return { group, colliders, update: (t) => pulse(shimmer, t) };
+}
+
+/** `m`, drawn over what it's level with, `offset` steps forward (-). */
+function paintOver<M extends THREE.Material>(m: M, offset: number): M {
+  m.polygonOffset = true;
+  m.polygonOffsetFactor = offset;
+  m.polygonOffsetUnits = offset;
+  return m;
 }
 
 /** The tracers and sparks in flight. */
