@@ -137,7 +137,7 @@ export function buildTee(group: THREE.Group, colliders: Collider[], interactable
   const mat = new THREE.Mesh(new THREE.BoxGeometry(size, MAT_H, size), [
     toon('#3f8f45'),
     toon('#3f8f45'),
-    new THREE.MeshToonMaterial({ map: mownTexture('#7ed957', '#6cc24a', 6, '#fffaf3'), gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }),
+    detail(new THREE.MeshToonMaterial({ map: mownTexture('#7ed957', '#6cc24a', 6, '#fffaf3'), gradientMap: (toon('#fff') as THREE.MeshToonMaterial).gradientMap }), 'turf'),
     toon('#3f8f45'),
     toon('#3f8f45'),
     toon('#3f8f45'),
@@ -203,17 +203,18 @@ export function buildGreen(ground: THREE.Group, colliders: Collider[], night: Ni
   const { x: px, z: pz } = GOLF_HOLE;
   const [fx0, fx1] = GOLF_HOLE.fairway;
   const fairLen = pz - FAIRWAY_Z0;
-  const fairTex = mownTexture('#8fd16f', '#7fc463', 2);
+  const fairTex = mownTexture('#95d873', '#77bd5a', 2);
   fairTex.wrapT = THREE.RepeatWrapping;
   fairTex.repeat.set(1, fairLen / 4);
   const gradient = (toon('#fff') as THREE.MeshToonMaterial).gradientMap;
-  const fairway = flat(new THREE.PlaneGeometry(fx1 - fx0, fairLen), new THREE.MeshToonMaterial({ map: fairTex, gradientMap: gradient }), (fx0 + fx1) / 2, G + 0.004, FAIRWAY_Z0 + fairLen / 2);
+  const fairway = flat(new THREE.PlaneGeometry(fx1 - fx0, fairLen), detail(new THREE.MeshToonMaterial({ map: fairTex, gradientMap: gradient }), 'turf'), (fx0 + fx1) / 2, G + 0.004, FAIRWAY_Z0 + fairLen / 2);
   fairway.receiveShadow = true;
   ground.add(fairway);
 
   const parts = new THREE.Group();
-  parts.add(flat(new THREE.CircleGeometry(GOLF_HOLE.green + FRINGE, 48), toon('#6cc24a'), px, G + 0.008, pz));
-  parts.add(flat(new THREE.CircleGeometry(GOLF_HOLE.green, 48), toon('#9be07a'), px, G + 0.012, pz));
+  // Turf like the fairway's (surface.ts), so neither reads as plastic against the grainy rough round them.
+  parts.add(flat(new THREE.CircleGeometry(GOLF_HOLE.green + FRINGE, 48), detail(toonUnique('#6cc24a'), 'turf'), px, G + 0.008, pz));
+  parts.add(flat(new THREE.CircleGeometry(GOLF_HOLE.green, 48), detail(toonUnique('#9be07a'), 'turf'), px, G + 0.012, pz));
   const sand = detail(toonUnique('#f3e3b3'), 'sand');
   for (const [bx, bz, r] of BUNKERS) {
     parts.add(flat(new THREE.CircleGeometry(r + 0.12, 32), toon('#d9c48a'), bx, G + 0.016, bz));

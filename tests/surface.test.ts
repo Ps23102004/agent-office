@@ -36,7 +36,7 @@ test('the ground still has a grain from a car\'s seat: the tile read two mipmaps
   const mip = new Float32Array(n * n * 4);
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) for (let c = 0; c < 4; c++) mip[((Math.floor(y / D) * n + Math.floor(x / D)) * 4) + c] += px[(y * S + x) * 4 + c] / 255 / (D * D);
   const vec = (v: string) => v.replace(/vec4\(|\)/g, '').split(',').map(Number);
-  for (const grain of ['asphalt', 'track', 'grass', 'lawn', 'gravel', 'sand', 'slab', 'paving', 'concrete'] as Grain[]) {
+  for (const grain of ['asphalt', 'track', 'grass', 'lawn', 'turf', 'gravel', 'sand', 'slab', 'paving', 'concrete'] as Grain[]) {
     const mid = vec(detailDefines(grain).SKY_DETAIL_MID);
     let sum = 0, sq = 0;
     for (let i = 0; i < n * n; i++) {
@@ -53,7 +53,7 @@ test('the ground still has a grain from a car\'s seat: the tile read two mipmaps
 
 test('each grain\'s shader defines are numbers, and the city\'s ground takes asphalt\'s, paving\'s and grass\'s, extras and all', () => {
   const vec = /^vec4\( (-?\d+\.\d{3}, ){3}-?\d+\.\d{3} \)$/;
-  for (const grain of ['asphalt', 'track', 'runoff', 'concrete', 'slab', 'paving', 'grass', 'lawn', 'gravel', 'sand', 'ground', 'wall', 'panels', 'roof', 'shingles', 'container'] as Grain[]) {
+  for (const grain of ['asphalt', 'track', 'runoff', 'concrete', 'slab', 'paving', 'grass', 'lawn', 'turf', 'gravel', 'sand', 'ground', 'wall', 'panels', 'roof', 'shingles', 'container'] as Grain[]) {
     const d = detailDefines(grain);
     assert.match(d.SKY_DETAIL_MIX, vec, grain);
     assert.match(d.SKY_DETAIL_MID, vec, grain);

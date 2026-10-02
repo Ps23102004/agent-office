@@ -19,6 +19,10 @@ export const GAME = path.resolve(process.env.PLAYTEST_GAME ?? REPO);
  */
 export async function startServer({ port = 4718, weather = 'clear' } = {}) {
   if (port === 4700) throw new Error('4700 is the real office: pick another PLAYTEST_PORT');
+  const url = `http://127.0.0.1:${port}`;
+  // Something already answering there (another worktree's playtest) would answer the wait below too, and
+  // the run would play its build, not this one.
+  if (await fetch(`${url}/login`).then(() => true, () => false)) throw new Error(`port ${port} is busy: pick another PLAYTEST_PORT`);
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ao-playtest-'));
   // detached: its own process group, so stop() takes the pty host child down with it.
   const child = spawn(process.execPath, [path.join(GAME, 'bin/agent-office.js'), dir, '--port', String(port), '--password', 'dev', '--no-open', '--weather', weather], {
@@ -29,7 +33,6 @@ export async function startServer({ port = 4718, weather = 'clear' } = {}) {
   let log = '';
   child.stdout.on('data', (d) => (log += d));
   child.stderr.on('data', (d) => (log += d));
-  const url = `http://127.0.0.1:${port}`;
   const t0 = Date.now();
   for (;;) {
     if (child.exitCode !== null) throw new Error(`server exited:\n${log}`);

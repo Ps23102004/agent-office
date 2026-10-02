@@ -204,15 +204,17 @@ export function buildCityGate(street: number): { group: THREE.Group; colliders: 
   const p = RACE_PLAZA;
   // Paving, a racing-red carpet up to the gate from the street and a chequered strip across it: all
   // level with the street (the cars drive over them), each drawn over the one under it. One carpet:
-  // from a little short of the sidewalk to just through the gate (past it you're at the circuit), its
-  // edges trimmed a darker red.
+  // from a little short of the sidewalk up to the gate, its edges trimmed a darker red. It stops at the
+  // shimmer: any of it past there would be seen through it, a paler pink band.
   const paving = new Flat(), runway = new Flat(), paint = new Flat();
   const corner = (x: number, z: number) => ({ x, y: 0, z });
   paving.quad(corner(p.minX, p.minZ), corner(p.maxX, p.minZ), corner(p.maxX, p.maxZ), corner(p.minX, p.maxZ), '#c9ccd3');
   const g = CITY_GATE;
-  const far = g.z - 1.2, near = p.maxZ - 2;
+  const far = g.z, near = p.maxZ - 2;
   runway.quad(corner(g.x - 5, far), corner(g.x + 5, far), corner(g.x + 5, near), corner(g.x - 5, near), '#d6455d');
-  for (const [x0, z0, x1, z1] of [[g.x - 5, far, g.x - 4.7, near], [g.x + 4.7, far, g.x + 5, near], [g.x - 4.7, near - 0.3, g.x + 4.7, near], [g.x - 4.7, far, g.x + 4.7, far + 0.3]]) {
+  // The trim down each side stops either side of the chequers: paint over paint, level, flickers.
+  const sides = [[far, g.z + 3], [g.z + 5, near]].flatMap(([z0, z1]) => [[g.x - 5, z0, g.x - 4.7, z1], [g.x + 4.7, z0, g.x + 5, z1]]);
+  for (const [x0, z0, x1, z1] of [...sides, [g.x - 4.7, near - 0.3, g.x + 4.7, near], [g.x - 4.7, far, g.x + 4.7, far + 0.3]]) {
     paint.quad(corner(x0, z0), corner(x1, z0), corner(x1, z1), corner(x0, z1), '#8f1f30');
   }
   for (let i = 0; i < 10; i++) for (let j = 0; j < 2; j++) {
@@ -619,8 +621,10 @@ export function buildCircuit(): Circuit {
   // Grass all round, mown in stripes (the shader's: see surface.ts 'lawn').
   grass.quad(g(far.minX - 400, far.minZ - 400), g(far.maxX + 400, far.minZ - 400), g(far.maxX + 400, far.maxZ + 400), g(far.minX - 400, far.maxZ + 400), '#8ccf6a');
   const P = PADDOCK;
-  // On under the garages, so there's no strip of grass between them and the paddock.
-  paddock.quad(g(P.minX, GARAGES.minZ - 1), g(P.maxX, GARAGES.minZ - 1), g(P.maxX, P.maxZ), g(P.minX, P.maxZ), '#a4a8b3');
+  paddock.quad(g(P.minX, P.minZ), g(P.maxX, P.minZ), g(P.maxX, P.maxZ), g(P.minX, P.maxZ), '#a4a8b3');
+  // On under the garages (only: either side of them it's off the circuit), so there's no strip of grass between them and the paddock.
+  const Gr = GARAGES;
+  paddock.quad(g(Gr.minX, Gr.minZ - 1), g(Gr.maxX, Gr.minZ - 1), g(Gr.maxX, P.minZ), g(Gr.minX, P.minZ), '#a4a8b3');
   // Parking bays in front of the garages, where the circuit's cars wait.
   for (const def of CIRCUIT_CARS) {
     for (const dx of [-3, 3]) paint.quad(g(def.x + dx - 0.12, def.z - 3), g(def.x + dx + 0.12, def.z - 3), g(def.x + dx + 0.12, def.z + 3), g(def.x + dx - 0.12, def.z + 3), '#f8f9fa');

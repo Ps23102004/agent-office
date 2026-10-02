@@ -34,9 +34,12 @@ const GRAINS = {
   slab: { tile: 4, mix: [0.22, 0, 0.04, 0], mid: [0.75, 0, 0, 0.8], macro: 0.38, with: { JOINTS: 6 } },
   /** Paving flags, a metre square: a sidewalk, a plaza. */
   paving: { tile: 3, mix: [0.3, 0, 0.04, 0], mid: [0.8, 0, 0, 0.6], macro: 0.32, with: { JOINTS: 1 } },
-  grass: { tile: 2.5, mix: [0.06, 0.52, 0, 0], mid: [0, 2.2, 0, 0.6], macro: 0.45, with: { DRY: 0.45 } },
+  /** Rough, a park's, a verge's: clumps, and dry patches here and there (but green, not dirt, up close). */
+  grass: { tile: 2.5, mix: [0.04, 0.28, 0, 0], mid: [0, 1.5, 0, 0.45], macro: 0.4, with: { DRY: 0.2 } },
   /** Grass mown in stripes: kept, so its clumps are fewer than the stripes are bold. */
   lawn: { tile: 2.5, mix: [0.06, 0.5, 0, 0], mid: [0, 1.3, 0, 0.35], macro: 0.3, with: { STRIPES: 6, DRY: 0.3 } },
+  /** Turf cut short and kept: a fairway, a green and its fringe, a tee's mat. A fine even grain, no dry patches (their stripes are their own). */
+  turf: { tile: 2, mix: [0.04, 0.36, 0, 0], mid: [0, 0.8, 0, 0.25], macro: 0.15 },
   /** A bunker's sand: fine and pale, raked smooth, with a few pebbles. */
   sand: { tile: 2, mix: [0.2, 0, 0.1, 0], mid: [0.35, 0, 0.2, 0.45], macro: 0.18 },
   gravel: { tile: 4.5, mix: [0.1, 0, 1.4, 0], mid: [0.3, 0, 0.6, 0.6], macro: 0.2 },
