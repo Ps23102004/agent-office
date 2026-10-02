@@ -18,7 +18,7 @@ export default async function fps(t) {
       const f = await measureFps(page, 3000);
       const info = await page.evaluate(() => {
         const r = window.__office.renderer.info;
-        return { calls: r.render.calls, triangles: r.render.triangles, textures: r.memory.textures, geometries: r.memory.geometries };
+        return { textures: r.memory.textures, geometries: r.memory.geometries };
       });
       (rows[graphics] ??= {})[place] = { ...f, ...info };
     };

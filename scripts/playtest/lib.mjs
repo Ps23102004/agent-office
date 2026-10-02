@@ -130,23 +130,30 @@ export async function settled(page, timeout = 20_000) {
   await page.waitForFunction(() => !document.getElementById('fade')?.classList.contains('on') && window.__office.player.enabled, null, { timeout, polling: 100 });
 }
 
-/** Frames drawn per second over `ms`, and the longest gap between two: renders of the main scene (the outline pass draws it twice a frame). */
+/**
+ * Frames drawn per second over `ms`, the longest gap between two, and the draw calls and triangles a
+ * frame of the world takes: from renders of the main scene (the outline pass draws it twice a frame;
+ * the hands and gun in first person are a scene of their own, not counted).
+ */
 export async function measureFps(page, ms = 3000) {
   return page.evaluate((ms) => new Promise((resolve) => {
     const o = window.__office, r = o.renderer, orig = r.render;
-    let frames = 0, worst = 0, last = performance.now();
+    let renders = 0, worst = 0, last = performance.now(), calls = 0, triangles = 0;
     r.render = function (scene, cam) {
+      const out = orig.call(this, scene, cam);
       if (scene === o.scene) {
-        frames++;
+        renders++;
+        calls += r.info.render.calls;
+        triangles += r.info.render.triangles;
         const now = performance.now();
-        worst = Math.max(worst, now - last);
-        last = now;
+        if (renders % 2) worst = Math.max(worst, now - last), last = now;
       }
-      return orig.call(this, scene, cam);
+      return out;
     };
     setTimeout(() => {
       r.render = orig;
-      resolve({ fps: +(frames / 2 / (ms / 1000)).toFixed(1), worstGapMs: Math.round(worst) });
+      const frames = renders / 2;
+      resolve({ fps: +(frames / (ms / 1000)).toFixed(1), worstGapMs: Math.round(worst), calls: Math.round(calls / frames), triangles: Math.round(triangles / frames) });
     }, ms);
   }), ms);
 }
