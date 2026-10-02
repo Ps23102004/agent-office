@@ -104,6 +104,23 @@ export class ArenaControl {
     return this.arena.players.some((p) => p.id === id);
   }
 
+  /** Whether shots at `id` still do them no harm: just (back) in, and not fired since. */
+  safe(id: string, now: number): boolean {
+    return now < (this.arena.players.find((p) => p.id === id)?.safeUntil ?? 0);
+  }
+
+  /**
+   * `id`'s guns as the office has them: the one in their hands, the rounds left in each, and whether
+   * it's reloading. A page keeps its own count; a bot (server/arenabots.ts) goes by this one.
+   */
+  gun(id: string, now: number): { w: WeaponId; ammo: Readonly<Record<WeaponId, number>>; reloading: boolean } | undefined {
+    const me = this.arena.players.find((p) => p.id === id);
+    const g = this.guns.get(id);
+    if (!me || !g) return undefined;
+    this.reloaded(g, me.w, now);
+    return { w: me.w, ammo: g.ammo, reloading: g.reloadAt !== undefined };
+  }
+
   /** `id` came into the arena: in, alive, and safe for a moment. */
   join(id: string, name: string, now: number) {
     if (this.has(id)) return;

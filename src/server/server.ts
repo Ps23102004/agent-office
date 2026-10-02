@@ -54,7 +54,9 @@ import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
 import { ArenaControl } from './arena.js';
-import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF, isWeapon } from '../shared/arena.js';
+import { ArenaBots } from './arenabots.js';
+import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF, isWeapon, type V3 } from '../shared/arena.js';
+import { BOTS, isBotLevel } from '../shared/bots.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
 
 const MIME: Record<string, string> = {
@@ -266,10 +268,12 @@ export async function startServer(cfg: Config) {
   const circuitCars = new Garage(undefined, CIRCUIT_CARS, circuitGround);
   const race = new RaceControl();
   // The arena, a place of its own too (shared/arena.ts): its free-for-all (server/arena.ts), judged from where the office has everyone in it.
-  const arena = new ArenaControl((id) => {
-    const p = clients.get(id)?.peer;
+  // Its bots (server/arenabots.ts) are in it as anyone is: `bots` is made further down, once there's the arena's news to give.
+  const arenaWhere = (id: string) => {
+    const p = clients.get(id)?.peer ?? bots.peer(id);
     return p && p.floor === ARENA ? { x: p.x, y: p.y, z: p.z, crouch: !!p.crouch } : undefined;
-  });
+  };
+  const arena = new ArenaControl(arenaWhere);
   /** When each person (account, or name) last posted a meeting spot. */
   const meetAt = new Map<string, number>();
   /** How near the car (m) someone has to be for its driver to offer them a ride, or to take one. */
@@ -1135,7 +1139,7 @@ export async function startServer(cfg: Config) {
     sendTo(client, {
       t: 'welcome',
       you: id,
-      peers: [...clients.values()].map((c) => c.peer),
+      peers: everyone(),
       floors: floorInfos(),
       projectsDir: building.projectsDirState(),
       ice: cfg.iceServers,
@@ -1158,6 +1162,7 @@ export async function startServer(cfg: Config) {
     sendTo(client, { t: 'race', state: race.state() });
     if (inArena) {
       arena.join(id, name, Date.now());
+      bots.fill(Date.now());
       spawnIn(client);
       arenaChanged();
     }
@@ -1199,6 +1204,7 @@ export async function startServer(cfg: Config) {
       if (circuitCars.leave(id)) circuitCarsChanged();
       if (race.leave(id)) raceChanged();
       if (arena.leave(id)) arenaChanged();
+      bots.fill(Date.now());
       broadcast({ t: 'peer.leave', id });
       if (account) accountsChanged();
       floorsChanged();
@@ -1235,21 +1241,73 @@ export async function startServer(cfg: Config) {
   /** The arena's match changed: everyone in it hears, at most four times a second (kills straight away). */
   let arenaDirty = false;
   const arenaChanged = () => void (arenaDirty = true);
+  /** The match as everyone hears it: with who's a bot, and the bots' setting. */
+  const arenaState = () => {
+    const s = arena.state();
+    return { ...s, players: s.players.map((p) => (bots.peer(p.id) ? { ...p, bot: true } : p)), bots: bots.settings };
+  };
+  /**
+   * `id` (a person, or a bot) fires from `o` along `d`: the office judges it, everyone in the arena
+   * sees it, and the bots hear it (and the one it hit knows where it came from). `rtt`: a person's
+   * round trip (ArenaControl.fire), undefined for a bot.
+   */
+  const shoot = (id: string, o: V3, d: V3, now: number, rtt: number | undefined) => {
+    const shot = arena.fire(id, o, d, now, rtt);
+    if (!shot) return undefined;
+    toArena({ t: 'arena.shot', by: id, o, ...shot });
+    bots.heard(o, id, now);
+    if (shot.hit) {
+      bots.hurt(shot.hit, o, id, now);
+      arenaChanged();
+    }
+    // A kill's news straight away, not at the next tick.
+    if (shot.kill) {
+      arenaDirty = false;
+      toArena({ t: 'arena', state: arenaState() });
+    }
+    return shot;
+  };
+  /** Everyone, people and the arena's bots: whoever's in the office to be seen. */
+  const everyone = () => [...[...clients.values()].map((c) => c.peer), ...bots.peers()];
+  const bots = new ArenaBots(arena, arenaWhere, {
+    shoot: (id, o, d, now) => shoot(id, o, d, now, undefined),
+    moved: (p) => toArena({ t: 'peer.move', id: p.id, x: p.x, y: p.y, z: p.z, rotY: p.rotY, moving: p.moving, pitch: p.pitch, crouch: p.crouch }),
+    changed: arenaChanged,
+    joined: (peer) => {
+      broadcast({ t: 'peer.join', peer });
+      arenaChanged();
+    },
+    left: (id) => {
+      broadcast({ t: 'peer.leave', id });
+      arenaChanged();
+    },
+  });
+  /** The bots think 20 times a second, while there are any. */
+  let botTimer: ReturnType<typeof setInterval> | undefined;
   let arenaTicks = 0;
   const arenaTimer = setInterval(() => {
+    const now = Date.now();
     // Every two seconds, how long a round trip to each of them takes (the pong's in the connection's handler).
-    if (++arenaTicks % 8 === 0) for (const c of clients.values()) if (c.peer.floor === ARENA && c.ws.readyState === WebSocket.OPEN) c.ws.ping(String(Date.now()));
-    const { changed, spawned } = arena.tick(Date.now());
+    if (++arenaTicks % 8 === 0) for (const c of clients.values()) if (c.peer.floor === ARENA && c.ws.readyState === WebSocket.OPEN) c.ws.ping(String(now));
+    const { changed, spawned } = arena.tick(now);
     for (const s of spawned) {
       const c = clients.get(s.id);
+      // A bot back in tells everyone where on its next tick.
+      Object.assign(c?.peer ?? bots.peer(s.id) ?? {}, { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
       if (!c) continue;
-      Object.assign(c.peer, { x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
       sendTo(c, { t: 'arena.spawn', x: s.x, z: s.z, rotY: s.rotY });
       toNeighbors(c, { t: 'peer.move', id: c.id, x: s.x, y: 0, z: s.z, rotY: s.rotY, moving: false });
     }
+    // Bots in as people come in, out as they go (straight away where they do: this catches anything else).
+    bots.fill(now);
+    if (bots.size && !botTimer) botTimer = setInterval(() => bots.tick(Date.now()), 50);
+    if (!bots.size && botTimer) {
+      clearInterval(botTimer);
+      botTimer = undefined;
+    }
     if (!changed && !arenaDirty) return;
     arenaDirty = false;
-    toArena({ t: 'arena', state: arena.state() });
+    toArena({ t: 'arena', state: arenaState() });
   }, 250);
   const jukeboxChanged = (floor: Floor) => toFloor(floor, { t: 'jukebox', state: floor.jukebox.state() });
   const teamState = async () => ({ ...(await team.state()), deploy: cfg.deployScript });
@@ -1274,7 +1332,7 @@ export async function startServer(cfg: Config) {
     if (c.peer.floor === floor.id) return;
     const left = leave(c, at);
     Object.assign(c.peer, { floor: floor.id });
-    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...floorView(floor) });
+    sendTo(c, { t: 'floor.enter', peers: everyone(), ...floorView(floor) });
     screensOf(c, floor);
     arrived(c, left);
     floor.arrived();
@@ -1287,7 +1345,7 @@ export async function startServer(cfg: Config) {
     if (c.peer.floor === ROOF) return;
     const left = leave(c);
     c.peer.floor = ROOF;
-    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...roofView() });
+    sendTo(c, { t: 'floor.enter', peers: everyone(), ...roofView() });
     arrived(c, left);
     floorsChanged();
   };
@@ -1297,7 +1355,7 @@ export async function startServer(cfg: Config) {
     if (c.peer.floor === CIRCUIT) return;
     const left = leave(c, { ...CIRCUIT_GATE.out, y: 0 });
     c.peer.floor = CIRCUIT;
-    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...circuitView() });
+    sendTo(c, { t: 'floor.enter', peers: everyone(), ...circuitView() });
     arrived(c, left);
     floorsChanged();
   };
@@ -1314,10 +1372,11 @@ export async function startServer(cfg: Config) {
     if (c.peer.floor === ARENA) return;
     const left = leave(c, { ...ARENA_GATE.out, y: 0 });
     c.peer.floor = ARENA;
-    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...arenaView() });
+    sendTo(c, { t: 'floor.enter', peers: everyone(), ...arenaView() });
     arena.join(c.id, c.peer.name, Date.now());
+    bots.fill(Date.now());
     spawnIn(c);
-    sendTo(c, { t: 'arena', state: arena.state() });
+    sendTo(c, { t: 'arena', state: arenaState() });
     arenaChanged();
     arrived(c, left);
     floorsChanged();
@@ -1327,7 +1386,7 @@ export async function startServer(cfg: Config) {
   const toLobby = (c: Client) => {
     const left = leave(c);
     delete c.peer.floor;
-    sendTo(c, { t: 'floor.enter', peers: [...clients.values()].map((o) => o.peer), ...floorView(undefined) });
+    sendTo(c, { t: 'floor.enter', peers: everyone(), ...floorView(undefined) });
     arrived(c, left);
   };
 
@@ -1372,6 +1431,7 @@ export async function startServer(cfg: Config) {
     const circuitCarLeft = c.peer.floor === CIRCUIT && circuitCars.leave(c.id);
     const raced = race.leave(c.id);
     if (arena.leave(c.id)) arenaChanged();
+    bots.fill(Date.now());
     c.attached.clear();
     c.typingAt.clear();
     c.stale.clear();
@@ -1736,16 +1796,7 @@ export async function startServer(cfg: Config) {
           const o = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
           return { x: num(o.x), y: num(o.y), z: num(o.z) };
         };
-        const o = v(msg.o);
-        const shot = arena.fire(c.id, o, v(msg.d), Date.now(), c.rtt ?? 0);
-        if (!shot) break;
-        toArena({ t: 'arena.shot', by: c.id, o, ...shot });
-        if (shot.hit) arenaChanged();
-        // A kill's news straight away, not at the next tick.
-        if (shot.kill) {
-          arenaDirty = false;
-          toArena({ t: 'arena', state: arena.state() });
-        }
+        shoot(c.id, v(msg.o), v(msg.d), Date.now(), c.rtt ?? 0);
         break;
       }
       case 'arena.reload':
@@ -1754,6 +1805,17 @@ export async function startServer(cfg: Config) {
       case 'arena.weapon':
         if (c.peer.floor === ARENA && isWeapon(msg.w) && arena.weapon(c.id, msg.w, Date.now())) arenaChanged();
         break;
+      case 'arena.bots': {
+        // Anyone in the arena; the last to change it wins, and everyone in there hears who did.
+        if (c.peer.floor !== ARENA || !Number.isInteger(msg.fill) || !isBotLevel(msg.level)) break;
+        const fill = Math.max(1, Math.min(BOTS.players, msg.fill));
+        // Nothing to change, nothing happens (no toast, no bots swapped); nor straight after the last change.
+        if (fill === bots.settings.fill && msg.level === bots.settings.level) break;
+        if (!bots.set(fill, msg.level, c.peer.name, Date.now())) return warn(c, 'The bots were only just changed: give it a moment');
+        arenaChanged();
+        toArena({ t: 'toast', text: fill > 1 ? `🤖 ${c.peer.name} set the arena to ${fill} players with ${msg.level} bots` : `🤖 ${c.peer.name} sent the bots home`, level: 'info' });
+        break;
+      }
       case 'race.leave':
         if (race.leave(c.id)) raceChanged();
         break;
@@ -2612,6 +2674,7 @@ export async function startServer(cfg: Config) {
     clearInterval(resync);
     clearInterval(raceTimer);
     clearInterval(arenaTimer);
+    clearInterval(botTimer);
     clearTimeout(floorsTimer);
     arcade.flush();
     upgrader.stop();

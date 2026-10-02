@@ -3212,7 +3212,7 @@ function paletteEntries(): PaletteEntry[] {
     });
   }
   for (const p of store.peers.values()) {
-    if (p.id === store.you) continue;
+    if (p.id === store.you || p.bot) continue;
     const floor = store.onMyFloor(p) ? 'On this floor' : `On the ${store.floors.find((f) => f.id === p.floor)?.name ?? 'other'} floor`;
     // As clicking them under "In the office" does: over to them, by elevator if need be.
     out.push({ icon: '🙂', kind: 'Teammate', title: p.name, detail: floor, open: () => walkTo(p.id) });

@@ -83,7 +83,7 @@ export function openHangout(opts: HangoutOptions) {
     h('footer', {}, h('span.grow', {}, h('span.key', {}, 'G'), 'hold for the emote wheel · ', h('span.key', {}, '1–6'), 'quick emotes · ', h('span.key', {}, 'V'), 'hold to talk')));
   const openInvite = () => [...(store.me.admin ? store.accounts?.invites ?? [] : [])].find((v) => !v.name && v.role === 'member' && v.expiresAt > store.officeNow());
   const render = () => {
-    const peers = [...store.peers.values()];
+    const peers = [...store.peers.values()].filter((p) => !p.bot);
     const talking = peers.filter((p) => p.id === store.you ? opts.voice.inVoice : p.voice).length;
     text(status, `${peers.length} here · ${talking} in voice${opts.voice.inVoice ? opts.voice.muted ? ' · You’re muted' : ' · Your mic is on' : ''}`);
     text(voice, opts.voice.inVoice ? 'Leave voice' : 'Join voice');

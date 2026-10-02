@@ -124,7 +124,7 @@ export function mountHud(actions: HudAction[], settings: Settings, save: () => v
 
   function render() {
     const items: HTMLElement[] = actions.filter((a) => offered(a) && (pinned(a) || a.status?.())).map(dockButton);
-    const people = store.peers.size;
+    const people = [...store.peers.values()].filter((p) => !p.bot).length;
     if (people > 1 || settings.hud.people) items.push(panelChip('people', '👥', 'People', people, `${people} in the office`));
     const workers = [...store.workers.values()];
     // Hired onto desks, bean bags and the meeting room's table; the board agents at their kiosks don't count.

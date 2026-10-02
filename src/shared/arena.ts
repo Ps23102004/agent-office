@@ -1,3 +1,4 @@
+import type { BotSettings } from './bots.js';
 import type { Gate } from './circuit.js';
 
 // The arena: a walled container yard of its own, like the race circuit, reached through a second gate
@@ -259,6 +260,8 @@ export interface ArenaPlayer {
   safeUntil?: number;
   /** The gun in their hands (WEAPONS). */
   w: WeaponId;
+  /** One of the office's bots (shared/bots.ts). */
+  bot?: boolean;
 }
 
 export interface KillLine {
@@ -282,6 +285,8 @@ export interface ArenaState {
    * down (epoch ms), or 0 while it's standing.
    */
   targets?: number[];
+  /** How the bots top the match up. */
+  bots?: BotSettings;
 }
 
 /**
