@@ -20,10 +20,7 @@ export interface Quality {
   weather: number;
   /** How often (ms) a laptop screen is repainted when it's near, in between and far off. */
   laptopMs: [near: number, mid: number, far: number];
-  /**
-   * The ground's and walls' grain up close (world/surface.ts), in pixels a side of its tile; and
-   * under 512, the extras that cost the most to draw for what they add (the circuit's see-through fences) are left out.
-   */
+  /** The ground's and walls' grain up close (world/surface.ts): pixels a side of its tile. */
   detail: 256 | 512;
 }
 

@@ -4,7 +4,7 @@ import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, P
 import { RACE_PLAZA, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
 import { racingLine, rubber } from '../../shared/racingline';
-import { decorTicker, quality } from '../quality';
+import { decorTicker } from '../quality';
 import { Fleet, supercar } from './cars';
 import { loadModel, type ModelName } from './models';
 import type { Collider, Interactable } from './office';
@@ -270,7 +270,9 @@ function fencing(panels: { ax: number; az: number; bx: number; bz: number; h: nu
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
-  const mat = new THREE.MeshToonMaterial({ map: chainLink(), gradientMap: gradientMap(), alphaTest: 0.5, side: THREE.DoubleSide });
+  // Blended rather than cut out: further off, where its smaller mipmaps average the wire and the gaps, it
+  // fades to a haze of wire (as a fence does) instead of vanishing.
+  const mat = new THREE.MeshToonMaterial({ map: chainLink(), gradientMap: gradientMap(), transparent: true, depthWrite: false, alphaTest: 0.02, side: THREE.DoubleSide });
   mat.userData.outlineParameters = { visible: false };
   const m = new THREE.Mesh(geo, mat);
   m.receiveShadow = true;
@@ -724,7 +726,7 @@ export function buildCircuit(): Circuit {
   for (const s of stands) colliders.push({ minX: s.x - STAND, maxX: s.x + STAND, minZ: s.z - STAND, maxZ: s.z + STAND, top: 6.5 });
 
   // ---- Fences: catch fencing along the barrier in front of each grandstand, and round the grounds (which
-  // were only ever colliders). Chain-link on posts; left out on the Battery setting (see update).
+  // were only ever colliders). Chain-link on posts, all in one mesh.
   const panels: { ax: number; az: number; bx: number; bz: number; h: number }[] = [];
   const post = (x: number, z: number, h: number) => box(solid, 0.1, h, 0.1, '#6c757d', x, 0, z, 0, false);
   for (const st of stands) {
@@ -751,8 +753,7 @@ export function buildCircuit(): Circuit {
       post(ax + (bx - ax) * f0, az + (bz - az) * f0, 2.7);
     }
   }
-  const fences = fencing(panels);
-  group.add(fences);
+  group.add(fencing(panels));
   const sky = horizon();
   group.add(sky);
 
@@ -900,7 +901,6 @@ export function buildCircuit(): Circuit {
   let shown = '';
   const update: Circuit['update'] = (dt, t, race, now, cars) => {
     pulse(home.shimmer, t);
-    fences.visible = quality.detail >= 512;
     // The start lights: one more red each second of the countdown, all out at the start; green a moment after.
     let lit = 0;
     let color = red;

@@ -424,10 +424,6 @@ export class Decals {
     }
   }
 
-  get empty(): boolean {
-    return !this.pos.length;
-  }
-
   mesh(): THREE.Mesh {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
