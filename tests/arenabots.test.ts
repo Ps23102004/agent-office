@@ -4,7 +4,7 @@ import { ARENA, ARENA_BOXES, ARENA_CENTER as C, ARENA_HALF, BODY_R, EYE_Y, RULES
 import { BOT_LEVELS, SKILL, isBot, type BotLevel } from '../src/shared/bots.js';
 import { rng } from '../src/shared/city.js';
 import { ArenaControl } from '../src/server/arena.js';
-import { ArenaBots, TICK, arenaYard, sees } from '../src/server/arenabots.js';
+import { ArenaBots, REACT_PRE, TICK, arenaYard, sees } from '../src/server/arenabots.js';
 
 /**
  * The arena with people standing (or moved about) where a test puts them and bots filled in, wired up
@@ -57,6 +57,8 @@ function yard(people: Record<string, Body>, opts: { fill?: number; level?: BotLe
 }
 
 const alive = (a: ArenaControl, id: string) => a.state().players.find((p) => p.id === id)?.alive;
+/** The office's own record of `id` in the match: setting its health keeps them on their feet. */
+const standing = (a: ArenaControl, id: string) => (a as unknown as { arena: { players: { id: string; hp: number }[] } }).arena.players.find((p) => p.id === id)!;
 
 test('bots fill a match up for someone alone, make way as people come, and go when nobody is left', () => {
   const people: Record<string, V3> = { a: { x: C.x, y: 0, z: C.z + 29 } };
@@ -186,37 +188,61 @@ test('each level aims as well as it should against someone strafing 15 m off, an
       shots += d.shots;
       hits += d.hits;
       kills.push(d.kill);
-      assert.ok(d.first >= SKILL[level].reaction[0], `${level} fired ${d.first} ms after seeing them`);
+      // Already facing them as they come into sight: a quicker reaction (REACT_PRE), but a reaction, and
+      // never under a person's quickest (150 ms).
+      assert.ok(d.first >= Math.max(150, SKILL[level].reaction[0] * REACT_PRE), `${level} fired ${d.first} ms after seeing them`);
     }
     kills.sort((a, b) => a - b);
-    return { level, rate: hits / shots, kill: kills[15] };
+    return { level, rate: hits / shots, kill: kills[15], killed: kills.filter((k) => k < Infinity).length };
   });
-  // Measured (these 30 duels each): easy 35% and 3.35 s to the kill, normal 54% / 1.3 s, hard 75% / 0.8 s, insane 92% / 0.6 s.
-  const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.25, 0.5, 1500, 4000], normal: [0.45, 0.7, 700, 1600], hard: [0.65, 0.88, 450, 900], insane: [0.8, 0.97, 300, 700] };
+  // Measured (these 30 duels each): easy 16% and 4.5 s to the kill (18 of them dead within the 5 s),
+  // normal 28% / 2.65 s, hard 41% / 1.6 s, insane 87% / 0.7 s. A walking strafe this slow is about as easy
+  // as a moving target gets: in a match (scripts/playtest/arena.mjs) they land 15-22%, 25-32%, 35-45% and
+  // 50-60% of all their shots.
+  const bands: Record<BotLevel, [number, number, number, number]> = { easy: [0.08, 0.24, 3000, Infinity], normal: [0.2, 0.37, 1800, 3600], hard: [0.32, 0.54, 1000, 2200], insane: [0.78, 0.97, 450, 950] };
   for (const r of rows) {
     const [lo, hi, k0, k1] = bands[r.level];
     assert.ok(r.rate >= lo && r.rate <= hi, `${r.level} hits ${(r.rate * 100).toFixed(0)}%`);
     assert.ok(r.kill >= k0 && r.kill <= k1, `${r.level} kills in ${r.kill} ms`);
   }
+  // A beginner is slow to the kill, but gets there: a third of these duels at least.
+  assert.ok(rows[0].killed >= 10, `easy killed in ${rows[0].killed} of 30`);
   for (let i = 1; i < rows.length; i++) assert.ok(rows[i].rate > rows[i - 1].rate && rows[i].kill <= rows[i - 1].kill, `${rows[i].level} beats ${rows[i - 1].level}`);
 });
 
+test('a bot takes its reaction before it does anything about someone it sees: no turn, no step, no shot', () => {
+  // Someone in plain sight up the open west lane, 15 m off, half a radian off where the bot's facing.
+  const a: V3 = { x: C.x - 20, y: 0, z: C.z + 7 };
+  const m = yard({ a }, { fill: 2, level: 'hard' });
+  const bot = m.bots.peers()[0];
+  Object.assign(bot, { x: a.x, z: a.z - 15, rotY: 0.5 });
+  m.run(SKILL.hard.reaction[0] - TICK);
+  assert.deepEqual([bot.x, bot.z, bot.rotY], [a.x, a.z - 15, 0.5], 'still as it was');
+  assert.equal(m.shots.length, 0);
+  // Then it turns on them and fights (they're kept on their feet).
+  m.run(1000, () => (standing(m.arena, 'a').hp = RULES.hp));
+  const off = Math.abs(Math.atan2(Math.sin(Math.atan2(a.x - bot.x, a.z - bot.z) - bot.rotY), Math.cos(Math.atan2(a.x - bot.x, a.z - bot.z) - bot.rotY)));
+  assert.ok(off < 0.15, `faces them (${off.toFixed(2)} rad off)`);
+  assert.ok(m.shots.some((s) => s.by === bot.id));
+});
+
 test('a shot heard turns a bot to look, only within its hearing', () => {
-  // A bot facing north, someone firing into the ground 30 m behind it to the south; the same match
-  // played out with the shot and without.
+  // A bot facing north, someone firing into the ground behind it to the south, further off than easy
+  // hears and nearer than normal does; the same match played out with the shot and without.
+  const far = (SKILL.easy.hear + SKILL.normal.hear) / 2;
   const play = (level: BotLevel, shot: boolean) => {
     const a: V3 = { x: C.x + 20, y: 0, z: C.z + 30 };
     const m = yard({ a }, { fill: 2, level });
     const bot = m.bots.peers()[0];
-    Object.assign(bot, { x: C.x + 20, z: C.z, rotY: Math.PI });
+    Object.assign(bot, { x: C.x + 20, z: a.z - far, rotY: Math.PI });
     m.run(50);
     if (shot) m.shoot('a', { x: a.x, y: EYE_Y, z: a.z }, { x: 0, y: -1, z: 0.1 }, m.now);
     m.run(600);
     return { x: bot.x, z: bot.z, rotY: bot.rotY };
   };
-  // Normal hears 40 m: it turns round to look.
+  // Normal hears it: it turns round to look.
   assert.ok(Math.abs(play('normal', true).rotY) < 0.5, 'turned to look');
-  // Easy hears 25 m: it carries on exactly as if there'd been no shot.
+  // Easy doesn't: it carries on exactly as if there'd been no shot.
   assert.deepEqual(play('easy', true), play('easy', false));
 });
 
@@ -287,22 +313,23 @@ test('a bot that hears someone it can never see firing away keeps on its way, no
 
 test("people's shots at a moving bot are judged where their page showed it: every step of its goes to the judge", () => {
   // Someone up the open west lane, a bot 10 m off strafing as it squares up to them (both just in, so
-  // neither's hurt till the safe moment's up, as the shot goes).
+  // neither's hurt till the safe moment's up), shot at once that's up and it's on the move (it stops to
+  // shoot, so not every moment; they're kept on their feet meanwhile).
   const a: V3 = { x: C.x - 20, y: 0, z: C.z + 7 };
-  const m = yard({ a }, { fill: 2, level: 'easy', seed: 5, justIn: true });
+  const m = yard({ a }, { fill: 2, level: 'hard', seed: 5, justIn: true });
   const bot = m.bots.peers()[0];
   Object.assign(bot, { x: a.x, z: a.z - 10, rotY: 0 });
   const track: { t: number; x: number; z: number }[] = [];
-  for (let i = 0; i < 31; i++) {
-    m.run(50);
+  // Where it was 200 ms ago (a 100 ms round trip, and the 100 ms a page draws everyone behind), well off where it is now.
+  const then = () => track.find((p) => p.t === m.now - 200)!;
+  for (let i = 0; i < 60 && (i <= 31 || Math.hypot(then().x - bot.x, then().z - bot.z) <= 0.7); i++) {
+    m.run(50, () => (standing(m.arena, 'a').hp = RULES.hp));
     track.push({ t: m.now, x: bot.x, z: bot.z });
   }
   assert.ok(alive(m.arena, 'a') && alive(m.arena, bot.id));
-  // Where it was 200 ms ago (a 100 ms round trip, and the 100 ms a page draws everyone behind), well off where it is now.
-  const then = track.find((p) => p.t === m.now - 200)!;
-  assert.ok(Math.hypot(then.x - bot.x, then.z - bot.z) > 0.7, 'it moved');
+  assert.ok(Math.hypot(then().x - bot.x, then().z - bot.z) > 0.7, 'it moved');
   const o = { x: a.x, y: EYE_Y, z: a.z };
-  const to = { x: then.x - o.x, y: 0.6 - o.y, z: then.z - o.z };
+  const to = { x: then().x - o.x, y: 0.6 - o.y, z: then().z - o.z };
   const len = Math.hypot(to.x, to.y, to.z);
   const shot = m.arena.fire('a', o, { x: to.x / len, y: to.y / len, z: to.z / len }, m.now, 100);
   assert.equal(shot?.hit, bot.id);
@@ -324,8 +351,9 @@ test('a bot has the SMG out close in and the rifle further off, and a good one c
   assert.ok(near.fired.length > 0 && near.fired.every((s) => s.w === 'smg'), `close in: ${near.fired.map((s) => s.w)}`);
   assert.ok(far.fired.length > 0 && far.fired.every((s) => s.w === 'rifle'), `further off: ${far.fired.map((s) => s.w)}`);
   // It swaps (from the rifle every life starts with) while it's still reacting, not after: the first
-  // shot a swap after it first sees them (the first tick), not a reaction and then a swap (750 ms).
-  assert.ok(near.fired[0].at - near.start <= TICK + SWAP, `first SMG shot ${near.fired[0].at - near.start} ms in`);
+  // shot a swap after it first sees them (the first tick) and its stop to shoot (it strafes meanwhile),
+  // not a reaction and then a swap (750 ms).
+  assert.ok(near.fired[0].at - near.start <= TICK + SWAP + SKILL.hard.settle, `first SMG shot ${near.fired[0].at - near.start} ms in`);
   // And fires it as fast as the gun goes (65 ms a shot, on whichever tick is nearest), not a tick
   // slower: before, every shot in a burst came 100 ms apart, slower close in than the rifle it put away.
   const gaps = near.fired.slice(1).map((s, i) => s.at - near.fired[i].at).filter((g) => g <= 100);
@@ -335,6 +363,40 @@ test('a bot has the SMG out close in and the rifle further off, and a good one c
   // Crouched for some of it, and its shots left from crouched eyes then (the judge took every one).
   assert.ok(far.crouched > 0 && far.fired.some((s) => s.o.y < EYE_Y - 0.3));
   assert.ok(far.fired.every((s) => !s.refused));
+});
+
+test('a good bot fights from round a corner and stops to shoot; a beginner stands out in the open and sprays on the move', () => {
+  // Someone out in the open 23 m off, a bot beside the corner of a container (the one 12 m east of the
+  // middle): kept on their feet (full health every tick), so what's measured is how it fights, not the kill.
+  const play = (level: BotLevel, seed: number) => {
+    const a: V3 = { x: C.x + 30, y: 0, z: C.z - 10 };
+    const m = yard({ a }, { fill: 2, level, seed });
+    const bot = m.bots.peers()[0];
+    Object.assign(bot, { x: C.x + 10, z: C.z + 2, rotY: Math.atan2(a.x - C.x - 10, a.z - C.z - 2) });
+    // Whether it was on the move each tick (as it fired, for a shot that tick), and out of their sight.
+    const moving = new Map<number, boolean>();
+    let hidden = 0;
+    m.run(4000, (now) => {
+      standing(m.arena, 'a').hp = RULES.hp;
+      moving.set(now - TICK, bot.moving);
+      if (!sees({ x: a.x, y: EYE_Y, z: a.z }, bot)) hidden++;
+    });
+    const fired = m.shots.filter((s) => s.by === bot.id);
+    return { hidden: hidden / (4000 / TICK), fired, onTheMove: fired.filter((s) => moving.get(s.at)).length };
+  };
+  const runs = (level: BotLevel) => Array.from({ length: 10 }, (_, i) => play(level, i + 1));
+  const sum = (xs: number[]) => xs.reduce((n, x) => n + x, 0);
+  const top = runs('insane'), low = runs('easy');
+  const hidden = (r: ReturnType<typeof runs>) => sum(r.map((x) => x.hidden)) / r.length;
+  // The good one ducks back out of their sight between bursts (before: never, strafing out in the open):
+  // a fifth of the time here. The beginner's out there all along, bar a strafe behind it now and then.
+  assert.ok(hidden(top) > 0.15, `insane out of sight ${hidden(top).toFixed(2)} of the time`);
+  assert.ok(hidden(low) < 0.1, `easy out of sight ${hidden(low).toFixed(2)} of the time`);
+  // It stops for every shot (a counter-strafe), and lands most of them; the beginner fires some on the move.
+  const fired = top.flatMap((r) => r.fired);
+  assert.equal(sum(top.map((r) => r.onTheMove)), 0, 'insane fired on the move');
+  assert.ok(fired.filter((s) => s.hit === 'a').length > fired.length / 2, `insane hits ${fired.filter((s) => s.hit === 'a').length} of ${fired.length}`);
+  assert.ok(sum(low.map((r) => r.onTheMove)) > 0, 'easy never fired on the move');
 });
 
 test('a bot that runs one gun dry (or is reloading it) fights on with the other, and reloads the empty one once nobody is in sight', () => {

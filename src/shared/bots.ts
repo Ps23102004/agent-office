@@ -32,45 +32,72 @@ export const BOT_NAMES = ['Rex', 'Nova', 'Bolt', 'Vex', 'Juno', 'Kilo', 'Ash', '
 
 /** What a bot at one level is like. Angles in radians, times in ms unless they say otherwise. */
 export interface BotSkill {
-  /** From first seeing someone to its first shot at them. */
+  /**
+   * From first seeing someone to doing anything about them: its first turn, step or shot their way (less,
+   * someone turning up where it was already aiming, but never under 150 ms: see server/arenabots.ts PREAIM).
+   */
   reaction: readonly [number, number];
   /** Its aim's error (standard deviation, each way) as it starts on someone, the best it settles to, and how fast (s). */
   sigma0: number;
   sigmaMin: number;
   tau: number;
-  /** How far behind someone moving it aims (s): eyes trail a strafe. */
+  /**
+   * How far behind someone moving it aims (s): eyes trail a strafe. Its hand wobbles as much again
+   * round that, so the faster they cross its sights (close in), the wider it goes.
+   */
   trail: number;
-  /** How fast it can turn (rad/s). */
+  /** How fast it can turn (rad/s): no snapping round. */
   turn: number;
   /** Half the width of what it notices ahead, and how far off it hears a shot (m). */
   fov: number;
   hear: number;
-  /** Shots in a burst, and the pause after one. */
-  burst: readonly [number, number];
+  /** Furthest (m) it opens fire from: further off, it closes in first. */
+  reach: number;
+  /** Furthest (m) it takes a shot at just the top of someone's head over something low: further off, it closes in first. */
+  crown: number;
+  /** How long it stands still before a burst (a counter-strafe: shots on the move go wide). */
+  settle: number;
+  /**
+   * The share of its bursts it fires as it should: stood still, and no longer than the range calls for.
+   * The rest it fires on the move and holds the trigger twice as long, as a beginner does.
+   */
+  discipline: number;
+  /** Between bursts, how long it strafes (ADAD) before stopping to shoot again, and each way for how long. */
   pause: readonly [number, number];
-  /** How much of the rifle's kick it pulls back down (0-1). */
+  adad: readonly [number, number];
+  /** The share of a fight it spends moving side to side; the rest it stands there flat-footed, as a beginner does. */
+  strafe: number;
+  /** How much of the gun's kick it pulls back down (0-1). */
   recoil: number;
-  /** The share of its shots it puts at the head. */
+  /** The share of its shots it puts at the head, once settled on someone slow enough to. */
   head: number;
-  /** Health under which it breaks off for cover. */
+  /**
+   * The share of its fights it takes from round a corner where there's one a step or two away: out for a
+   * burst, back out of sight between them (anyone shooting back has to find it again each time).
+   */
+  peek: number;
+  /** Health under which it gets out of their sight (if that's a step or two away). */
   cover: number;
-  /** Stands still to shoot, as a good player does, rather than spraying on the move. */
-  plant: boolean;
+  /** Crouches to shoot (where it still sees them from down there). */
+  crouch: boolean;
 }
 
 const DEG = Math.PI / 180;
 
 /**
- * Each level. From first sight of someone strafing at walking pace 15 m off (tests/arenabots.test.ts,
- * 30 duels each, median kill, against the judge's head ball and body column): easy hits 35% of its
- * shots and kills in about 3.35 s, normal 54% in 1.3 s, hard 75% in 0.8 s, insane 92% in 0.6 s.
- * Judged against people (Jev, from the near-same numbers before the judge changed): easy plays like
- * a beginner, normal an average player, hard a skilled one, insane a top player or better. What keeps insane beatable is that it has to see you
- * first, react and turn.
+ * Each level: easy a beginner (slow to react and turn, wild, flat-footed half the time and spraying on
+ * the move the rest), normal an average player, hard a skilled one (stops to shoot, taps at range,
+ * crouches, takes fights from round a corner), insane a top player or better, but not an aimbot: it
+ * still has to see you, react and turn, and it misses someone strafing across it close in.
+ * Against the scripted test player standing in the open with three bots (scripts/playtest/arena.mjs,
+ * 40 s a level), they land about 18%, 30%, 40% and 56% of all their shots (at anyone), kill the test
+ * player about 2, 3.5, 4.5 and 5.5 times and are killed by them about 6, 4.5, 4 and 2.5 times; any one
+ * 40 s match's hit rate is 4 to 7 points either side of that, and its kills a kill or two. One bot
+ * against someone strafing 15 m off: tests/arenabots.test.ts.
  */
 export const SKILL: Record<BotLevel, BotSkill> = {
-  easy: { reaction: [400, 550], sigma0: 0.049, sigmaMin: 0.027, tau: 0.7, trail: 0.12, turn: 5, fov: 55 * DEG, hear: 25, burst: [2, 4], pause: [500, 800], recoil: 0.3, head: 0, cover: 30, plant: false },
-  normal: { reaction: [260, 380], sigma0: 0.042, sigmaMin: 0.0175, tau: 0.45, trail: 0.08, turn: 8, fov: 60 * DEG, hear: 40, burst: [3, 6], pause: [250, 450], recoil: 0.6, head: 0.1, cover: 45, plant: false },
-  hard: { reaction: [200, 280], sigma0: 0.035, sigmaMin: 0.012, tau: 0.3, trail: 0.05, turn: 12, fov: 70 * DEG, hear: 60, burst: [5, 9], pause: [120, 250], recoil: 0.85, head: 0.3, cover: 50, plant: true },
-  insane: { reaction: [170, 230], sigma0: 0.03, sigmaMin: 0.008, tau: 0.22, trail: 0.035, turn: 16, fov: 80 * DEG, hear: 80, burst: [6, 12], pause: [80, 160], recoil: 0.95, head: 0.4, cover: 50, plant: true },
+  easy: { reaction: [600, 850], sigma0: 0.09, sigmaMin: 0.035, tau: 0.9, trail: 0.12, turn: 4, fov: 45 * DEG, hear: 55, reach: 30, crown: 10, settle: 200, discipline: 0.4, pause: [500, 800], adad: [500, 1000], strafe: 0.3, peek: 0, recoil: 0.3, head: 0, cover: 25, crouch: false },
+  normal: { reaction: [330, 450], sigma0: 0.056, sigmaMin: 0.022, tau: 0.5, trail: 0.1, turn: 6, fov: 50 * DEG, hear: 60, reach: 38, crown: 14, settle: 150, discipline: 0.7, pause: [350, 600], adad: [350, 750], strafe: 0.5, peek: 0.2, recoil: 0.6, head: 0.1, cover: 35, crouch: false },
+  hard: { reaction: [250, 320], sigma0: 0.032, sigmaMin: 0.013, tau: 0.3, trail: 0.09, turn: 8, fov: 55 * DEG, hear: 65, reach: 42, crown: 18, settle: 100, discipline: 0.92, pause: [250, 450], adad: [250, 550], strafe: 0.9, peek: 0.9, recoil: 0.85, head: 0.3, cover: 50, crouch: true },
+  insane: { reaction: [160, 210], sigma0: 0.024, sigmaMin: 0.007, tau: 0.2, trail: 0.03, turn: 10, fov: 60 * DEG, hear: 75, reach: 55, crown: 27, settle: 50, discipline: 1, pause: [80, 180], adad: [200, 450], strafe: 1, peek: 0.9, recoil: 0.95, head: 0.45, cover: 40, crouch: true },
 };
