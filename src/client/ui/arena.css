@@ -78,7 +78,7 @@
 .arena-hud .arena-match-meta { display: flex; align-items: center; justify-content: center; gap: 16px; }
 .arena-hud .arena-match.over { width: min(480px, calc(100% - 24px)); padding: 18px; }
 .arena-hud .arena-match.over .arena-match-status { color: var(--arena-accent); font-size: 32px; font-weight: 900; line-height: 1.1; margin-bottom: 12px; }
-.arena-hud .arena-feed { position: absolute; top: max(22px, env(safe-area-inset-top)); right: max(var(--arena-edge), env(safe-area-inset-right)); width: min(270px, 24vw); margin: 0; padding: 0; list-style: none; }
+.arena-hud .arena-feed { position: absolute; top: max(76px, calc(env(safe-area-inset-top) + 64px)); right: max(var(--arena-edge), env(safe-area-inset-right)); width: min(270px, 24vw); margin: 0; padding: 0; list-style: none; }
 .arena-hud .arena-feed li { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 0 0 5px; padding: 6px 9px; background: rgba(10, 14, 17, .52); border-right: 2px solid rgba(255, 255, 255, .3); transition: opacity 70ms linear; font: 600 12px/1.3 system-ui, sans-serif; }
 .arena-hud .arena-feed li.involved { border-color: var(--arena-accent); background: rgba(42, 36, 13, .76); }
 .arena-hud .arena-feed li.involved .arena-feed-icon { color: var(--arena-accent); }
