@@ -119,6 +119,7 @@ import { loadingScreen } from './ui/loading';
 import { TitleScreen, skipTitle, titleLook } from './ui/title';
 import './ui/title.css';
 import { SlowFrames } from './framerate';
+import { readPad } from './gamepad';
 import { offerLite, touchOnly } from './ui/litesuggest';
 import { decorTicker, pixelRatioFor, quality, setGraphics, tooSoon } from './quality';
 import { openDeskLabel, openExpand } from './ui/floorplan';
@@ -5207,7 +5208,8 @@ function frame(ts?: number) {
   player.speedBoost = caffeine.speed(secs);
   player.jumpBoost = caffeine.jump(secs);
   thud = Math.max(0, thud - dt * 2.5);
-  player.jitter = reduceMotion.matches ? 0 : Math.max(caffeine.jitter(secs), thud);
+  // Driving, the view rumbles a little with your speed (and on the boost, and sliding).
+  player.jitter = reduceMotion.matches ? 0 : Math.max(caffeine.jitter(secs), thud, driver.rumble);
   const mug = caffeine.buzzed(secs);
   // Both hands are on the club at the tee.
   me.holdMug(mug && !golf.active);
@@ -5238,6 +5240,19 @@ function frame(ts?: number) {
     if (pose && Math.abs(pose.speed) > 1) office.life.hit(carPoint(pose, 0, (Math.sign(pose.speed) * SPECS[carDefs()[driver.car!].kind].length) / 2), Math.abs(pose.speed));
   }
   if (title?.active) player.enabled = false;
+  // A gamepad drives too (gamepad.ts): the sticks and triggers go to the car; Y gets you out, B back on the track, View swaps the camera, L3 honks.
+  driver.pad = readPad();
+  if (driver.active && driver.pad && player.enabled) {
+    const tapped = driver.pad.tapped;
+    if (tapped.has('out')) getOut();
+    else if (tapped.has('reset') && atCircuit) resetCar();
+    if (tapped.has('horn')) honk();
+    if (tapped.has('view') && !atArena) {
+      settings.view = player.view === 'first' ? 'third' : 'first';
+      driver.setView(settings.view);
+      saveSettings(settings);
+    }
+  }
   player.update(dt);
   // Where the player's camera goes, all at once: the title blends to it, not to a step toward it from the flight.
   if (title?.active) player.updateCamera(true);

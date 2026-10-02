@@ -204,10 +204,13 @@ test('Shift boosts you past top speed until the meter runs dry, and it fills bac
   assert.ok(s.driver.boost < 0.02, 'run dry (and only trickling back)');
   assert.equal(s.driver.boosting, false);
   const dry = s.driver.boost;
-  s.fleet.place(BLUE, { ...s.car(), speed: 20, slip: 6 });
-  s.keys('KeyW');
-  s.frames(10);
-  assert.ok(s.driver.boost > dry + 0.01, `a slide fills it (${s.driver.boost.toFixed(3)})`);
+  // A drift: a tug on the handbrake into the turn, then the gas and the wheel held into it.
+  s.fleet.place(BLUE, { ...s.car(), speed: 30, slip: 0, yaw: 0 });
+  s.keys('KeyW', 'KeyA', 'Space');
+  s.frames(18);
+  s.keys('KeyW', 'KeyA');
+  s.frames(60);
+  assert.ok(s.driver.boost > dry + 0.2, `a drift fills it (${s.driver.boost.toFixed(3)}; a trickle alone would be ${(dry + 0.026).toFixed(3)})`);
 });
 
 test("grazing a circuit's edge at speed, the car slides along it: speed kept, no slide sideways", (t) => {
@@ -231,4 +234,28 @@ test("grazing a circuit's edge at speed, the car slides along it: speed kept, no
     assert.ok(Math.hypot(now.x - was.x, now.z - was.z) > 0.5, `frame ${f}: moving on (${now.speed.toFixed(1)} m/s)`);
     assert.ok(Math.abs(now.yaw ?? 0) < 1.5, `frame ${f}: not spinning (${now.yaw?.toFixed(2)} rad/s)`);
   }
+});
+
+test('drawn between its physics steps, the car glides at any frame rate, and the chase camera trails it as far', (t) => {
+  const trail: number[] = [];
+  for (const fps of [30, 60, 75, 90, 144, 165]) {
+    const s = street(t);
+    s.fleet.place(BLUE, { x: -150, z: ROAD_Z, rotY: Math.PI / 2, speed: SPECS.lambo.top, steer: 0 });
+    s.driver.enter(BLUE, 'driver');
+    s.keys('KeyW');
+    s.frames(fps, 1 / fps);
+    // Flat out, every frame moves it about as far: no frame a step and the next none.
+    const moved: number[] = [];
+    for (let f = 0; f < 60; f++) {
+      const was = s.car().x;
+      s.frames(1, 1 / fps);
+      moved.push(s.car().x - was);
+    }
+    const mean = moved.reduce((a, b) => a + b, 0) / moved.length;
+    const spread = Math.max(...moved.map((m) => Math.abs(m - mean))) / mean;
+    assert.ok(spread < 0.05, `${fps} fps: each frame within ${(spread * 100).toFixed(1)}% of the others`);
+    trail.push(s.car().x - s.player.camera.position.x);
+  }
+  const [lo, hi] = [Math.min(...trail), Math.max(...trail)];
+  assert.ok((hi - lo) / lo < 0.1, `the camera trails ${lo.toFixed(2)}-${hi.toFixed(2)} m behind, whatever the frame rate`);
 });
