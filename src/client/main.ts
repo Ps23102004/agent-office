@@ -41,6 +41,7 @@ import { buildCircuit, type Circuit } from './world/circuit';
 import { ARENA, ARENA_GATE, ARENA_NAME, CITY_ARENA_GATE } from '../shared/arena';
 import { buildArena, type ArenaWorld } from './world/arena';
 import { ArenaPlay } from './arena';
+import { playerName } from './player-name';
 import { Ghost, Marshal, joinGrid, leaveRace, missedCheckpoint, myRacer, myTiming, nextCheckpoint, progress, standings, startRace, wireRace } from './race';
 import { MEET_SPOTS, answerRide, meetLabel, offerRide, postMeet, rideCandidates, rideOffer, wireTogether, type MeetPin, type MeetSpotId } from './together';
 import { pinFloor } from '../shared/meet';
@@ -909,7 +910,7 @@ function getIn(i: number) {
   const seat: CarSeat | null = !c.driver ? 'driver' : null;
   if (!seat) {
     const free = SPECS[def.kind].seats > 1 && !c.passenger;
-    return toast(free ? `🚗 ${store.peers.get(c.driver!)?.name ?? 'The driver'} has to offer you the seat` : `🏎️ The ${def.name} is full`, 'warn');
+    return toast(free ? `🚗 ${playerName(c.driver!, store)} has to offer you the seat` : `🏎️ The ${def.name} is full`, 'warn');
   }
   if (player.seat) standUp();
   if (hanger.active) hanger.cancel();
@@ -973,7 +974,7 @@ function carNews(answer: boolean) {
     if (mine?.car === driver.car && mine.seat === driver.seat) return;
     const who = store.cars[driver.car!]?.[driver.seat!];
     getOut(true);
-    toast(`🏎️ ${(who && store.peers.get(who)?.name) || 'Someone'} got in there first`, 'warn');
+    toast(`🏎️ ${(who && playerName(who, store)) || 'Someone'} got in there first`, 'warn');
   } else if (mine) {
     // You got out while it was answering something else of yours.
     carPending++;
@@ -1380,7 +1381,7 @@ function raceFrame(dt: number, c: Circuit) {
 function renderDriveHint(el: HTMLElement) {
   const i = driver.car!;
   const c = store.cars[i];
-  const name = (id?: string) => (id && id !== store.you ? (store.peers.get(id)?.name ?? '') : '');
+  const name = (id?: string) => (id && id !== store.you ? playerName(id, store) : '');
   let hint: Hint;
   if (driver.driving) {
     // How fast is the speedometer's (ui/drivehud.ts): the hint keeps still while you speed up.
@@ -1463,7 +1464,7 @@ function botDriversTick(dt: number, t: number) {
       const def = CIRCUIT_CARS[i];
       if (!c.driver || !isBot(c.driver) || !def) continue;
       seen.add(c.driver);
-      const name = [...store.race.racers, ...store.race.practice].find((r) => r.id === c.driver)?.name ?? '🤖';
+      const name = playerName(c.driver, store);
       let d = botDrivers.get(c.driver);
       if (!d) {
         const person = new Person(name, def.color, lookFromSeed(c.driver));
@@ -4287,7 +4288,7 @@ function hintFor(it: Interactable): Hint {
       const c = store.cars[it.car ?? -1];
       const def = carDefs()[it.car ?? -1];
       if (!c || !def) return { k: '', parts: [] };
-      const name = (id?: string) => (id ? clip(store.peers.get(id)?.name ?? 'Someone', 20) : '');
+      const name = (id?: string) => (id ? clip(playerName(id, store), 20) : '');
       const [at, beside] = [name(c.driver), name(c.passenger)];
       const k = `${it.car}|${at}|${beside}`;
       if (!at) return { k, parts: [title(`🏎️ ${def.name}`), aside(beside ? `${beside} is waiting in it` : def.kind === 'bicycle' ? 'ready to pedal' : 'keys in the ignition'), key('E', SPECS[def.kind].width < 1 ? 'Ride it' : 'Drive it')] };
@@ -4594,6 +4595,8 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
+  // B opens a mouse-driven arena window before a free pointer can be recaptured.
+  if (atArena && e.code === 'KeyB' && arenaPlay.key(e, true)) { e.preventDefault(); return; }
   if (relookOnKey && e.key !== 'Escape' && player.canLock) player.lock();
   if (hanger.active && hangingKey(e.code)) {
     e.preventDefault();
@@ -4774,7 +4777,7 @@ onDoingChange(() => sendDoing());
 let relookOnKey = false;
 onModalChange((open) => {
   if (open) telescope.exit();
-  player.enabled = !open;
+  player.enabled = !open && !arenaPlay.dead;
   player.clearKeys();
   sendDoing();
   // Reading off the bookshelf: an open book in your hands, and your character's.
@@ -5015,12 +5018,15 @@ wireRaceUI({
     atCircuit
       ? {
           outline: trackOutline,
-          dots: store.cars.flatMap((c, i) => (c.driver ? [{ id: c.driver, name: c.driver === store.you ? 'You' : (store.peers.get(c.driver)?.name ?? CIRCUIT_CARS[i]?.name ?? '?'), x: c.x, z: c.z }] : [])),
+          dots: store.cars.flatMap((c) => (c.driver ? [{ id: c.driver, name: c.driver === store.you ? 'You' : playerName(c.driver, store), x: c.x, z: c.z }] : [])),
         }
       : null,
   startRace,
   joinGrid: () => void joinGrid(),
   leaveRace,
+  setBots: (fill, level) => net.send({ t: 'race.bots', fill, level }),
+  rabbit: (level) => net.send({ t: 'race.rabbit', level }),
+  driving: () => atCircuit && driver.driving,
 });
 function showHangout() {
   openHangout({ net, voice, toggleVoice, jumpTo: walkTo, peerAtCircuit: (p) => raceAdapter.peerAtCircuit(p),

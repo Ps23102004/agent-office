@@ -1,0 +1,39 @@
+.bot-controls { border-top: 1px solid var(--ink); margin-top: 14px; padding-top: 10px; }
+.bot-controls h3 { margin: 0 0 10px; }
+.modal .bot-fill { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 800; }
+.bot-fill select { min-height: 44px; padding: 6px 10px; font: inherit; color: var(--ink); background: var(--paper); border: 2px solid var(--ink); border-radius: 6px; }
+.bot-difficulty { min-width: 0; padding: 0; border: 0; margin: 12px 0; }
+.bot-difficulty legend { font-weight: 800; margin-bottom: 8px; }
+.bot-segments { display: flex; flex-wrap: wrap; gap: 6px; }
+.bot-segments .btn { flex: 1; min-height: 44px; }
+.bot-segments [aria-pressed='true'] { background: var(--ink); color: var(--paper); }
+.bot-description, .bot-current { font-size: 12px; overflow-wrap: anywhere; }
+.bot-description { min-height: 2.6em; }
+.bot-controls :is(button, select):focus-visible, .bot-difficulty button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.bot-window { width: min(460px, 100%); }
+.bot-window :is(header, footer) { flex-shrink: 0; }
+.bot-window .body { min-height: 0; }
+.bot-window .bot-controls { border: 0; margin: 0; padding: 0; }
+.bot-window .bot-controls h3 { display: none; }
+.modal .bot-actions { display: flex; align-items: center; gap: 12px; }
+.bot-actions .bot-current { flex: 1; min-width: 0; margin: 0; }
+.bot-actions .btn { flex-shrink: 0; min-height: 44px; }
+.race-window .bot-actions { border: 0; padding: 8px 0; background: none; }
+.bot-window .bot-actions { flex-wrap: wrap; }
+.bot-window .bot-actions .bot-current { flex-basis: 100%; }
+/* Combat windows share the HUD's layer; chat, toasts and connection status remain above. */
+.arena-bots-backdrop { z-index: 35; }
+@media (max-height: 500px) {
+  /* Keep the dialog above the chat lane without changing either layer's z-order. */
+  .arena-bots-backdrop { padding-bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px)); }
+  .bot-window { max-height: calc(100dvh - 100px); }
+  .bot-window .body { padding: 10px 16px; }
+  .bot-window .bot-controls .note { margin: 6px 0; }
+  .bot-window .bot-difficulty { margin: 8px 0; }
+  .bot-window .bot-description { margin: 6px 0 0; min-height: 0; }
+  .bot-window .bot-actions { flex-wrap: nowrap; padding: 8px 16px; }
+  .bot-window .bot-actions .bot-current { flex-basis: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arena-bots-backdrop, .race-lobby-backdrop, .bot-window, .race-window { animation: none; }
+}

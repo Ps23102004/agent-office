@@ -4,9 +4,12 @@ import { isTyping } from '../player';
 import { h, modalOpen, openModal, toast, type Modal } from './dom';
 import { focusDialog } from './dialog-focus';
 import type { CircuitMap, RaceAdapter } from './race-adapter';
-import { checkpointHint, countdownLights, mapProjection, raceGap, raceOrder, raceTime, sectorDelta, sectorReadings } from './race-view';
+import { checkpointHint, countdownLights, mapProjection, raceGap, raceHudStandings, raceOrder, raceTime, sectorDelta, sectorReadings } from './race-view';
 import { DriveHUD, type DrivingGauge } from './drivehud';
 import './social-race.css';
+import { BotControls, BotDifficulty } from './bots';
+import { botLabel, botName } from '../player-name';
+import { isBot } from '../../shared/bots';
 
 export type { DrivingGauge } from './drivehud';
 
@@ -31,8 +34,14 @@ export class RaceUI {
   private readonly clock = h('strong');
   private readonly best = h('strong');
   private readonly gap = h('strong');
+  private readonly standingsRows = Array.from({ length: 3 }, () => {
+    const name = h('span.race-standing-name');
+    const gap = h('span');
+    return { el: h('li', { hidden: true }, name, gap), name, gap };
+  });
+  private readonly standings = h('ol.race-live-positions', { 'aria-label': 'Live race positions' }, ...this.standingsRows.map((row) => row.el));
   private readonly live = h('dl.race-metrics', {}, ...[
-    ['Position', this.position], ['Lap', this.lap], ['This lap', this.clock], ['Best lap', this.best], ['Gap to leader', this.gap],
+    ['Position', this.position], ['Lap', this.lap], ['This lap', this.clock], ['Best lap', this.best], ['Leader gap · last line', this.gap],
   ].map(([label, value]) => h('div', {}, h('dt', {}, label as string), h('dd', {}, value as HTMLElement))));
   private readonly practiceLaps = h('strong');
   private readonly practiceClock = h('strong');
@@ -48,7 +57,7 @@ export class RaceUI {
   private readonly split = h('p.race-split', { role: 'status', 'aria-live': 'polite' });
   private readonly sectorTimes = SECTORS.map(() => h('li'));
   private readonly sectors = h('ul.race-sectors', { 'aria-label': 'Sector times and bests' }, ...this.sectorTimes);
-  private readonly timing = h('div', {}, this.coach, this.split, this.sectors);
+  private readonly timing = h('div.race-timing', {}, this.coach, this.standings, this.split, this.sectors);
   private readonly svg = svgEl('svg');
   private readonly path = svgEl('path');
   private readonly marks = new Map<string, SVGCircleElement>();
@@ -89,14 +98,27 @@ export class RaceUI {
     const practiceHelp = h('p.note');
     const practiceSplit = h('p.race-split', { role: 'status', 'aria-live': 'polite' });
     const practiceSectors = SECTORS.map(() => h('li'));
+    const bots = new BotControls(this.source.store.race.bots, (fill, level) => this.source.setBots(fill, level));
+    bots.el.append(h('p.note', {}, 'Bots join when you join the grid.'), bots.footer);
+    const rabbitLevel = new BotDifficulty('Rabbit difficulty');
+    const rabbitStatus = h('p', { role: 'status', 'aria-live': 'polite' });
+    const chase = h('button.btn', { type: 'button', onclick: () => this.source.rabbit(rabbitLevel.level) }, 'Race a rabbit');
+    const home = h('button.btn', { type: 'button', onclick: () => this.source.rabbit(null) }, 'Send rabbit home');
+    const rabbitControls = h('div.rabbit-controls', { tabindex: -1 },
+      h('h3', {}, '🐇 Race a rabbit'), h('p.note', {}, 'Drive a circuit car outside the race and chase a practice opponent.'),
+      rabbitLevel.el, rabbitStatus, h('div.rabbit-actions', {}, chase, home));
+    const rabbitShortcut = h('button.btn', { type: 'button', onclick: () => {
+      rabbitControls.scrollIntoView({ block: 'nearest' });
+      rabbitControls.focus({ preventScroll: true });
+    } }, '🐇 Rabbit practice ↓');
     const practicePanel = h('section.race-practice', { 'aria-label': 'Practice laps' }, h('h3', {}, '⏱ Practice laps'), practiceSummary, practiceSplit,
-      h('ul.race-sectors', { 'aria-label': 'Your practice sector times' }, ...practiceSectors), practiceRecord, practiceHelp);
+      h('ul.race-sectors', { 'aria-label': 'Your practice sector times' }, ...practiceSectors), practiceRecord, practiceHelp, rabbitControls);
     const join = h('button.btn', { type: 'button', onclick: () => this.source.joinGrid() }, 'Join grid');
     const start = h('button.btn', { type: 'button', onclick: () => this.source.startRace() }, 'Start race');
     const leave = h('button.btn', { type: 'button', onclick: () => this.source.leaveRace() }, 'Leave race');
     const notice = h('p.note');
     const el = h('div.modal.race-window', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Race lobby and results' },
-      h('header', {}, heading), h('div.body', {}, summary, notice, list, record, practicePanel),
+      h('header', {}, heading), h('div.body', {}, summary, notice, rabbitShortcut, list, record, bots.el, practicePanel),
       h('footer', {}, join, start, leave));
     let signature = '';
     const render = () => {
@@ -105,16 +127,25 @@ export class RaceUI {
       const at = this.source.atCircuit();
       const available = this.source.available();
       const liningUp = s.phase === 'idle' || s.phase === 'lobby';
-      join.disabled = !available || !at || !liningUp || !!mine || s.racers.length >= RACE.slots;
+      // The server makes room for a person by sending a bot home, even on a full grid.
+      const peopleFull = s.racers.filter((r) => !r.bot && !isBot(r.id)).length >= RACE.slots;
+      join.disabled = !available || !at || !liningUp || !!mine || peopleFull;
       start.disabled = !available || !at || s.phase !== 'lobby' || !mine;
       leave.disabled = !available || !mine || s.phase === 'finished' || mine.finishedAt !== undefined;
-      text(join, mine ? 'On the grid' : s.racers.length >= RACE.slots ? 'Grid full' : 'Join grid');
+      text(join, mine ? 'On the grid' : peopleFull ? 'Grid full' : 'Join grid');
+      bots.update(s.bots, available && at);
+      const rabbit = s.practice.find((p) => p.rabbitOf === store.you && !!p.bot);
+      const canChase = available && at && this.source.driving() && !mine;
+      chase.disabled = !canChase;
+      home.disabled = !available || !at || !rabbit;
+      rabbitLevel.enabled(canChase);
+      text(rabbitStatus, rabbit ? `Chasing ${botName(rabbit.name, rabbit.bot)}` : mine ? 'Leave the race to chase a rabbit.' : !this.source.driving() ? 'Get behind the wheel of a circuit car to begin.' : 'No rabbit out yet.');
       const finished = s.phase === 'finished';
       const running = s.phase === 'racing';
       const phase = { idle: 'Ready to line up', lobby: 'Lining up', countdown: 'Getting ready', racing: 'Race in progress', finished: 'Finished' }[s.phase];
       text(heading, finished ? '🏁 Race results' : '🏁 Race lobby');
       text(summary, finished ? 'Everyone is in, or the finish window has closed.' : `${s.laps} laps · ${s.racers.length}/${RACE.slots} on the grid · ${phase}`);
-      text(notice, !available ? 'The circuit is not ready yet.' : !at ? 'Head through the city’s circuit gate to join the grid.' : finished ? 'Best laps and the circuit record are below. The grid opens again when these results clear.' : liningUp ? 'Join the grid, then anyone on the grid can start the race. Five red lights, then go.' : s.phase === 'countdown' ? 'Get ready. The lights go out together.' : 'The race is on. You can watch, or leave your race.');
+      text(notice, !available ? 'The circuit is not ready yet.' : !at ? 'Head through the city’s circuit gate to join the grid.' : finished ? 'Best laps and the circuit record are below. The grid opens again when these results clear.' : liningUp ? 'Choose bot settings, join the grid, then start the race. Bots join with you. Five red lights, then go.' : s.phase === 'countdown' ? 'Get ready. The lights go out together. Bot changes apply to the next grid.' : 'The race is on. Bot changes apply to the next grid.');
       text(record, s.record ? `🏆 Circuit record · ${s.record.name} · ${raceTime(s.record.ms)}` : '🏆 Circuit record · No complete lap yet');
       const p = s.practice.find((p) => p.id === store.you);
       text(practiceSummary, p ? `${p.laps} completed · last ${raceTime(p.lastLap)} · ${store.me.account ? 'account' : 'session'} best ${raceTime(p.bestLap)} · ${checkpointHint(p)}` : !available ? 'The circuit is not ready yet.' : mine ? 'Leave the race, then drive through the start line to practise.' : 'Drive a circuit car through the start line to begin. Follow the checkpoints in order; practice laps start automatically outside your race.');
@@ -132,14 +163,15 @@ export class RaceUI {
         h('thead', {}, h('tr', {}, ...[finished || running ? 'Place' : 'Grid', 'Driver / vehicle', 'Best lap', finished ? 'Finish' : 'Lap'].map((label) => h('th', { scope: 'col' }, label)))));
       table.append(h('tbody', {}, ...racers.map((r) => h('tr', { class: r.id === store.you ? 'race-you' : '' },
         h('td', {}, finished ? (r.finishedAt !== undefined ? String(r.position) : 'DNF') : running ? String(r.position || '—') : String(r.slot + 1)),
-        h('th', { scope: 'row' }, r.name, r.id === store.you ? ' (you)' : '', h('small', {}, this.source.carName(r.car))),
+        h('th', { scope: 'row' }, r.bot || isBot(r.id) ? botName(r.name, r.bot ?? s.bots?.level) : r.name, r.id === store.you ? ' (you)' : '', h('small', {}, this.source.carName(r.car))),
         h('td', {}, raceTime(r.bestLap)),
         h('td', {}, finished ? r.finishedAt !== undefined ? raceGap(s, r) === 'Leading' ? 'Winner' : raceGap(s, r) : 'Did not finish' : `${Math.min(s.laps, r.lap + 1)}/${s.laps}`),
       ))));
-      list.replaceChildren(racers.length ? table : h('p.empty', {}, 'Nobody lined up yet. Bring a friend, or run a lap on your own.'));
+      list.replaceChildren(racers.length ? table : h('p.empty', {}, 'Choose bot settings, then join the grid for a solo race, or drive a practice lap. Bots join with you.'));
     };
     let releaseFocus = () => {};
     this.modal = openModal(el, { doing: '🏁 checking the race', onClose: () => { this.modal = null; this.refreshModal = undefined; releaseFocus(); } });
+    this.modal.backdrop.classList.add('race-lobby-backdrop');
     this.refreshModal = render;
     render();
     releaseFocus = focusDialog(el, !join.disabled ? join : undefined);
@@ -202,6 +234,24 @@ export class RaceUI {
       this.coach.classList.toggle('warn', !!warn);
       this.coach.classList.toggle('hidden', !warn && !!mine && !activeTiming);
       if (mine && live.position !== null && s.phase === 'racing' && mine.finishedAt === undefined) text(this.position, `${live.position} / ${live.racers}`);
+      const racing = s.phase === 'racing';
+      this.standings.hidden = !racing;
+      if (racing) {
+        const rows = raceHudStandings(s, store.you, live);
+        const label = rows[0]?.relative ? 'Live positions · gaps to you' : 'Positions · gaps to leader at last line';
+        if (this.standings.getAttribute('aria-label') !== label) this.standings.setAttribute('aria-label', label);
+        this.standingsRows.forEach((row, i) => {
+          const standing = rows[i];
+          row.el.hidden = !standing;
+          if (!standing) return;
+          const r = standing.racer;
+          const name = r.bot || isBot(r.id) ? botLabel(r.name) : r.name;
+          text(row.name, `${standing.position}. ${name}`);
+          row.name.title = row.name.textContent ?? '';
+          text(row.gap, standing.gap);
+          row.el.classList.toggle('race-you', r.id === store.you);
+        });
+      }
       renderSplit(this.split, mine ?? p);
       this.split.classList.toggle('hidden', !mine && !p);
       this.sectors.classList.toggle('hidden', !mine && !p);

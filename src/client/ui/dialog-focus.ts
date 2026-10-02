@@ -3,7 +3,7 @@ import { modalOpen } from './dom';
 /** Our small social windows keep Tab inside, and return focus when put away. */
 export function focusDialog(el: HTMLElement, first?: HTMLElement): () => void {
   const previous = document.activeElement as HTMLElement | null;
-  const controls = () => [...el.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]')].filter((n) => !n.closest('[hidden], .hidden'));
+  const controls = () => [...el.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')].filter((n) => !n.closest('[hidden], .hidden'));
   const onKey = (e: KeyboardEvent) => {
     // Another window may have opened over this one.
     if (e.key !== 'Tab' || el.closest('.backdrop') !== document.querySelector('#modal-root > .backdrop:last-child')) return;

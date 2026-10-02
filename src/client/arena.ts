@@ -9,6 +9,11 @@ import { SIGHT_Y, gun, type ArenaWorld, type GunModel } from './world/arena';
 import type { Person } from './world/character';
 import type { Hands } from './world/hands';
 import { mesh, toon } from './world/toon';
+import { playerName } from './player-name';
+import { isTyping } from './player';
+import { h, modalOpen, openModal, type Modal } from './ui/dom';
+import { focusDialog } from './ui/dialog-focus';
+import { BotControls } from './ui/bots';
 
 // Playing in the arena (shared/arena.ts): your gun in first person, held down to fire (the office
 // judges what each shot hits: server/arena.ts), the right button to aim down the sights, R to
@@ -106,7 +111,12 @@ function dummy(): THREE.Group {
 }
 
 export class ArenaPlay {
-  readonly hud = new ArenaHUD();
+  readonly hud = new ArenaHUD(() => this.openBots());
+  private botsModal: Modal | null = null;
+  private refreshBots?: () => void;
+  private botsUpdatedAt = -Infinity;
+  private killerWeapon?: WeaponId;
+  private killerHp?: number;
   /** Your shots this visit, and what they did: for accuracy and headshots on a results screen. */
   readonly stats = { shots: 0, hits: 0, heads: 0, kills: 0, damage: 0 };
   /** Your two guns, the one in your hands (`weapon`), and the rounds left in each. */
@@ -213,6 +223,7 @@ export class ArenaPlay {
       p.setView('first');
       this.last.copy(p.pos);
     } else {
+      this.botsModal?.close();
       for (const id of [...this.held.keys()]) this.putAway(id);
       for (const t of this.targets) t.root.visible = false;
       if (!p.enabled && this.killer !== undefined) p.enabled = true;
@@ -244,9 +255,13 @@ export class ArenaPlay {
     }
   }
 
-  /** The arena's keys: R reloads, 1 and 2 (or Q, back and forth) swap guns, Tab holds up the scoreboard, C crouches (player.ts reads it). True if it was one of them. */
+  /** B opens bots, R reloads, 1/2/Q swap guns, Tab holds the scoreboard, C crouches (player.ts). */
   key(e: KeyboardEvent, down: boolean): boolean {
     if (!this.active) return false;
+    if (e.code === 'KeyB') {
+      if (down && !e.repeat && !isTyping(e) && !modalOpen()) this.openBots();
+      return true;
+    }
     if (e.code === 'Tab') {
       e.preventDefault();
       this.hud.scoreboard(down);
@@ -262,6 +277,23 @@ export class ArenaPlay {
       return true;
     }
     return e.code === 'KeyC';
+  }
+
+  private openBots() {
+    if (!this.active || modalOpen()) return;
+    this.firing = this.aiming = false;
+    this.hud.scoreboard(false);
+    const controls = new BotControls(store.arena.bots, (fill, level) => this.w.send({ t: 'arena.bots', fill, level }));
+    const el = h('div.modal.bot-window', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Arena bots' },
+      h('header', {}, h('h2', {}, '🤖 Arena bots')), h('div.body', {}, controls.el), controls.footer);
+    let releaseFocus = () => {};
+    this.botsModal = openModal(el, { onClose: () => {
+      this.botsModal = null; this.refreshBots = undefined; releaseFocus();
+    } });
+    this.botsModal.backdrop.classList.add('arena-bots-backdrop');
+    this.refreshBots = () => controls.update(store.arena.bots, this.active);
+    this.refreshBots();
+    releaseFocus = focusDialog(el);
   }
 
   private reload() {
@@ -297,6 +329,7 @@ export class ArenaPlay {
   update(dt: number, t: number) {
     if (!this.active) return;
     const now = performance.now();
+    if (now - this.botsUpdatedAt >= 100) { this.refreshBots?.(); this.botsUpdatedAt = now; }
     const p = this.w.player;
     const alive = this.alive();
     // Back in some way other than arena.spawn (a reconnect while dead): on your feet again.
@@ -367,7 +400,6 @@ export class ArenaPlay {
     this.deathCam(dt, alive);
 
     const me = store.arena.players.find((x) => x.id === store.you);
-    const killer = this.killer === undefined ? undefined : store.arena.players.find((x) => x.id === this.killer);
     this.hud.render({
       you: store.you,
       state: store.arena,
@@ -378,7 +410,10 @@ export class ArenaPlay {
       hp: me?.hp ?? RULES.hp,
       spread: 10 + this.spread() * 900,
       ads: this.adsK > 0.6,
-      ...(this.killedBy !== undefined && !alive ? { killedBy: this.killedBy, ...(killer ? { killerHp: killer.hp } : {}) } : {}),
+      weapon: this.weapon, guns: this.ammo, crouching: p.crouching, climbing: p.climbing,
+      mouseFree: !this.w.locked() && !modalOpen(),
+      ...(this.killedBy !== undefined && !alive ? { killedBy: this.killedBy,
+        killerHp: this.killerHp, killerWeapon: this.killerWeapon } : {}),
     });
     // Everyone else: their rifles, how they hold them, crouching, falling, safe; and the practice targets.
     this.others(dt, now, t);
@@ -454,6 +489,8 @@ export class ArenaPlay {
     if (mine && struck) {
       const kind = m.kill ? 'kill' : m.head ? 'head' : 'hit';
       this.hud.hitmarker(kind);
+      v.set(m.end.x, m.end.y, m.end.z).project(this.w.camera);
+      if (v.z >= -1 && v.z <= 1) this.hud.damage(m.dmg ?? 0, !!m.head, Math.max(4, (v.x + 1) * 50), Math.max(8, (1 - v.y) * 50 - 4));
       this.w.sound.gun(kind);
       this.stats.hits++;
       if (m.head) this.stats.heads++;
@@ -464,7 +501,10 @@ export class ArenaPlay {
       }
       this.event({ t: 'hit', ...(m.hit ? { victim: m.hit } : { target: m.target }), dmg: m.dmg ?? 0, hp: m.hp ?? 0, head: !!m.head, kill: !!m.kill });
     }
-    if (mine && m.shield) this.event({ t: 'shielded', victim: m.shield });
+    if (mine && m.shield) {
+      this.hud.hitmarker('shield');
+      this.event({ t: 'shielded', victim: m.shield });
+    }
     if (m.kill && m.hit && m.hit !== store.you) this.fell(m.hit, m.o);
     if (m.hit === store.you) {
       this.w.sound.gun('hurt');
@@ -474,7 +514,7 @@ export class ArenaPlay {
       const angle = Math.atan2(Math.sin(look - from), Math.cos(look - from));
       this.hud.hurt(angle);
       this.event({ t: 'hurt', by: m.by, dmg: m.dmg ?? 0, hp: m.hp ?? 0, head: !!m.head, angle });
-      if (m.kill) this.died(m.by);
+      if (m.kill) this.died(m.by, m.w);
     }
   }
 
@@ -492,22 +532,24 @@ export class ArenaPlay {
     if (streak > 0 && streak % 5 === 0) this.hud.medal(`${streak} KILL STREAK`);
   }
 
-  private died(by: string) {
+  private died(by: string, weapon: WeaponId) {
     this.killer = by;
-    this.killedBy = store.peers.get(by)?.name ?? 'someone';
+    this.killedBy = playerName(by, store);
+    this.killerWeapon = weapon;
     this.firing = this.aiming = false;
     this.reloadAt = 0;
     const p = this.w.player;
     p.enabled = false;
     p.clearKeys();
     const killer = store.arena.players.find((x) => x.id === by);
+    this.killerHp = killer?.hp;
     this.event({ t: 'died', by, name: this.killedBy, hp: killer?.hp ?? 0 });
   }
 
   /** On your feet again, the view your own. */
   private revive() {
     this.killer = this.killedBy = undefined;
-    this.w.player.enabled = true;
+    this.w.player.enabled = !modalOpen();
   }
 
   /** Dead: the view turns to whoever killed you and closes in on them, till you're back in. */
