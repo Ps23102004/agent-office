@@ -4606,6 +4606,8 @@ window.addEventListener('keydown', (e) => {
   }
   // In the arena: R reloads, Tab holds up the scoreboard.
   if (arenaPlay.key(e, true)) return;
+  // No emote wheel (G) or emotes on the number keys in a fight: 1 and 2 swap guns there.
+  if (atArena && (e.code === 'KeyG' || /^(?:Digit|Numpad)[1-6]$/.test(e.code))) return;
   // On the ladder, E gets you off it (and nothing else is in reach); W, S and Space climb.
   if (climber.active && (e.code === 'KeyE' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
     if (e.code === 'KeyE') climber.letGo();

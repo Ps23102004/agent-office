@@ -424,7 +424,7 @@ export class Driver {
     p.moving = false;
     const turned = wrap(at.rotY - this.yaw);
     this.yaw = at.rotY;
-    const back = p.holding('KeyX') || !!this.pad?.lookBack;
+    const back = p.holding('KeyX') || (p.enabled && !!this.pad?.lookBack);
     const flipped = back !== this.lookingBack;
     this.lookingBack = back;
     const pose = this.fleet.cars[this.car!].pose;
