@@ -871,19 +871,20 @@ function streetTexture(): THREE.CanvasTexture {
     const road = ROAD / 2;
     const walk = road + WALK;
     R('#a7d98b', -H, -H, H, H);
-    // Sidewalks, with a seam every two meters.
+    // Sidewalks (their slabs are surface.ts's: the 'ground' grain's paving).
     R('#d9d3c5', -H, -walk, H, walk);
     R('#d9d3c5', -walk, -H, walk, H);
-    g.fillStyle = 'rgba(120,112,98,0.28)';
-    for (let a = -H; a < H; a += 2) {
-      for (const s of [-1, 1]) {
-        g.fillRect(mid + a * px, mid - (s * (road + WALK / 2) + WALK / 2) * px, 1.2, WALK * px);
-        g.fillRect(mid + (s * (road + WALK / 2) - WALK / 2) * px, mid - (a + 1) * px, WALK * px, 1.2);
-      }
-    }
-    // The roads, and the curb along them: a light edge on the sidewalk, a dark gutter in the road.
+    // The roads, worn darker down each lane where the wheels go and the engines drip between them; and the
+    // curb along them: a light edge on the sidewalk, a dark gutter in the road.
     R('#4b505c', -H, -road, H, road);
     R('#4b505c', -road, -H, road, H);
+    for (const lane of [-road / 2, road / 2]) {
+      for (const [d, w, a] of [[-0.85, 0.6, 0.16], [0.85, 0.6, 0.16], [0, 0.5, 0.1]]) {
+        const tone = `rgba(18,20,26,${a})`;
+        R(tone, -H, lane + d - w / 2, H, lane + d + w / 2);
+        R(tone, lane + d - w / 2, -H, lane + d + w / 2, H);
+      }
+    }
     for (const s of [-1, 1]) {
       for (const [a0, a1] of [[road, H], [-H, -road]]) {
         R('#f2eee4', a0, s * road + (s > 0 ? 0 : -0.3), a1, s * road + (s > 0 ? 0.3 : 0));
@@ -966,7 +967,8 @@ export function roadDecals(): RoadDecal[] {
         const at = () => a0 + r() * span;
         if (r() < 0.7) put('manhole', at(), (r() < 0.5 ? -1 : 1) * lane, 0.85, 0.85, r() * Math.PI);
         for (const side of [-1, 1]) put('drain', at(), side * gutter, 0.5, 0.9);
-        for (let k = Math.floor(r() * 3); k > 0; k--) put('patch', at(), (r() - 0.5) * ROAD * 0.6, 1.4 + r() * 1.6, 1.6 + r() * 2.6, (r() - 0.5) * 0.1);
+        // Patches in a lane, clear of the line down the middle.
+        for (let k = Math.floor(r() * 3); k > 0; k--) put('patch', at(), (r() < 0.5 ? -1 : 1) * lane + (r() - 0.5) * 0.4, 1.1 + r() * 1, 1.4 + r() * 2.2, (r() - 0.5) * 0.06);
         for (let k = Math.floor(r() * 2.4); k > 0; k--) put('crack', at(), (r() - 0.5) * ROAD * 0.7, 1.6 + r(), 1.6 + r(), r() * Math.PI * 2);
         for (let k = 1 + Math.floor(r() * 2); k > 0; k--) put('oil', at(), (r() < 0.5 ? -1 : 1) * lane + (r() - 0.5) * 0.6, 0.8 + r() * 0.7, 1 + r() * 0.8, r() * Math.PI);
         // Heading + (east, or south), on the right: +z of an east-west road, -x of a north-south one.

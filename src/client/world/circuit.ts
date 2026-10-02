@@ -202,13 +202,19 @@ export function buildCityGate(street: number): { group: THREE.Group; colliders: 
   const colliders: Collider[] = [];
   const solid = new THREE.Group();
   const p = RACE_PLAZA;
-  // Paving, a racing-red runway through the gate and a chequered strip across it: all level with the
-  // street (the cars drive over them), each drawn over the one under it.
+  // Paving, a racing-red carpet up to the gate from the street and a chequered strip across it: all
+  // level with the street (the cars drive over them), each drawn over the one under it. One carpet:
+  // from a little short of the sidewalk to just through the gate (past it you're at the circuit), its
+  // edges trimmed a darker red.
   const paving = new Flat(), runway = new Flat(), paint = new Flat();
   const corner = (x: number, z: number) => ({ x, y: 0, z });
   paving.quad(corner(p.minX, p.minZ), corner(p.maxX, p.minZ), corner(p.maxX, p.maxZ), corner(p.minX, p.maxZ), '#c9ccd3');
   const g = CITY_GATE;
-  runway.quad(corner(g.x - 5, p.minZ + 2), corner(g.x + 5, p.minZ + 2), corner(g.x + 5, p.maxZ), corner(g.x - 5, p.maxZ), '#d6455d');
+  const far = g.z - 1.2, near = p.maxZ - 2;
+  runway.quad(corner(g.x - 5, far), corner(g.x + 5, far), corner(g.x + 5, near), corner(g.x - 5, near), '#d6455d');
+  for (const [x0, z0, x1, z1] of [[g.x - 5, far, g.x - 4.7, near], [g.x + 4.7, far, g.x + 5, near], [g.x - 4.7, near - 0.3, g.x + 4.7, near], [g.x - 4.7, far, g.x + 4.7, far + 0.3]]) {
+    paint.quad(corner(x0, z0), corner(x1, z0), corner(x1, z1), corner(x0, z1), '#8f1f30');
+  }
   for (let i = 0; i < 10; i++) for (let j = 0; j < 2; j++) {
     const x = g.x - 5 + i, z = g.z + 3 + j;
     paint.quad(corner(x, z), corner(x + 1, z), corner(x + 1, z + 1), corner(x, z + 1), (i + j) % 2 ? '#212529' : '#f8f9fa');
@@ -260,17 +266,18 @@ function chainLink(): THREE.CanvasTexture {
 }
 
 /**
- * Chain-link fencing, as one mesh: a panel from (ax, az) to (bx, bz) for each, `h` high, seen from
- * either side, its wire starting `u` m along (0 if not said): a run of panels gives each where the last left off.
+ * Chain-link fencing, as one mesh: a panel from (ax, az) to (bx, bz) for each, `h` high from `y` up (the
+ * ground if not said), seen from either side, its wire starting `u` m along (0 if not said): a run of
+ * panels gives each where the last left off.
  */
-function fencing(panels: { ax: number; az: number; bx: number; bz: number; h: number; u?: number }[]): THREE.Mesh {
+function fencing(panels: { ax: number; az: number; bx: number; bz: number; h: number; u?: number; y?: number }[]): THREE.Mesh {
   const pos: number[] = [], uv: number[] = [], norm: number[] = [];
   const tile = LINK * 8;
   for (const p of panels) {
     const len = Math.hypot(p.bx - p.ax, p.bz - p.az);
     const nx = (p.bz - p.az) / len, nz = -(p.bx - p.ax) / len;
-    const u = p.u ?? 0;
-    const c = [[p.ax, 0, p.az, u, 0], [p.bx, 0, p.bz, u + len, 0], [p.bx, p.h, p.bz, u + len, p.h], [p.ax, p.h, p.az, u, p.h]];
+    const u = p.u ?? 0, y = p.y ?? 0;
+    const c = [[p.ax, y, p.az, u, 0], [p.bx, y, p.bz, u + len, 0], [p.bx, y + p.h, p.bz, u + len, p.h], [p.ax, y + p.h, p.az, u, p.h]];
     for (const i of [0, 1, 2, 0, 2, 3]) {
       pos.push(c[i][0], c[i][1], c[i][2]);
       uv.push(c[i][3] / tile, c[i][4] / tile);
@@ -532,6 +539,63 @@ function crowdOf(spots: THREE.Matrix4[]): { bodies: THREE.InstancedMesh; heads: 
   return { bodies, heads, base: spots };
 }
 
+/** The teams in the pit garages: named for the sponsors on the boards, each in its colour. */
+const TEAMS: [name: string, color: string][] = [
+  ['ZOOMY COLA', '#e63946'], ['NIMBUS', '#118ab2'], ['BYTE BURGER', '#8338ec'], ['PIXEL PETROL', '#06d6a0'],
+  ['MEGA MANGO', '#f4a261'], ['ROCKET', '#ef476f'], ['CHECKERED', '#343a40'], ['TURBO', '#3a86ff'],
+];
+/** Kenney's pit garage at TILE: two bays either side of a pillar in its middle, and how high its opening and its front are (m). */
+const BAY = { off: 1.83, w: 2.9, open: 3.16, top: 4.35, front: 4.36 } as const;
+
+/**
+ * The fronts of the pit garages (Kenney's, centred at `xs` along z = `z`, facing the paddock): over each
+ * bay its team's board, the car's number in a white disc and the team's name in the team's colour (all
+ * on one canvas, one mesh); and a roller door in each, part way down, into `solid`.
+ */
+function garageFronts(xs: number[], z: number, solid: THREE.Group): THREE.Mesh {
+  const bays = xs.flatMap((x) => [x - BAY.off, x + BAY.off]);
+  const CW = 256, CH = 64, COLS = 4;
+  const c = document.createElement('canvas');
+  c.width = CW * COLS;
+  c.height = THREE.MathUtils.ceilPowerOfTwo(CH * Math.ceil(bays.length / COLS));
+  const g = c.getContext('2d')!;
+  g.textBaseline = 'middle';
+  const front = z + BAY.front + 0.02, h = BAY.top - BAY.open - 0.44;
+  const geos = bays.map((x, k) => {
+    const [name, color] = TEAMS[Math.floor(k / 2) % TEAMS.length];
+    const cx = (k % COLS) * CW, cy = Math.floor(k / COLS) * CH;
+    g.fillStyle = color;
+    g.fillRect(cx, cy, CW, CH);
+    g.fillStyle = '#f8f9fa';
+    g.fillRect(cx, cy + CH - 6, CW, 6);
+    g.beginPath();
+    g.arc(cx + 34, cy + 29, 24, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = color;
+    g.textAlign = 'center';
+    g.font = '900 30px system-ui, sans-serif';
+    g.fillText(String(k + 1), cx + 34, cy + 31);
+    g.fillStyle = '#f8f9fa';
+    g.textAlign = 'left';
+    g.font = `900 ${name.length > 10 ? 24 : 28}px system-ui, sans-serif`;
+    g.fillText(name, cx + 68, cy + 31, CW - 78);
+    const plane = new THREE.PlaneGeometry(BAY.w, h);
+    const uv = plane.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (cx + uv.getX(i) * CW) / c.width, 1 - (cy + (1 - uv.getY(i)) * CH) / c.height);
+    plane.translate(x, BAY.open + 0.22 + h / 2, front);
+    // The door, rolled part way down, set back in the opening.
+    box(solid, BAY.w, 1.25, 0.06, '#c9ced6', x, BAY.open - 1.25, front - 0.35, 0, false);
+    box(solid, BAY.w, 0.08, 0.1, '#868e96', x, BAY.open - 1.29, front - 0.35, 0, false);
+    return plane;
+  });
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const m = new THREE.Mesh(mergeAll(geos), new THREE.MeshToonMaterial({ map: tex, gradientMap: gradientMap() }));
+  m.receiveShadow = true;
+  return m;
+}
+
 /** The circuit, built the first time anyone goes there. */
 export function buildCircuit(): Circuit {
   const group = new THREE.Group();
@@ -555,7 +619,8 @@ export function buildCircuit(): Circuit {
   // Grass all round, mown in stripes (the shader's: see surface.ts 'lawn').
   grass.quad(g(far.minX - 400, far.minZ - 400), g(far.maxX + 400, far.minZ - 400), g(far.maxX + 400, far.maxZ + 400), g(far.minX - 400, far.maxZ + 400), '#8ccf6a');
   const P = PADDOCK;
-  paddock.quad(g(P.minX, P.minZ), g(P.maxX, P.minZ), g(P.maxX, P.maxZ), g(P.minX, P.maxZ), '#a4a8b3');
+  // On under the garages, so there's no strip of grass between them and the paddock.
+  paddock.quad(g(P.minX, GARAGES.minZ - 1), g(P.maxX, GARAGES.minZ - 1), g(P.maxX, P.maxZ), g(P.minX, P.maxZ), '#a4a8b3');
   // Parking bays in front of the garages, where the circuit's cars wait.
   for (const def of CIRCUIT_CARS) {
     for (const dx of [-3, 3]) paint.quad(g(def.x + dx - 0.12, def.z - 3), g(def.x + dx + 0.12, def.z - 3), g(def.x + dx + 0.12, def.z + 3), g(def.x + dx - 0.12, def.z + 3), '#f8f9fa');
@@ -573,18 +638,20 @@ export function buildCircuit(): Circuit {
     marks.flat(decalUV('limit'), x + dir * 6, 0, laneZ + 4.5, 2.4, 2.4, (dir * Math.PI) / 2);
   }
   const step = L / points.length;
-  const shade = (k: number) => new THREE.Color('#5d616d').multiplyScalar(1 - 0.28 * k);
+  const shade = (k: number) => new THREE.Color('#5d616d').multiplyScalar(1 - 0.42 * k);
   /** Whether `s` m round is in a hard braking zone: the 80 m into a corner you brake for. */
   const brakingZone = (s: number) => corners.some((c) => c.brake && s > c.s0 - 80 && s <= c.s0 + 10);
-  const ACROSS = 8;
+  const ACROSS = 16;
   for (let i = 0; i < points.length; i++) {
     const s0 = i * step, s1 = s0 + step;
     const k = bend(s0 + step / 2);
-    // The asphalt, in strips across, darker where the rubber's down along the racing line (and heavier in the braking zones).
+    // The asphalt, in strips across, darker where the rubber's down along the racing line (and heavier in the
+    // braking zones), and laid in sections a few hundred metres long, each a shade of its own where it was resurfaced.
     const heavy = brakingZone(s0) ? 1.35 : 1;
+    const laid = 0.94 + 0.12 * ((Math.sin(Math.floor((s0 + step / 2) / 230) * 12.9898) * 43758.5453) % 1 + 1) % 1;
     for (let j = 0; j < ACROSS; j++) {
       const d0 = -EDGE + (j * 2 * EDGE) / ACROSS, d1 = d0 + (2 * EDGE) / ACROSS;
-      const c = (s: number, d: number) => shade(Math.min(1, rubber(s, d) * heavy + 0.08));
+      const c = (s: number, d: number) => shade(Math.min(1, rubber(s, d) * heavy + 0.08)).multiplyScalar(laid);
       asphalt.band(s0, s1, d0, d1, 0, [c(s0, d0), c(s1, d0), c(s1, d1), c(s0, d1)]);
     }
     // White lines inside the edges: stopping either side of the chequered start line (s -1 to 1), which they'd lie on.
@@ -610,32 +677,46 @@ export function buildCircuit(): Circuit {
       const out = c.turn > 0 ? 1 : -1;
       const slow = c.r < 70;
       const a = EDGE + TRACK.curb, b = a + (slow ? 10 : 13);
-      (slow ? gravel : runoff).band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, 0, slow ? '#e4d3a0' : '#8f949e');
+      (slow ? gravel : runoff).band(s0, s1, out > 0 ? a : -b, out > 0 ? b : -a, 0, slow ? '#c2baa6' : '#8f949e');
     }
   }
-  // Skid marks into the corners you brake for: pairs of tyres' streaks along the racing line, thinning out at their ends.
+  // Tyre marks: black streaks laid along the track, each a run of decals from `from` for `len` m, `off(s)`
+  // m off the centre line, `w` wide, narrowing to nothing over `fade` m at either end (where the tyre
+  // bit, and where it let go).
   const skid = decalUV('skid');
   const sr = rng(4242);
+  const streak = (from: number, len: number, off: (s: number) => number, w = 0.28, fade = 8) => {
+    for (let s = from; s < from + len; s += 2) {
+      const a = pointAt(s), b = pointAt(s + 2);
+      const at = (p: typeof a, dd: number) => [p.x + p.tz * dd, 0, p.z - p.tx * dd];
+      const da = off(s), db = off(s + 2);
+      const half = (t: number) => (w / 2) * Math.max(0, Math.min(1, (t - from) / fade, (from + len - t) / fade));
+      const ha = half(s), hb = half(s + 2);
+      marks.quad(at(a, da - ha), at(a, da + ha), at(b, db + hb), at(b, db - hb), skid, UP);
+    }
+  };
   /** How far off the centre line a car's middle can be with both its tyres' streaks on the asphalt, inside the white lines. */
   const mid = EDGE - 0.8 - 0.8;
   for (const c of corners) {
-    if (!c.brake) continue;
-    for (let n = 0; n < 4; n++) {
+    // Into the corners you brake for: pairs of locked tyres' streaks along the racing line.
+    if (c.brake) for (let n = 0; n < 5; n++) {
       const from = c.s0 - 85 + sr() * 30, len = 30 + sr() * 35, wander = (sr() - 0.5) * 2.4;
-      for (const wheel of [-0.8, 0.8]) {
-        // Where the streak is across the track `s` m round, so each piece starts where the last one ended.
-        const off = (s: number) => THREE.MathUtils.clamp(racingLine(s) + wander + Math.sin(s * 0.11 + n) * 0.15, -mid, mid) + wheel;
-        for (let s = from; s < from + len; s += 2) {
-          const a = pointAt(s), b = pointAt(s + 2);
-          const at = (p: typeof a, dd: number) => [p.x + p.tz * dd, 0, p.z - p.tx * dd];
-          const da = off(s), db = off(s + 2);
-          // Narrowing to nothing at either end: where the tyre locked, and where it let go.
-          const half = (t: number) => 0.14 * Math.max(0, Math.min(1, (t - from) / 8, (from + len - t) / 8));
-          const ha = half(s), hb = half(s + 2);
-          marks.quad(at(a, da - ha), at(a, da + ha), at(b, db + hb), at(b, db - hb), skid, UP);
-        }
-      }
+      for (const wheel of [-0.8, 0.8]) streak(from, len, (s) => THREE.MathUtils.clamp(racingLine(s) + wander + Math.sin(s * 0.11 + n) * 0.15, -mid, mid) + wheel);
     }
+    // Out of the slow ones: wheelspin, the rear stepping out toward the outside of the exit and caught.
+    if (c.brake || c.r < 70) for (let n = 0; n < 3; n++) {
+      const from = (c.s0 + c.s1) / 2 + sr() * 6, len = 18 + sr() * 16, wander = (sr() - 0.5) * 1.6;
+      const out = c.turn > 0 ? 1 : -1;
+      for (const wheel of [-0.8, 0.8]) streak(from, len, (s) => THREE.MathUtils.clamp(racingLine(s) + wander + out * 0.9 * Math.sin(Math.min(1, (s - from) / len) * Math.PI), -mid, mid) + wheel, 0.24, 5);
+    }
+  }
+  // Patches down the lap, where the asphalt's been dug out and relaid: a shade darker, with sealed edges.
+  const patch = decalUV('patch');
+  for (let s = 40 + sr() * 60; s < L - 40; s += 80 + sr() * 120) {
+    const len = 3 + sr() * 7, w = 2 + sr() * 3, d = (sr() - 0.5) * (2 * EDGE - w - 1.4);
+    const a = pointAt(s), b = pointAt(s + len);
+    const at = (p: typeof a, dd: number) => [p.x + p.tz * dd, 0, p.z - p.tx * dd];
+    marks.quad(at(a, d - w / 2), at(a, d + w / 2), at(b, d + w / 2), at(b, d - w / 2), patch, UP);
   }
   // The chequered start line, and the grid's boxes behind it: a bar across the front of each, its sides running back, and its
   // number just ahead of the bar, where the car parked in the box doesn't cover it (the car's middle is at np.s).
@@ -649,14 +730,19 @@ export function buildCircuit(): Circuit {
     for (const side of [-1, 1]) paint.band(np.s + 1.4, np.s + 2.9, np.d + side * 1.4 - 0.12, np.d + side * 1.4 + 0.12, 0, '#f8f9fa');
     const num = pointAt(np.s + 3.6);
     marks.flat(decalUV('digit', slot), num.x + num.tz * np.d, 0, num.z - num.tx * np.d, 1.1, 1.1, Math.atan2(num.tx, num.tz));
+    // Black from the starts: the rear tyres spinning away from the box, a few launches' worth, over the number.
+    for (let n = 0; n < 3; n++) {
+      const len = 5 + sr() * 6, nudge = (sr() - 0.5) * 0.25;
+      for (const wheel of [-0.8, 0.8]) streak(np.s - 1.3, len, () => np.d + wheel + nudge, 0.26, 3);
+    }
   }
   group.add(
     grass.mesh(ground('lawn'), 3),
     paddock.mesh(ground('slab'), 1.5),
     gravel.mesh(ground('gravel'), 1.5),
     runoff.mesh(ground('runoff'), 1.5),
-    asphalt.mesh(ground('asphalt')),
-    kerbs.mesh(),
+    asphalt.mesh(ground('track')),
+    kerbs.mesh(ground('concrete')),
     paint.mesh(toonVertexUnique(), -1),
     marks.mesh(),
   );
@@ -694,11 +780,28 @@ export function buildCircuit(): Circuit {
       }
     }
   }
-  // The pit wall: concrete, a red top and the sponsors along it (below).
+  // The pit wall: concrete, a red top, the sponsors along both its faces (below), a debris fence over it
+  // (with the catch fencing, below), and the teams' stands on the pit lane's side: a desk of screens
+  // under an awning in the team's colour.
   const W = PIT_WALL;
-  box(solid, W.maxX - W.minX, 1.1, W.maxZ - W.minZ, '#d6d8de', (W.minX + W.maxX) / 2, 0, (W.minZ + W.maxZ) / 2);
-  box(solid, W.maxX - W.minX, 0.12, W.maxZ - W.minZ + 0.1, '#e63946', (W.minX + W.maxX) / 2, 1.1, (W.minZ + W.maxZ) / 2);
-  colliders.push({ ...W, top: 1.2 });
+  const wallZ = (W.minZ + W.maxZ) / 2;
+  box(solid, W.maxX - W.minX, 1.1, W.maxZ - W.minZ, '#d6d8de', (W.minX + W.maxX) / 2, 0, wallZ);
+  box(solid, W.maxX - W.minX, 0.12, W.maxZ - W.minZ + 0.1, '#e63946', (W.minX + W.maxX) / 2, 1.1, wallZ);
+  colliders.push({ ...W, top: 4.2 });
+  const teams = ['#e63946', '#118ab2', '#ffd166', '#06d6a0', '#8338ec', '#f78c6b', '#212529'];
+  for (let x = W.minX + 14, k = 0; x < W.maxX - 10; x += 24, k++) {
+    const z = W.minZ - 0.55;
+    box(solid, 3.2, 1.05, 1, '#343a40', x, 0, z);
+    for (const dx of [-0.8, 0.8]) {
+      box(solid, 1.1, 0.62, 0.08, '#1d1f24', x + dx, 1.05, W.minZ - 0.2);
+      box(solid, 0.98, 0.5, 0.02, '#4cc9f0', x + dx, 1.11, W.minZ - 0.25, 0, false);
+    }
+    // The awning, out over the desk on two poles.
+    for (const dx of [-1.6, 1.6]) box(solid, 0.08, 2.5, 0.08, '#adb5bd', x + dx, 0, W.minZ - 1.9);
+    box(solid, 3.6, 0.1, 2.1, teams[k % teams.length], x, 2.5, W.minZ - 1.05);
+    // Solid out to its poles, so a car in the pit lane doesn't drive through them.
+    colliders.push({ minX: x - 1.65, maxX: x + 1.65, minZ: W.minZ - 1.95, maxZ: W.minZ, top: 2.6 });
+  }
   // The garages' block, and the grandstands' (from the layout below), before their models come in.
   colliders.push({ ...GARAGES, top: 5.6 });
 
@@ -738,14 +841,22 @@ export function buildCircuit(): Circuit {
   const home = gate(CIRCUIT_GATE, '🏙️ Back to the city', solid, colliders, 0);
   group.add(home.sign, home.shimmer);
 
-  // ---- The layout: grandstands (solid to walk into), props.
+  // ---- The layout: grandstands (solid to walk into), props; the pit garages' boards and doors.
   const { stands, props } = layout();
+  group.add(garageFronts(props.filter((p) => p.prop === 'garage').map((p) => p.x), (GARAGES.minZ + GARAGES.maxZ) / 2, solid));
   for (const s of stands) colliders.push({ minX: s.x - STAND, maxX: s.x + STAND, minZ: s.z - STAND, maxZ: s.z + STAND, top: 6.5 });
 
   // ---- Fences: catch fencing along the barrier in front of the grandstands, and round the grounds (which
   // were only ever colliders). Chain-link on posts, all in one mesh.
-  const panels: { ax: number; az: number; bx: number; bz: number; h: number; u?: number }[] = [];
-  const post = (x: number, z: number, h: number) => box(solid, 0.1, h, 0.1, '#6c757d', x, 0, z, 0, false);
+  const panels: { ax: number; az: number; bx: number; bz: number; h: number; u?: number; y?: number }[] = [];
+  const post = (x: number, z: number, h: number, y = 0) => box(solid, 0.1, h, 0.1, '#6c757d', x, y, z, 0, false);
+  // The debris fence along the pit wall, from its top.
+  for (let x = W.minX; x < W.maxX - 0.01; x += 4.4) {
+    const x1 = Math.min(W.maxX, x + 4.4);
+    panels.push({ ax: x, az: wallZ, bx: x1, bz: wallZ, h: 3, y: 1.22, u: x - W.minX });
+    post(x, wallZ, 3.1, 1.22);
+  }
+  post(W.maxX, wallZ, 3.1, 1.22);
   // In panels about 4 m long at fixed places round the lap, each side's taken once however many stands
   // it's in front of: stands side by side share one run, rather than each laying its own over the next's.
   const count = Math.round(L / 4), panel = L / count;
@@ -790,9 +901,16 @@ export function buildCircuit(): Circuit {
   group.add(sky);
 
   // ---- Sponsor boards: on the pit wall, along the barriers across from it, and round the corners.
-  /** `free`: standing on its own at the barriers, with a back and legs (the pit wall's are on the wall). */
-  const boards: { x: number; z: number; rotY: number; banner: number; free?: boolean }[] = [];
-  for (let x = W.minX + 6, k = 0; x < W.maxX - 4; x += 10, k++) boards.push({ x, z: W.maxZ + 0.02, rotY: 0, banner: k });
+  /**
+   * `free`: standing on its own at the barriers, with a back and legs. The pit wall's are on its faces,
+   * end to end down both sides, a size to fit (`w` across, `y` up to its foot: 8 m from 1.1 m up if not said).
+   */
+  const boards: { x: number; z: number; rotY: number; banner: number; free?: boolean; w?: number; y?: number }[] = [];
+  const onWall = Math.floor((W.maxX - W.minX) / 4.4);
+  for (let k = 0; k < onWall; k++) {
+    const x = (W.minX + W.maxX) / 2 + (k - (onWall - 1) / 2) * 4.4;
+    boards.push({ x, z: W.maxZ + 0.02, rotY: 0, banner: k, w: 4.4, y: 0 }, { x, z: W.minZ - 0.02, rotY: Math.PI, banner: k + 2, w: 4.4, y: 0 });
+  }
   /** Not in a grandstand's way. */
   const open = (x: number, z: number) => !stands.some((t) => Math.hypot(t.x - x, t.z - z) < STAND + 1.5);
   for (let s = L - 90, k = 3; s < L + 140; s += 10, k++) {
@@ -820,12 +938,12 @@ export function buildCircuit(): Circuit {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     const geos = mine.map((b) => {
-      const plane = new THREE.PlaneGeometry(8, 2);
+      const plane = new THREE.PlaneGeometry(b.w ?? 8, (b.w ?? 8) / 4);
       // One banner of the four on the sheet, top to bottom.
       const k = b.banner % 4;
       const uv = plane.getAttribute('uv') as THREE.BufferAttribute;
       for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - (k + 1 - uv.getY(i)) / 4);
-      plane.rotateY(b.rotY).translate(b.x, 1.1 + 1, b.z);
+      plane.rotateY(b.rotY).translate(b.x, (b.y ?? 1.1) + (b.w ?? 8) / 8, b.z);
       return plane;
     });
     const merged = new THREE.Mesh(mergeAll(geos), new THREE.MeshToonMaterial({ map: tex, gradientMap: gradient }));

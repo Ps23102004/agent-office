@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DECALS, LINE_COUNT, decalUV, detailPixels } from '../src/client/world/surface.js';
+import { DECALS, LINE_COUNT, decalUV, detailDefines, detailPixels, type Grain } from '../src/client/world/surface.js';
 import { racingLine } from '../src/shared/racingline.js';
 import { TRACK, track } from '../src/shared/circuit.js';
 import { LOT, SIDE_LOT } from '../src/shared/garage.js';
@@ -27,6 +27,43 @@ test('the grain tile is the same every time, centred on mid grey, and seamless w
     }
     assert.ok(seam < inside * 1.6 + S, `channel ${ch}: seam ${seam} vs inside ${inside}`);
   }
+});
+
+test('the ground still has a grain from a car\'s seat: the tile read two mipmaps down, as the shader reads it for further off, varies enough to see', () => {
+  const S = 256, D = 4, n = S / D;
+  const px = detailPixels(S);
+  // Two mipmaps down: each 4 × 4 pixels averaged.
+  const mip = new Float32Array(n * n * 4);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) for (let c = 0; c < 4; c++) mip[((Math.floor(y / D) * n + Math.floor(x / D)) * 4) + c] += px[(y * S + x) * 4 + c] / 255 / (D * D);
+  const vec = (v: string) => v.replace(/vec4\(|\)/g, '').split(',').map(Number);
+  for (const grain of ['asphalt', 'track', 'grass', 'lawn', 'gravel', 'sand', 'slab', 'paving', 'concrete'] as Grain[]) {
+    const mid = vec(detailDefines(grain).SKY_DETAIL_MID);
+    let sum = 0, sq = 0;
+    for (let i = 0; i < n * n; i++) {
+      let k = 0;
+      for (let c = 0; c < 4; c++) k += (mip[i * 4 + c] - 0.5) * mid[c];
+      sum += k;
+      sq += k * k;
+    }
+    const std = Math.sqrt(sq / (n * n) - (sum / (n * n)) ** 2);
+    // A shade either way of 5% or more: below that it reads as flat colour (as it did).
+    assert.ok(std >= 0.05, `${grain}: ${std.toFixed(3)}`);
+  }
+});
+
+test('each grain\'s shader defines are numbers, and the city\'s ground takes asphalt\'s, paving\'s and grass\'s, extras and all', () => {
+  const vec = /^vec4\( (-?\d+\.\d{3}, ){3}-?\d+\.\d{3} \)$/;
+  for (const grain of ['asphalt', 'track', 'runoff', 'concrete', 'slab', 'paving', 'grass', 'lawn', 'gravel', 'sand', 'ground', 'wall', 'panels', 'roof', 'shingles', 'container'] as Grain[]) {
+    const d = detailDefines(grain);
+    assert.match(d.SKY_DETAIL_MIX, vec, grain);
+    assert.match(d.SKY_DETAIL_MID, vec, grain);
+    for (const [k, v] of Object.entries(d)) if (k !== 'SKY_DETAIL' && !k.endsWith('_MIX') && !k.endsWith('_MID')) assert.ok(Number.isFinite(+v), `${grain} ${k}=${v}`);
+  }
+  const ground = detailDefines('ground');
+  for (const k of ['ASPHALT', 'PAVE', 'GRASS']) for (const m of ['MIX', 'MID']) assert.match(ground[`SKY_DETAIL_${k}_${m}`], vec, `${k}_${m}`);
+  assert.deepEqual([ground.SKY_DETAIL_CHIPS, ground.SKY_DETAIL_TAR, ground.SKY_DETAIL_DRY, ground.SKY_DETAIL_JOINTS], [detailDefines('asphalt').SKY_DETAIL_CHIPS, detailDefines('asphalt').SKY_DETAIL_TAR, detailDefines('grass').SKY_DETAIL_DRY, detailDefines('paving').SKY_DETAIL_JOINTS]);
+  // A wall's grain leaves the ground's extras out, so its shader doesn't run them.
+  for (const k of ['CHIPS', 'TAR', 'DRY', 'AUTO']) assert.equal(detailDefines('wall')[`SKY_DETAIL_${k}`], undefined, k);
 });
 
 test('every decal has a cell of its own in the atlas', () => {
@@ -79,6 +116,12 @@ test('the roads\' decals lie on the roads, clear of the crossings and of the gar
     // ...and not in an intersection or on its crossings.
     assert.ok(Math.max(offX, offZ) > 9, `${d.decal} at ${d.x}, ${d.z} is in a crossing`);
     for (const b of [LOT, SIDE_LOT]) assert.ok(!(d.x > b.minX && d.x < b.maxX && d.z > b.minZ && d.z < b.maxZ), `${d.decal} under a lot`);
+  }
+  // Patches lie in a lane, clear of the line down the middle (they used to sprawl over it, a big dark slab on the road).
+  for (const p of list.filter((d) => d.decal === 'patch')) {
+    const alongX = Math.abs(Math.sin(p.rotY)) > 0.5;
+    const across = alongX ? p.z - (STREET_Z + Math.round((p.z - STREET_Z) / PERIOD) * PERIOD) : p.x - (STREET_X + Math.round((p.x - STREET_X) / PERIOD) * PERIOD);
+    assert.ok(Math.abs(across) - p.w / 2 > 0.2 && Math.abs(across) + p.w / 2 < ROAD_W / 2 - 0.3, `patch at ${p.x}, ${p.z}: ${across.toFixed(2)} across, ${p.w.toFixed(2)} wide`);
   }
   // Arrows point the way their lane's traffic goes: right-hand traffic, so the lane's on the right of the arrow.
   const arrows = list.filter((d) => d.decal === 'arrow');

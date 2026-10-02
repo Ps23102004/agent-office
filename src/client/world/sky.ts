@@ -140,10 +140,12 @@ vec3 skyLampsAt( vec3 p, vec3 n ) {
 /**
  * A surface's grain (surface.ts detail, which says what's wanted with SKY_DETAIL_* defines): the
  * detail tile read where the surface is in the world, the ground in plan and a wall along itself
- * and up, so nothing needs UVs for it. Its channels, mixed as the surface says, and stains at large
- * over that; and its extras: mown stripes, joints between slabs, a container's corrugations and
- * rust, rain streaks and grime down walls, rows of roof tiles. Each fades out where it would
- * shimmer, far off. `sdStain` is left for the puddles (below).
+ * and up, so nothing needs UVs for it. Read twice: at its own size for up close, and five times that
+ * (turned, so the two don't repeat in step) for what's still there from a car's seat, where the
+ * first has gone to grey; and stains at large over that. Its extras: chips of stone and crack sealant
+ * in asphalt, dry patches and mown stripes in grass, slabs with joints and a tone each, a container's
+ * corrugations and rust, rain streaks and grime down walls, rows of roof tiles. Each fades out where
+ * it would shimmer, far off. `sdStain` is left for the puddles (below).
  */
 const DETAIL = /* glsl */ `
 #ifdef SKY_DETAIL
@@ -153,24 +155,72 @@ float sdStain = 0.0;
   bool sdFloor = sdA.y > 0.6;
   vec2 sdP = sdFloor ? vSkyWorld.xz : vec2( sdA.x > sdA.z ? vSkyWorld.z : vSkyWorld.x, vSkyWorld.y );
   vec4 sdF = texture2D( skyDetail, sdP * SKY_DETAIL_FREQ ) - 0.5;
+  // Two mipmaps down: its speckle averaged away, leaving its clumps and blotches.
+  vec4 sdM = texture2D( skyDetail, mat2( 0.96, -0.28, 0.28, 0.96 ) * sdP * ( SKY_DETAIL_FREQ * 0.21 ) + 0.43, 2.0 ) - 0.5;
   sdStain = texture2D( skyDetail, sdP * 0.027 + 0.31 ).a - 0.5;
   vec4 sdW = SKY_DETAIL_MIX;
-  #ifdef SKY_DETAIL_AUTO
-    vec3 sdC = material.diffuseColor;
-    float sdGreen = smoothstep( 0.03, 0.1, sdC.g - max( sdC.r, sdC.b ) );
-    float sdDark = 1.0 - smoothstep( 0.05, 0.16, dot( sdC, vec3( 0.3, 0.59, 0.11 ) ) );
-    sdW = mix( mix( vec4( 0.16, 0.0, 0.03, 0.0 ), vec4( 0.34, 0.0, 0.07, 0.0 ), sdDark ), vec4( 0.04, 0.44, 0.0, 0.0 ), sdGreen );
+  vec4 sdV = SKY_DETAIL_MID;
+  float sdChips = 0.0, sdTar = 0.0, sdDry = 0.0, sdJoint = 0.0;
+  #ifdef SKY_DETAIL_CHIPS
+    sdChips = SKY_DETAIL_CHIPS;
   #endif
-  float sdK = 1.0 + dot( sdF, sdW ) + sdStain * SKY_DETAIL_MACRO;
+  #ifdef SKY_DETAIL_TAR
+    sdTar = SKY_DETAIL_TAR;
+  #endif
+  #ifdef SKY_DETAIL_DRY
+    sdDry = SKY_DETAIL_DRY;
+  #endif
+  #ifdef SKY_DETAIL_JOINTS
+    sdJoint = 1.0;
+  #endif
+  #ifdef SKY_DETAIL_AUTO
+  {
+    // Asphalt where it's dark, grass where it's green, paving where it's pale and plain (not the white or yellow paint).
+    vec3 sdC = material.diffuseColor;
+    float sdLuma = dot( sdC, vec3( 0.3, 0.59, 0.11 ) );
+    float sdGreen = smoothstep( 0.03, 0.1, sdC.g - max( sdC.r, sdC.b ) );
+    float sdDark = ( 1.0 - smoothstep( 0.05, 0.16, sdLuma ) ) * ( 1.0 - sdGreen );
+    float sdPave = ( 1.0 - sdDark ) * ( 1.0 - sdGreen ) * ( 1.0 - smoothstep( 0.72, 0.8, sdLuma ) ) * ( 1.0 - smoothstep( 0.2, 0.3, max( sdC.r, max( sdC.g, sdC.b ) ) - min( sdC.r, min( sdC.g, sdC.b ) ) ) );
+    sdW = mix( mix( SKY_DETAIL_PAVE_MIX, SKY_DETAIL_ASPHALT_MIX, sdDark ), SKY_DETAIL_GRASS_MIX, sdGreen );
+    sdV = mix( mix( SKY_DETAIL_PAVE_MID, SKY_DETAIL_ASPHALT_MID, sdDark ), SKY_DETAIL_GRASS_MID, sdGreen );
+    sdChips *= sdDark;
+    sdTar *= sdDark;
+    sdDry *= sdGreen;
+    sdJoint *= sdPave;
+  }
+  #endif
+  float sdK = 1.0 + dot( sdF, sdW ) + dot( sdM, sdV ) + sdStain * SKY_DETAIL_MACRO;
+  #ifdef SKY_DETAIL_CHIPS
+    // Chips of light stone in asphalt, where the fine grain peaks (gone, with it, far off).
+    sdK += sdChips * smoothstep( 0.24, 0.34, sdF.r );
+  #endif
+  #ifdef SKY_DETAIL_TAR
+  {
+    // Crack sealant: dark lines snaking along where the mid-sized stains cross their middle, in patches of road.
+    float sdFw = fwidth( sdM.a );
+    sdK *= 1.0 - sdTar * ( 1.0 - smoothstep( 0.006, 0.006 + sdFw * 1.5, abs( sdM.a ) ) ) * smoothstep( 0.04, 0.12, sdStain ) * ( 1.0 - smoothstep( 0.01, 0.03, sdFw ) );
+  }
+  #endif
+  #ifdef SKY_DETAIL_DRY
+    // Grass gone dry and straw-coloured in patches.
+    material.diffuseColor = mix( material.diffuseColor, material.diffuseColor * vec3( 1.22, 1.1, 0.6 ), sdDry * smoothstep( 0.02, 0.22, sdStain + sdM.a * 0.6 ) );
+  #endif
   #ifdef SKY_DETAIL_STRIPES
-    sdK *= 1.0 + 0.05 * sign( fract( vSkyWorld.x / ( 2.0 * SKY_DETAIL_STRIPES ) ) - 0.5 );
+  {
+    // Mown stripes, on the diagonal (so they show whichever way you're heading): a square wave, softened by a pixel so it doesn't crawl.
+    float sdQ = sin( 3.14159 * ( vSkyWorld.x + vSkyWorld.z ) * 0.7071 / SKY_DETAIL_STRIPES );
+    sdK *= 1.0 + 0.17 * clamp( sdQ / max( fwidth( sdQ ) * 1.5, 0.02 ), -1.0, 1.0 );
+  }
   #endif
   #ifdef SKY_DETAIL_JOINTS
   {
+    vec2 sdCell = floor( sdP / SKY_DETAIL_JOINTS );
     vec2 sdJ = abs( fract( sdP / SKY_DETAIL_JOINTS ) - 0.5 );
     float sdE = ( 0.5 - max( sdJ.x, sdJ.y ) ) * SKY_DETAIL_JOINTS;
     float sdFw = fwidth( sdE );
-    sdK *= 1.0 - 0.32 * ( 1.0 - smoothstep( 0.015, 0.015 + sdFw * 1.5, sdE ) ) * ( 1.0 - smoothstep( 0.05, 0.2, sdFw ) );
+    // Each slab a shade of its own, and a dark joint round it.
+    sdK *= 1.0 + sdJoint * 0.1 * ( fract( sin( dot( sdCell, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ) - 0.5 );
+    sdK *= 1.0 - sdJoint * 0.38 * ( 1.0 - smoothstep( 0.012, 0.012 + sdFw * 1.5, sdE ) ) * ( 1.0 - smoothstep( 0.05, 0.2, sdFw ) );
   }
   #endif
   #ifdef SKY_DETAIL_RIBS
@@ -198,7 +248,7 @@ float sdStain = 0.0;
   #ifdef SKY_DETAIL_RUST
     material.diffuseColor = mix( material.diffuseColor, vec3( 0.3, 0.12, 0.05 ), SKY_DETAIL_RUST * smoothstep( 0.12, 0.34, sdF.a + sdStain * 0.6 ) );
   #endif
-  material.diffuseColor *= sdK;
+  material.diffuseColor *= max( sdK, 0.2 );
 }
 #endif
 `;

@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { BALCONY, FLOOR, GOLF_HOLE, GOLF_TEE, ROAD, SLAB, STOREY, STREET_Y, WALL_HEIGHT, WALL_T } from '../../shared/layout';
 import type { Collider, Interactable } from './office';
 import { bulb, neighbourBoxes, streetLamp, tree, type NightParts } from './outside';
-import { disposeSprite, mergeByMaterial, mesh, textPlane, textSprite, toon } from './toon';
+import { disposeSprite, mergeByMaterial, mesh, textPlane, textSprite, toon, toonUnique } from './toon';
+import { detail } from './surface';
 
 // Golf off the balcony: the tee out there (a square of turf, a ball on a tee, a bag of clubs), the
 // hole across the street it's hit at (a green with a flag on it, a fairway up to it, bunkers), and
@@ -213,9 +214,10 @@ export function buildGreen(ground: THREE.Group, colliders: Collider[], night: Ni
   const parts = new THREE.Group();
   parts.add(flat(new THREE.CircleGeometry(GOLF_HOLE.green + FRINGE, 48), toon('#6cc24a'), px, G + 0.008, pz));
   parts.add(flat(new THREE.CircleGeometry(GOLF_HOLE.green, 48), toon('#9be07a'), px, G + 0.012, pz));
+  const sand = detail(toonUnique('#f3e3b3'), 'sand');
   for (const [bx, bz, r] of BUNKERS) {
     parts.add(flat(new THREE.CircleGeometry(r + 0.12, 32), toon('#d9c48a'), bx, G + 0.016, bz));
-    parts.add(flat(new THREE.CircleGeometry(r, 32), toon('#f3e3b3'), bx, G + 0.02, bz));
+    parts.add(flat(new THREE.CircleGeometry(r, 32), sand, bx, G + 0.02, bz));
   }
   // The cup (bigger than a real one, like the ball) with a white rim.
   parts.add(flat(new THREE.CircleGeometry(0.17, 20), toon('#fffaf3'), px, G + 0.016, pz));
