@@ -6,7 +6,7 @@ import { FLAG_COLOURS, type Bird, type Dress } from '../../shared/dressing';
 import { decorTicker } from '../quality';
 import { toon } from './toon';
 import { busStops } from './streetlife';
-import { PHASE, clock, col, focus, instances, m4, one, q, tickClock, up, windy } from './dressing';
+import { PHASE, clock, col, focus, instances, m4, one, poleOnly, q, tickClock, up, windy } from './dressing';
 import signStreetUrl from '../models/dressing/road-sign-street.glb?url';
 import signWarningUrl from '../models/dressing/road-sign-warning.glb?url';
 import coneUrl from '../models/dressing/construction-cone.glb?url';
@@ -28,6 +28,10 @@ const KIT: Record<Dress['kind'], { url: string | ((d: Dress) => string); scale: 
   parasol: { url: (d) => (d.v ? parasolBUrl : parasolAUrl), scale: 6, kit: 'commercial' },
   flag: null,
 };
+
+/** The street sign's pole (Kenney's model at its scale): how far its collars reach from the axis, and where its top is (the blades above it are dropped, see poleOnly), and the name blade's height, seated on that top. */
+const SIGN_POLE = { reach: 0.14, top: 2.38 } as const;
+const NAME_Y = 2.6;
 
 /** A 1-pixel image: the files' own atlases aren't decoded (each would be its own copy); the kit's is loaded once, below. */
 const BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -65,6 +69,9 @@ async function kenney(group: THREE.Group, items: Dress[]) {
   const placed = items.filter((d) => KIT[d.kind]);
   // Every file at once, and each kit's atlas once (glTF's UVs want it unflipped).
   const geos = new Map(await Promise.all([...new Set(placed.map(urlOf))].map(async (u) => [u, await piece(u)] as const)));
+  // The street signs get their name on a blade of their own, so they keep the pole only.
+  const sign = geos.get(signStreetUrl);
+  if (sign) geos.set(signStreetUrl, poleOnly(sign, KIT.streetSign!.scale, SIGN_POLE.reach, SIGN_POLE.top));
   const atlas = (url: string) => {
     const t = new THREE.TextureLoader().load(url);
     t.flipY = false;
@@ -135,7 +142,7 @@ function poles(list: { x: number; z: number; h: number }[]): THREE.InstancedMesh
   });
 }
 
-/** The street's name on a green blade above each street sign's pole, its face along the street it names so you read it coming up it. */
+/** The street's name on a green blade seated on top of each street sign's pole, its face along the street it names so you read it coming up it. */
 function nameplates(group: THREE.Group, list: Dress[]) {
   const named = list.filter((d) => d.kind === 'streetSign' && d.name);
   if (!named.length) return;
@@ -166,7 +173,7 @@ function nameplates(group: THREE.Group, list: Dress[]) {
       mat.userData.outlineParameters = { visible: false };
       mats.set(d.name!, mat);
     }
-    const placed = new THREE.PlaneGeometry(2.2, 0.5).rotateY(d.rot + Math.PI / 2).translate(d.x, 2.85, d.z);
+    const placed = new THREE.PlaneGeometry(2.2, 0.5).rotateY(d.rot + Math.PI / 2).translate(d.x, NAME_Y, d.z);
     const list = byName.get(d.name!) ?? [];
     list.push(placed);
     byName.set(d.name!, list);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CHECKPOINTS, CIRCUIT_CARS, CIRCUIT_GATE, CITY_GATE, GARAGES, PADDOCK, PIT_WALL, TRACK, checkpoint, gridPose, nearestProgress, pointAt, surfaceAt, track, type Gate } from '../../shared/circuit';
-import { RACE_PLAZA, rng } from '../../shared/city';
+import { RACE_PLAZA, RUNWAY_RACE, rng } from '../../shared/city';
 import { RACE, type RaceState } from '../../shared/race';
 import { decorTicker } from '../quality';
 import { Fleet, supercar } from './cars';
@@ -140,10 +140,16 @@ export function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Colli
   }
   const label = textPlane(sign, { size: 64, bg: '#ffd166', color: '#2b2d42' });
   label.scale.setScalar(1.6);
-  const face = at(0, -0.9);
-  label.position.set(face.x, y0 + H - 1.2, face.z);
-  // Facing whoever's coming to go through it.
+  // Hung from the beam's front face on two short rods (it used to float 0.75 m below it), facing whoever's coming to go through.
+  const hang = 0.3;
+  const { width: lw, height: lh } = label.geometry.parameters;
+  const face = at(0, -0.47);
+  label.position.set(face.x, y0 + H - hang - (lh * 1.6) / 2, face.z);
   label.rotation.y = g.rotY + Math.PI;
+  for (const side of [-1, 1]) {
+    const rod = at(side * (lw * 0.8 - 0.4), -0.47);
+    box(solid, 0.06, hang + 0.05, 0.06, '#adb5bd', rod.x, H - hang, rod.z, g.rotY, false);
+  }
   const shimmer = new THREE.Mesh(
     new THREE.PlaneGeometry(g.width, H - 0.2),
     new THREE.MeshBasicMaterial({ color: '#9bf6ff', transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }),
@@ -173,7 +179,8 @@ export function buildCityGate(street: number): { group: THREE.Group; colliders: 
   const corner = (x: number, z: number, y = 0.03) => ({ x, y, z });
   ground.quad(corner(p.minX, p.minZ), corner(p.maxX, p.minZ), corner(p.maxX, p.maxZ), corner(p.minX, p.maxZ), '#c9ccd3');
   const g = CITY_GATE;
-  ground.quad(corner(g.x - 5, p.minZ + 2, 0.04), corner(g.x + 5, p.minZ + 2, 0.04), corner(g.x + 5, p.maxZ, 0.04), corner(g.x - 5, p.maxZ, 0.04), '#d6455d');
+  const rw = RUNWAY_RACE;
+  ground.quad(corner(rw.minX, rw.minZ, 0.04), corner(rw.maxX, rw.minZ, 0.04), corner(rw.maxX, rw.maxZ, 0.04), corner(rw.minX, rw.maxZ, 0.04), '#d6455d');
   for (let i = 0; i < 10; i++) for (let j = 0; j < 2; j++) {
     const x = g.x - 5 + i, z = g.z + 3 + j;
     ground.quad(corner(x, z, 0.05), corner(x + 1, z, 0.05), corner(x + 1, z + 1, 0.05), corner(x, z + 1, 0.05), (i + j) % 2 ? '#212529' : '#f8f9fa');

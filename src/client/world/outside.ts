@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ELEVATOR, ELEVATOR_FRONT, FLOOR, OFFICE_TREES, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
-import { LOT, SIDE_LOT } from '../../shared/garage';
+import { LOT_PAVING } from '../../shared/garage';
 import { NEIGHBOURS, neighbourArea, neighbourFacing } from '../../shared/city';
 import type { Collider } from './office';
 import { buildStreetCity } from './city';
@@ -288,13 +288,10 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
   // island's beach (walk into the sea and you're put back on it: main.ts).
   colliders.push({ minX: -700, maxX: 700, minZ: -700, maxZ: 700, bottom: G - 1, top: G });
 
-  // The lot in front of the garage, out to the sidewalk, and the one down its east side.
-  for (const [b, y] of [
-    [LOT, G - 0.01],
-    [SIDE_LOT, G - 0.012],
-  ] as const) {
-    group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, y, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
-  }
+  // The lot in front of the garage, out to the sidewalk, and the one down its east side: paved only on the office's own block, not over the avenues.
+  LOT_PAVING.forEach((b, k) => {
+    group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, G - 0.01 - 0.002 * k, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
+  });
 
   const forest = new THREE.Group();
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, citySolids, cityStreetscape, lightPhase as signals, rng } from '../../shared/city';
+import { PERIOD, RADIUS, ROAD_W, STOP_AT, STREET_X, STREET_Z, WALK, cityLayout, citySolids, cityStreetscape, lightPhase as signals, rng } from '../../shared/city';
 import { HAIR_COLORS, SKIN_TONES } from '../../shared/avatar';
 import type { Box } from '../../shared/garage';
 import type { NightParts } from './outside';
@@ -30,8 +30,8 @@ const LANE = ROAD_W / 4;
 /** How far the road's edge is from the street's middle, and the middle of the sidewalk. */
 const CURB = ROAD_W / 2;
 const WALK_OFF = CURB + WALK / 2;
-/** Where a car stops for a light: this far from the middle of the crossing. */
-const STOP = CURB + 1.2;
+/** Where a car stops for a light: its bumper this far from the middle of the crossing, behind the stop line and the zebra (shared/city.ts). */
+const STOP = STOP_AT;
 
 const ACC = 3.2;
 const BRAKE = 7;
@@ -697,8 +697,8 @@ export interface Ring {
   starts: number[];
   crossings: { o0: number; o1: number; axis: Axis; line: number; k: number }[];
 }
-/** How far from a street's middle the walkers keep (the sidewalk's outer part: benches, lamps and bins are inboard). */
-const LAT = 5.65;
+/** How far from a street's middle the walkers keep (the sidewalk's outer part: benches, lamps and bins are inboard): across a street they're on its zebra. */
+export const LAT = 5.65;
 export function makeRing(a: number, b: number, c: number, d: number, cw: boolean): Ring {
   const x0 = crossAt(STREET_X, a) + LAT, x1 = crossAt(STREET_X, b) - LAT, z0 = crossAt(STREET_Z, c) + LAT, z1 = crossAt(STREET_Z, d) - LAT;
   const pts: [number, number][] = cw ? [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] : [[x0, z0], [x0, z1], [x1, z1], [x1, z0]];

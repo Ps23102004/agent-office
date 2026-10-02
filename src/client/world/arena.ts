@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ARENA_BOXES, ARENA_CENTER, ARENA_GATE, ARENA_HALF, CITY_ARENA_GATE, WALL_H, type ArenaBox, type V3 } from '../../shared/arena';
-import { RACE_PLAZA } from '../../shared/city';
+import { RUNWAY_ARENA } from '../../shared/city';
 import { gate, pulse } from './circuit';
 import type { Collider, Interactable } from './office';
 import { mergeColored, mesh, toon } from './toon';
@@ -113,9 +113,11 @@ export function buildArenaCityGate(street: number): { group: THREE.Group; collid
   const solid = new THREE.Group();
   const g = CITY_ARENA_GATE;
   // A dark runway up to it across the plaza's paving, hazard-striped at its edges.
-  const len = RACE_PLAZA.maxX - g.x + 8;
-  block(solid, len, 0.04, g.width, '#3d4147', g.x - len / 2 + 2, 0.02, g.z, false);
-  for (const side of [-1, 1]) for (let k = 0; k < len / 1; k++) block(solid, 1, 0.045, 0.3, k % 2 ? '#212529' : '#f4c430', g.x + 2 - len + k + 0.5, 0.02, g.z + side * (g.width / 2 - 0.15), false);
+  // It stops short of the circuit gate's red runway (RUNWAY_RACE), not over it.
+  const r = RUNWAY_ARENA;
+  const len = r.maxX - r.minX;
+  block(solid, len, 0.04, g.width, '#3d4147', (r.minX + r.maxX) / 2, 0.02, g.z, false);
+  for (const side of [-1, 1]) for (let k = 0; k < len; k++) block(solid, 1, 0.045, 0.3, k % 2 ? '#212529' : '#f4c430', r.minX + k + 0.5, 0.02, g.z + side * (g.width / 2 - 0.15), false);
   const { sign, shimmer } = gate(g, '🎯 Arena', solid, colliders, street, ['#3d4147', '#f4c430']);
   sign.position.y -= street;
   shimmer.position.y -= street;

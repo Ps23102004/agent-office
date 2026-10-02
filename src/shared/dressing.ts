@@ -127,8 +127,8 @@ export function placeDressing(clear: (x: number, z: number, r: number) => boolea
     }
     // 1.2 m of canopy, and the shop's awning 1.5 m out from its wall: the canopy stays out from under it.
     const wall = l.fz ? Math.abs(l.z + l.fz * (l.d / 2) - z) : Math.abs(l.x + l.fx * (l.w / 2) - x);
-    // Off the door's line if it's right in front of one: slid along the front to either side.
-    for (const slide of [0, 2.2, -2.2]) {
+    // Off the door's line if it's right in front of one, or in the way of a meter or a rack: slid along the front to either side.
+    for (const slide of [0, 2.2, -2.2, 4.4, -4.4]) {
       const px = l.fz ? x + slide : x;
       const pz = l.fz ? z : z + slide;
       if (wall >= 2.6 && !inPlaza(px, pz) && ok(px, pz, 1.2, 0.1)) {
