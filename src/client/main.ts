@@ -408,6 +408,8 @@ let circuit: Circuit | null = null;
 function theCircuit(): Circuit {
   if (!circuit) {
     circuit = buildCircuit();
+    // Its cars on its own ground, as the driver's (below): bogging down on the grass isn't braking (their brake lights).
+    circuit.fleet.course = { surfaceAt: (x, z) => (trackSurface(x, z) === 'grass' ? 'grass' : 'road'), surface: onGrass };
     circuit.group.visible = false;
     scene.add(circuit.group);
     noOutline(circuit.group);
@@ -5553,14 +5555,28 @@ function refreshShadows(now: number) {
   const sunMoved = shadowNow.dot(shadowSun) <= 0.9999;
   const due = now - shadowsAt >= quality.shadowEvery;
   // Someone moving redraws them, but not faster than the level allows: a car at speed is always on the move.
-  // Your own car's redrawn every frame, though, or its shadow's left metres behind it at speed.
-  const somethingMoved = now - shadowsAt >= (driver.driving ? 0 : quality.shadowMoveEvery) && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
+  // A car that would outrun its shadow in that time, though (yours, someone else's, a racer's), as often as it's moved.
+  const somethingMoved = now - shadowsAt >= (carOutrunsShadow() ? 0 : quality.shadowMoveEvery) && (player.pos.distanceToSquared(shadowMe) >= 0.25 || castersMoved(false));
   if (!sunMoved && !due && !somethingMoved) return;
   shadowSun.copy(shadowNow);
   shadowMe.copy(player.pos);
   castersMoved(true);
   shadowsAt = now;
   renderer.shadowMap.needsUpdate = true;
+}
+
+/**
+ * Whether a car where the sun's shadows are drawn is going fast enough that, redrawn only every
+ * shadowMoveEvery, its shadow would trail more than a quarter of a metre behind it.
+ */
+function carOutrunsShadow(): boolean {
+  const t = sun.target.position;
+  const quick = 250 / quality.shadowMoveEvery;
+  // ponytail: a square round the sun's target, not the shadow box's real footprint (longer with the sun low).
+  for (const c of fleet().cars) {
+    if (c.root.visible && Math.abs(c.pose.x - t.x) < 48 && Math.abs(c.pose.z - t.z) < 48 && Math.hypot(c.pose.speed, c.pose.slip ?? 0) > quick) return true;
+  }
+  return false;
 }
 
 /** Where (x, y, z each) the things that walk, drive or ride about were when the shadows were last drawn. */

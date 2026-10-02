@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { SPECS, CARS, DRIVE_STEP, drive, seatOffset, seatHips, leanAngle, carPoint, type Box, type CarDef, type CarKind, type CarPose, type CarSeat, type CarState, type Pedals } from '../../shared/garage';
-import { citySolids } from '../../shared/city';
+import { citySolids, surfaceAt, type Surface } from '../../shared/city';
 import { FLOOR, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
 import type { Collider, Interactable } from './office';
 import { mergeByMaterial, mergeColored, mesh, toon } from './toon';
@@ -186,8 +186,8 @@ export function supercar(kind: CarKind, color: string): CarModel {
       const head = mesh(new THREE.BoxGeometry(0.5, 0.06, 0.26), lamp, sx * 0.62, 0.46, L - 0.14);
       head.rotation.set(-0.25, sx * 0.25, 0);
       lights.add(head);
-      // Air intakes behind the doors.
-      g.add(mesh(new THREE.BoxGeometry(0.03, 0.26, 0.7), dark, sx * (WIDTH / 2 + 0.03), 0.56, -1.0));
+      // Air intakes behind the doors, ahead of the rear arch (further back, they hung over the tire in its opening).
+      g.add(mesh(new THREE.BoxGeometry(0.03, 0.26, 0.6), dark, sx * (WIDTH / 2 + 0.03), 0.56, -0.55));
       g.add(mesh(new THREE.BoxGeometry(0.06, 0.26, 0.06), dark, sx * 0.7, 0.98, -2.0));
     }
     lights.add(mesh(new THREE.BoxGeometry(1.7, 0.08, 0.05), tail, 0, 0.7, -L - 0.03));
@@ -416,11 +416,11 @@ function bike(kind: 'motorbike' | 'bicycle', color: string): CarModel {
     tube([-0.28, 0.33, -0.1], [0.28, 0.33, -0.1], 0.04, dark);
   } else tube(rear, crank, 0.014, dark); // The chain beside the frame.
   const wheels: THREE.Object3D[] = [];
-  // The tire's tube, fat on a motorbike: its outside edge is `radius` round the hub, so it's down on the road.
+  // The tire's tube, fat on a motorbike: its outside edge is `radius` round the hub, and enough sides round that its flats aren't up off the road either.
   const tread = motor ? 0.065 : 0.025;
   for (const z of [-axle, axle]) {
     const bits = new THREE.Group();
-    bits.add(mesh(new THREE.TorusGeometry(radius - tread, tread, 6, 20).rotateY(Math.PI / 2), dark));
+    bits.add(mesh(new THREE.TorusGeometry(radius - tread, tread, 6, 32).rotateY(Math.PI / 2), dark));
     bits.add(mesh(new THREE.TorusGeometry(radius - tread * 2, 0.015, 4, 20).rotateY(Math.PI / 2), metal));
     for (let i = 0; i < 8; i++) {
       const spoke = mesh(new THREE.BoxGeometry(0.025, radius * 1.7, 0.015), metal);
@@ -478,6 +478,8 @@ export interface CarView extends CarModel {
   /** Which way it was facing last frame, and how fast it's been speeding up (m/s², eased): for its body and its brake lights. */
   lastRotY: number;
   accel: number;
+  /** How hard it'd be slowing just rolling, where it is (m/s², eased as `accel` is, so the two keep step). */
+  rolling: number;
   /** How much longer (s) its brake lights stay on, so they don't flicker. */
   braked: number;
   /** Its headlights' light on the road ahead, after dark with someone in it. */
@@ -644,6 +646,13 @@ export class Fleet {
   private street = STREET_Y;
   /** How dark it is, for headlights and tail lights: the sky's lampsOn (0 by day, 1 at night). */
   lamps = 0;
+  /**
+   * What's under the cars and what it does to them, as their drivers drive them (shared/garage.ts
+   * drive): the city's surface, unless the place says otherwise (the circuit's grass, which bogs a car
+   * down: main.ts). It's how a car slows just rolling where it is, so the grass or the sand dragging at
+   * it isn't taken for braking.
+   */
+  course: { surfaceAt?(x: number, z: number): Surface; surface?(p: CarPose, dt: number): CarPose } = {};
   private vehicleBoxes = new Map<Collider, number>();
 
   constructor(
@@ -678,7 +687,7 @@ export class Fleet {
       beam.scale.x = bike ? 0.5 : 1;
       beam.visible = false;
       model.root.add(shade, beam);
-      const view: CarView = { ...model, index, def, pose: { x: def.x, z: def.z, rotY: def.rotY, speed: 0, steer: 0 }, occupied: false, lastSpeed: 0, spin: 0, pedalPhase: 0, colliders, interactable, boosting: false, flames: fire, err: { x: 0, z: 0, rotY: 0 }, heard: -1, lastRotY: def.rotY, accel: 0, braked: 0, beam };
+      const view: CarView = { ...model, index, def, pose: { x: def.x, z: def.z, rotY: def.rotY, speed: 0, steer: 0 }, occupied: false, lastSpeed: 0, spin: 0, pedalPhase: 0, colliders, interactable, boosting: false, flames: fire, err: { x: 0, z: 0, rotY: 0 }, heard: -1, lastRotY: def.rotY, accel: 0, rolling: 0, braked: 0, beam };
       this.show(view);
       return view;
     });
@@ -843,9 +852,11 @@ export class Fleet {
     if (v.pedals) v.pedals.rotation.x = v.pedalPhase;
     v.flames.visible = v.boosting;
     if (v.boosting) for (const f of v.flames.children) f.scale.set(1, 1, 0.75 + Math.random() * 0.5);
-    // Slowing down faster than it would just rolling: it's braking (and the lights stay on a moment, so they don't flicker).
-    const rolling = Math.abs(p.speed) > 0.5 ? (Math.abs(p.speed) - Math.abs(drive(p, ROLLING, DRIVE_STEP, v.def.kind).speed)) / DRIVE_STEP : Infinity;
-    v.braked = -Math.sign(p.speed) * v.accel > rolling + 3 ? 0.3 : Math.max(0, v.braked - dt);
+    // Slowing down faster than it would just rolling, there on that ground: it's braking (and the lights stay on a moment, so they don't flicker).
+    const rolled = drive(p, ROLLING, DRIVE_STEP, v.def.kind, (this.course.surfaceAt ?? surfaceAt)(p.x, p.z));
+    const coasted = this.course.surface ? this.course.surface(rolled, DRIVE_STEP) : rolled;
+    v.rolling += ((Math.abs(p.speed) - Math.abs(coasted.speed)) / DRIVE_STEP - v.rolling) * k;
+    v.braked = Math.abs(p.speed) > 0.5 && -Math.sign(p.speed) * v.accel > v.rolling + 3 ? 0.3 : Math.max(0, v.braked - dt);
     v.tails.visible = v.braked > 0 || (v.occupied && this.lamps > 0.3);
     v.tails.material.color.copy(v.braked > 0 ? TAIL_BRAKE : TAIL_NIGHT);
     v.reverse.visible = p.speed < -0.3;

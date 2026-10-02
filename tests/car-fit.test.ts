@@ -52,13 +52,18 @@ test('every wheel is down on the road, however far it has turned', () => {
   for (const kind of Object.keys(SPECS) as CarKind[]) {
     const m = supercar(kind, '#3366cc');
     for (const w of m.wheels) {
-      let low = Infinity;
-      for (let a = 0; a < Math.PI * 2; a += Math.PI / 16) {
+      // Its bottom at each turn of the wheel (steps that aren't a multiple of a tire's sides, so a flat comes down too):
+      // never sunk into the road, and never floating on a flat over it.
+      let sunk = Infinity, float = -Infinity;
+      for (let a = 0; a < Math.PI * 2; a += 0.07) {
         w.children[0].rotation.x = a;
         m.root.updateMatrixWorld(true);
-        low = Math.min(low, new THREE.Box3().setFromObject(w, true).min.y);
+        const low = new THREE.Box3().setFromObject(w, true).min.y;
+        sunk = Math.min(sunk, low);
+        float = Math.max(float, low);
       }
-      assert.ok(Math.abs(low) < 0.004, `${kind} tire bottom at ${(low * 100).toFixed(1)} cm`);
+      assert.ok(sunk > -0.004, `${kind} tire ${(-sunk * 100).toFixed(1)} cm into the road`);
+      assert.ok(float < 0.004, `${kind} tire ${(float * 100).toFixed(1)} cm over the road on a flat`);
     }
   }
 });
@@ -206,4 +211,35 @@ test('brake lights come on braking (not just rolling), reversing lamps backing u
   // A parked car at night stays dark.
   const other = fleet.cars.find((c) => c.index !== i)!;
   assert.ok(!other.tails.visible && !other.beam.visible);
+});
+
+test("off the road with the gas held, the ground dragging a car down isn't braking: no brake lights", () => {
+  const i = CARS.findIndex((c) => c.kind === 'suv');
+  const eye = new THREE.Vector3(0, STREET_Y, 0);
+  const cars = parked();
+  // Like the circuit's grass (main.ts onGrass): down to 12 m/s at 16 m/s² on top of the grass's own drag.
+  const bog = (q: CarPose, dt: number): CarPose => ({ ...q, speed: q.speed > 12 ? Math.max(12, q.speed - 16 * dt) : q.speed });
+  for (const [under, surface] of [['grass', undefined], ['sand', undefined], ['grass', bog]] as const) {
+    const fleet = new Fleet([], []);
+    fleet.course = { surfaceAt: () => under, surface };
+    const v = fleet.cars[i];
+    let p: CarPose = { x: 0, z: 0, rotY: 0, speed: 40, steer: 0 };
+    let lit = 0;
+    const go = (gas: number, frames: number) => {
+      lit = 0;
+      for (let f = 0; f < frames; f++) {
+        p = drive(p, { gas, turn: 0, brake: false }, 1 / 30, 'suv', under);
+        if (surface) p = surface(p, 1 / 30);
+        fleet.place(i, p);
+        fleet.update(1 / 30, cars, [], 0, { car: i, driving: true }, eye);
+        if (v.tails.visible) lit++;
+      }
+    };
+    go(1, 60);
+    assert.equal(lit, 0, `${under}${surface ? ', bogging down' : ''}: lit ${lit} of 60 frames on the gas`);
+    // On the brakes there, they still come on.
+    p = { ...p, speed: 20 };
+    go(-1, 10);
+    assert.ok(lit > 0, `${under}: on the brakes`);
+  }
 });

@@ -983,7 +983,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     if (!gas) return;
     const p = gas.plot;
     const c = gas.canopy;
-    soup.add(box, '#575c68', (p.minX + p.maxX) / 2, 0.03, (p.minZ + p.maxZ) / 2, p.maxX - p.minX, 0.06, p.maxZ - p.minZ);
+    // Cars drive onto it (shared/city.ts surfaceAt calls it road): its top's level with the street, over the ground by the ground's depth offset.
+    soup.add(box, '#575c68', (p.minX + p.maxX) / 2, -0.03, (p.minZ + p.maxZ) / 2, p.maxX - p.minX, 0.06, p.maxZ - p.minZ);
     const cw = c.maxX - c.minX;
     const cd = c.maxZ - c.minZ;
     soup.add(box, '#f4f1de', (c.minX + c.maxX) / 2, 4.7, (c.minZ + c.maxZ) / 2, cw, 0.4, cd);

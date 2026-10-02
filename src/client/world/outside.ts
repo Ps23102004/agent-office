@@ -290,14 +290,15 @@ export function buildStreet(group: THREE.Group, colliders: Collider[], night: Ni
   // island's beach (walk into the sea and you're put back on it: main.ts).
   colliders.push({ minX: -700, maxX: 700, minZ: -700, maxZ: 700, bottom: G - 1, top: G });
 
-  // The lot in front of the garage, out to the sidewalk, and the one down its east side: at street level
-  // too (the same plain grey, so where they overlap it doesn't matter which wins).
-  for (const [b, y] of [
-    [LOT, G],
-    [SIDE_LOT, G],
-  ] as const) {
-    group.add(groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, y, (b.minZ + b.maxZ) / 2, null, '#9a9ea8'));
-  }
+  // The lot in front of the garage, out to the sidewalk, and the one down its east side: exactly at street
+  // level too, where the cars' wheels and their contact shadows are (cars.ts SHADE), never a few millimetres
+  // up. They're drawn over the city's ground by its depth offset, and the side lot under the front one by
+  // one of its own, smaller than the ground's.
+  [LOT, SIDE_LOT].forEach((b, k) => {
+    const lot = groundPlane(b.maxX - b.minX, b.maxZ - b.minZ, (b.minX + b.maxX) / 2, city.position.y, (b.minZ + b.maxZ) / 2, null, '#9a9ea8');
+    Object.assign(lot.material, { polygonOffset: k > 0, polygonOffsetFactor: k, polygonOffsetUnits: k });
+    group.add(lot);
+  });
 
   const forest = new THREE.Group();
 
