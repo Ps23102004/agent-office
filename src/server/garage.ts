@@ -119,6 +119,19 @@ export class Garage {
     return true;
   }
 
+  /** Car `car` back in its spot, if nobody's in it (a bot's, once it's done: server/racebots.ts). Says whether it moved. */
+  park(car: number): boolean {
+    const c = this.cars[car], d = this.defs[car];
+    if (!c || !d || c.driver || c.passenger) return false;
+    Object.assign(c, { x: d.x, z: d.z, rotY: d.rotY, speed: 0, steer: 0, slip: 0 });
+    return true;
+  }
+
+  /** When car `car`'s driver last said where it is (ms), for carrying it on from there. */
+  heardAt(car: number): number | undefined {
+    return this.movedAt[car];
+  }
+
   /**
    * The driver of car `car` says where it's got to: where the office has it now, to pass on. Nothing
    * from anyone else, or from out in the sea (anywhere on the island will do, off-road included; a car

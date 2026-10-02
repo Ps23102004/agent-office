@@ -1,6 +1,10 @@
 import { CHECKPOINTS, CIRCUIT_CARS, checkpoint, crossed, gridPose, pastLine, RESET_PAST, resetSpots, track } from '../shared/circuit.js';
 import { BOOST, SPECS } from '../shared/garage.js';
 import { RACE, SECTORS, idleRace, type Practicer, type RaceState, type Racer, type Timing } from '../shared/race.js';
+import type { BotLevel } from '../shared/bots.js';
+
+/** Someone on practice laps: their name and circuit car, their account if they're signed in, or the office's bot out for someone (`rabbitOf`) to chase. */
+type Who = { name: string; car: number; account?: string; bot?: BotLevel; rabbitOf?: string };
 
 /** Further than this between two of a driver's reports (m) isn't driving: it's a jump, and crosses nothing. */
 const JUMP = 60;
@@ -55,8 +59,12 @@ export class RaceControl {
     return { ...this.race, racers: this.race.racers.map(copy), practice: this.race.practice.map(copy) };
   }
 
-  /** `id` lines up on the grid in circuit car `car`: while it's idle, lining up or counting down (or a finished one's results are up). Says whether they did. */
-  join(id: string, name: string, car: number, now: number): boolean {
+  /**
+   * `id` lines up on the grid in circuit car `car`: while it's idle, lining up or counting down (or a
+   * finished one's results are up). `bot`: one of the office's own, at that level (server/racebots.ts).
+   * Says whether they did.
+   */
+  join(id: string, name: string, car: number, now: number, bot?: BotLevel): boolean {
     this.tick(now);
     if (this.race.phase === 'finished') this.reset();
     const r = this.race;
@@ -65,7 +73,7 @@ export class RaceControl {
     let slot = 0;
     while (r.racers.some((x) => x.slot === slot)) slot++;
     this.unpractice(id);
-    r.racers.push({ id, name, car, slot, lap: 0, checkpoint: -1, position: 0 });
+    r.racers.push({ id, name, car, slot, lap: 0, checkpoint: -1, position: 0, ...(bot ? { bot } : {}) });
     if (r.phase === 'idle') r.phase = 'lobby';
     this.order();
     return true;
@@ -144,7 +152,7 @@ export class RaceControl {
    * not in the race (`who`: their name and circuit car) is on practice laps, timed the same way.
    * Says whether the race changed.
    */
-  drove(id: string, x: number, z: number, now: number, who?: { name: string; car: number; account?: string }): boolean {
+  drove(id: string, x: number, z: number, now: number, who?: Who): boolean {
     let changed = this.tick(now);
     const racer = this.race.racers.find((r) => r.id === id);
     if (!racer) return this.practised(id, x, z, now, who) || changed;
@@ -220,14 +228,14 @@ export class RaceControl {
   }
 
   /** Practice laps: the same checkpoints in the same order, from the first time over the start line. */
-  private practised(id: string, x: number, z: number, now: number, who?: { name: string; car: number; account?: string }): boolean {
+  private practised(id: string, x: number, z: number, now: number, who?: Who): boolean {
     const list = this.race.practice;
     let p = list.find((q) => q.id === id);
     let changed = false;
     if (!p) {
       if (!who) return false;
       const best = who.account === undefined ? undefined : this.practiceBests.get(who.account);
-      p = { id, name: who.name, car: who.car, laps: 0, checkpoint: -1, ...(best !== undefined ? { bestLap: best } : {}) };
+      p = { id, name: who.name, car: who.car, laps: 0, checkpoint: -1, ...(best !== undefined ? { bestLap: best } : {}), ...(who.bot ? { bot: who.bot, rabbitOf: who.rabbitOf } : {}) };
       list.push(p);
       if (who.account !== undefined) this.accounts.set(id, who.account);
       changed = true;
@@ -249,7 +257,8 @@ export class RaceControl {
     p.laps++;
     p.lastLap = ms;
     if (p.bestLap === undefined || ms < p.bestLap) p.bestLap = ms;
-    // Kept, and on the record, only for someone signed in with their own account: a name anyone can take.
+    // Kept, and on the record, only for someone signed in with their own account: a name anyone can take
+    // (never a bot, which has none).
     const account = this.accounts.get(id);
     if (account === undefined) return true;
     if (ms <= (this.practiceBests.get(account) ?? Infinity)) {
@@ -300,10 +309,13 @@ export class RaceControl {
     racer.lap++;
     racer.lastLap = ms;
     if (ms > 0 && (racer.bestLap === undefined || ms < racer.bestLap)) racer.bestLap = ms;
-    if (ms > 0 && (!r.record || ms < r.record.ms)) r.record = { name: racer.name, ms };
+    // The record's for people: a bot's lap is only ever its own best.
+    if (ms > 0 && !racer.bot && (!r.record || ms < r.record.ms)) r.record = { name: racer.name, ms };
     if (racer.lap < r.laps) return;
     racer.finishedAt = now;
-    r.firstHomeAt ??= now;
+    // The clock on the rest starts with the first person home, never a bot: someone racing bots on
+    // their own always gets to finish (LAP_CAP and STALL still end a race that's going nowhere).
+    if (!racer.bot) r.firstHomeAt ??= now;
     this.settle(now);
   }
 

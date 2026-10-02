@@ -1,7 +1,8 @@
 import './style.css';
 import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
-import { sameLook } from '../shared/avatar';
+import { lookFromSeed, sameLook } from '../shared/avatar';
+import { isBot } from '../shared/bots';
 import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, FLOOR, GOLF_HOLE, LADDER, POLE, POLES, SLAB, STATION_AGENT, STOREY, WALL_HEIGHT, WALL_T, WING, WING_DESKS, beanbagsOut, deskBuilt, deskSeat, inElevator, inWing, roofDrop, seatPlace, streetBelow, vacantSeats, wingMinZ, wingRowZ, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { OFFICE_PLAN, seatOn, type MapPlan } from '../shared/maps';
 import { canLabel } from '../shared/floorplan';
@@ -1449,6 +1450,48 @@ interface RemotePeer {
   grip: Grip | null;
 }
 const remotes = new Map<string, RemotePeer>();
+
+/**
+ * The office's own racers at the circuit (server/racebots.ts) aren't people on the floor, but each
+ * gets a driver at its wheel all the same, named as the race has it: one each, by its id.
+ */
+const botDrivers = new Map<string, { person: Person; name: string }>();
+function botDriversTick(dt: number, t: number) {
+  const seen = new Set<string>();
+  if (atCircuit) {
+    for (const [i, c] of store.cars.entries()) {
+      const def = CIRCUIT_CARS[i];
+      if (!c.driver || !isBot(c.driver) || !def) continue;
+      seen.add(c.driver);
+      const name = [...store.race.racers, ...store.race.practice].find((r) => r.id === c.driver)?.name ?? '🤖';
+      let d = botDrivers.get(c.driver);
+      if (!d) {
+        const person = new Person(name, def.color, lookFromSeed(c.driver));
+        person.sit(seatHips(def.kind));
+        scene.add(person.root);
+        d = { person, name: '' };
+        botDrivers.set(c.driver, d);
+      }
+      if (d.name !== name) {
+        d.name = name;
+        d.person.setLabel(name, null);
+        noOutline(d.person.root);
+      }
+      const at = fleet().seatAt(i, 'driver');
+      if (at) {
+        d.person.root.position.set(at.x, at.y, at.z);
+        d.person.root.rotation.y = at.rotY;
+      }
+      d.person.update(dt, t, false, false);
+      fleet().poseRider(d.person, i, 'driver');
+    }
+  }
+  for (const [id, d] of botDrivers) {
+    if (seen.has(id)) continue;
+    scene.remove(d.person.root);
+    botDrivers.delete(id);
+  }
+}
 
 interface WorkerView {
   model: Worker;
@@ -5465,6 +5508,7 @@ function frame(ts?: number) {
     const d = Math.hypot(pos.x - player.pos.x, pos.z - player.pos.z);
     voice.setVolume(id, d < 4 ? 1 : Math.max(0.2, 1 - (d - 4) / 16));
   }
+  botDriversTick(dt, t);
 
   // The engines of the cars being driven on this floor (or at the circuit), yours (by how hard you're on the gas) and theirs.
   const engines: Parameters<typeof sound.setEngines>[0] = [];

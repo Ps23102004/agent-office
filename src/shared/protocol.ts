@@ -14,8 +14,8 @@ import type { CustomMap } from './maps/index.js';
 import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { RaceState } from './race.js';
-import type { ArenaState, ShotResult, V3, WeaponId } from './arena.js';
 import type { BotLevel } from './bots.js';
+import type { ArenaState, ShotResult, V3, WeaponId } from './arena.js';
 import type { MeetPin, MeetSpotId } from './meet.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 
@@ -1284,6 +1284,19 @@ export type ClientMsg =
   | { t: 'race.start' }
   /** Pull out of the race (or off the grid). */
   | { t: 'race.leave' }
+  /**
+   * At the circuit: the office's own racers top the grid up to `fill` racers, people included (1: no
+   * bots; at most RACE.slots), at `level` (RaceState.bots). Lining up, the grid changes straight away; a
+   * race already on keeps its bots. At most once a second (shared/bots.ts BOTS.every): sooner, or
+   * anything else, gets a warning.
+   */
+  | { t: 'race.bots'; fill: number; level: BotLevel }
+  /**
+   * At the circuit, behind the wheel of one of its cars and not in the race: a bot at `level` sets off
+   * just ahead of you on practice laps for you to chase (Practicer.rabbitOf is you); null sends it home.
+   * One each, two out at once at most; it goes home by itself once you're out of the car or line up.
+   */
+  | { t: 'race.rabbit'; level: BotLevel | null }
   /** In the arena: fire your rifle from `o` (your eyes) along `d` (shared/arena.ts). The office works out what it hits. */
   | { t: 'arena.fire'; o: V3; d: V3 }
   /** In the arena: reload. */

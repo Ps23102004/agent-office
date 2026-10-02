@@ -1,7 +1,9 @@
 import type { ClientMsg } from '../shared/protocol';
-import { CHECKPOINTS, CIRCUIT, crossed, nearestProgress, pointAt, track } from '../shared/circuit';
+import { CHECKPOINTS, CIRCUIT, crossed, nearestProgress, track } from '../shared/circuit';
 import type { Practicer, Racer, Timing } from '../shared/race';
 import { store, type LiveGap } from './state';
+
+export { MARSHAL, Marshal } from '../shared/race';
 
 // What you can do about the race at the circuit (shared/race.ts), for the race's panel and HUD
 // (ui/race.ts) to call. main.ts wires them to the office and to getting you into a car. How the race
@@ -125,41 +127,6 @@ export function standings(runners: readonly Runner[], me: string): { position: n
     return { id: (front.id === me ? back : front).id, name: (front.id === me ? back : front).name, metres, seconds: metres / Math.max(10, Math.abs(back.speed)) };
   };
   return { position: i + 1, ahead: i > 0 ? gap(order[i - 1], order[i]) : null, behind: i + 1 < order.length ? gap(order[i], order[i + 1]) : null };
-}
-
-/** Seconds of trouble (off the track and slow, stuck, or facing the wrong way) before you're put back on it; and of going the wrong way before you're told. */
-export const MARSHAL = { reset: 3, wrongWay: 1, warn: 1 } as const;
-
-/**
- * Keeps an eye on your car while you're on a lap: going the wrong way round, and in trouble long
- * enough to be put back on the track (main.ts does that: shared/circuit.ts resetSpots).
- */
-export class Marshal {
-  private wrong = 0;
-  private trouble = 0;
-  wrongWay = false;
-
-  /**
-   * Each frame, `dt` s: your car facing `rotY` at `speed` m/s at (x, z), off the asphalt or not,
-   * your foot down or not. Seconds till it's put back (null: it's fine; 0: now).
-   */
-  step(dt: number, car: { x: number; z: number; rotY: number; speed: number }, offTrack: boolean, pushing: boolean): number | null {
-    const p = pointAt(nearestProgress(car.x, car.z).s);
-    const facing = Math.sin(car.rotY) * p.tx + Math.cos(car.rotY) * p.tz;
-    this.wrong = car.speed > 2 && facing < -0.3 ? this.wrong + dt : 0;
-    this.wrongWay = this.wrong >= MARSHAL.wrongWay;
-    const speed = Math.abs(car.speed);
-    const stuck = (offTrack && speed < 4) || (pushing && speed < 1) || facing < -0.3;
-    this.trouble = stuck ? this.trouble + dt : 0;
-    if (this.trouble < MARSHAL.warn) return null;
-    return Math.max(0, MARSHAL.reset - this.trouble);
-  }
-
-  /** Back on the track (or off a lap): all clear. */
-  clear() {
-    this.wrong = this.trouble = 0;
-    this.wrongWay = false;
-  }
 }
 
 /** A moment of a lap: how far into it (ms) and where the car was. */

@@ -53,10 +53,11 @@ import { CIRCUIT, CIRCUIT_CARS, CIRCUIT_GATE, circuitGround } from '../shared/ci
 import { Garage, OFFER_FOR } from './garage.js';
 import { MEET_EVERY, MEET_SPOTS, isMeetSpot } from '../shared/meet.js';
 import { RaceControl } from './race.js';
+import { RaceBots, askedBots, warmRaceBots } from './racebots.js';
 import { ArenaControl } from './arena.js';
 import { ArenaBots, TICK as BOT_TICK } from './arenabots.js';
 import { ARENA, ARENA_CENTER, ARENA_GATE, ARENA_HALF, isWeapon, type V3 } from '../shared/arena.js';
-import { BOTS, isBotLevel } from '../shared/bots.js';
+import { BOTS, BOT_LEVELS, isBotLevel } from '../shared/bots.js';
 import { isBarGame, tossOk, type BarGame } from '../shared/bargames.js';
 
 const MIME: Record<string, string> = {
@@ -267,6 +268,13 @@ export async function startServer(cfg: Config) {
   // ---- W2: the race circuit, a place of its own (shared/circuit.ts): its cars, and the race (server/race.ts).
   const circuitCars = new Garage(undefined, CIRCUIT_CARS, circuitGround);
   const race = new RaceControl();
+  // The office's own racers (server/racebots.ts): their cars out to everyone at the circuit as a person's are.
+  const raceBots = new RaceBots(race, circuitCars, {
+    moved: (car, pose, boost) => toCircuit({ t: 'car.move', car, ...pose, ...(boost ? { boost: true } : {}) }),
+    cars: () => circuitCarsChanged(),
+    race: () => raceChanged(),
+  });
+  setImmediate(warmRaceBots);
   // The arena, a place of its own too (shared/arena.ts): its free-for-all (server/arena.ts), judged from where the office has everyone in it.
   // Its bots (server/arenabots.ts) are in it as anyone is: `bots` is made further down, once there's the arena's news to give.
   const arenaWhere = (id: string) => {
@@ -1159,7 +1167,7 @@ export async function startServer(cfg: Config) {
       leaveOnMerge: leaveOnMerge.state(),
       ...(onRoof ? roofView() : atCircuit ? circuitView() : inArena ? arenaView() : floorView(floor)),
     });
-    sendTo(client, { t: 'race', state: race.state() });
+    sendTo(client, { t: 'race', state: raceBots.state() });
     if (inArena) {
       arena.join(id, name, Date.now());
       bots.fill(Date.now());
@@ -1229,10 +1237,19 @@ export async function startServer(cfg: Config) {
   const raceChanged = () => void (raceDirty = true);
   const raceTimer = setInterval(() => {
     if (race.tick(Date.now())) raceDirty = true;
+    // The bots in step: out once nobody's left racing them or the results come down (they say if anything changed).
+    raceBots.sync(Date.now());
     if (!raceDirty) return;
     raceDirty = false;
-    broadcast({ t: 'race', state: race.state() });
+    broadcast({ t: 'race', state: raceBots.state() });
   }, 250);
+  // The bots' cars on the physics, twenty times a second (nothing to do while there are none).
+  const raceBotTimer = setInterval(() => raceBots.tick(Date.now()), 50);
+  /** To everyone at the circuit, dropped for anyone far behind (a car's next move is along soon). */
+  const toCircuit = (msg: ServerMsg) => {
+    const json = JSON.stringify(msg);
+    for (const o of clients.values()) if (o.peer.floor === CIRCUIT && o.ws.readyState === WebSocket.OPEN && o.ws.bufferedAmount <= 4 * 1024 * 1024) o.ws.send(json);
+  };
   /** To everyone in the arena. */
   const toArena = (msg: ServerMsg) => {
     const json = JSON.stringify(msg);
@@ -1783,8 +1800,26 @@ export async function startServer(cfg: Config) {
       case 'race.join': {
         const at = c.peer.floor === CIRCUIT ? circuitCars.seatOf(c.id) : undefined;
         if (!at || at.seat !== 'driver') return warn(c, 'Get behind the wheel of one of the circuit’s cars to line up on the grid');
-        if (race.join(c.id, c.peer.name, at.car, Date.now())) raceChanged();
-        else warn(c, 'There’s no room on the grid right now: a race is on, or it’s full');
+        // A bot gives you its place if it has to (the grid's full, or over the bots' setting with you on it).
+        raceBots.makeRoom(c.id, Date.now());
+        if (race.join(c.id, c.peer.name, at.car, Date.now())) {
+          raceBots.sync(Date.now());
+          raceChanged();
+        } else warn(c, 'There’s no room on the grid right now: a race is on, or it’s full');
+        break;
+      }
+      case 'race.bots': {
+        if (c.peer.floor !== CIRCUIT) break;
+        const ask = askedBots(msg.fill, msg.level);
+        if (typeof ask === 'string') return warn(c, ask);
+        if (!raceBots.set(ask.fill, ask.level, c.peer.name, Date.now())) return warn(c, 'The bots were only just changed: give it a second');
+        raceChanged();
+        break;
+      }
+      case 'race.rabbit': {
+        if (c.peer.floor !== CIRCUIT) break;
+        if (msg.level !== null && !isBotLevel(msg.level)) return warn(c, `A rabbit is ${BOT_LEVELS.join(', ')}, or null to send it home`);
+        warn(c, raceBots.rabbit(c.id, msg.level, Date.now()));
         break;
       }
       case 'race.start':
@@ -2673,6 +2708,7 @@ export async function startServer(cfg: Config) {
     clearInterval(heartbeat);
     clearInterval(resync);
     clearInterval(raceTimer);
+    clearInterval(raceBotTimer);
     clearInterval(arenaTimer);
     clearInterval(botTimer);
     clearTimeout(floorsTimer);
