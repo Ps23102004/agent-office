@@ -850,7 +850,7 @@ const darkOf = (m: THREE.MeshToonMaterial) => Math.min(1, m.emissiveIntensity / 
  * its roads and sidewalks with their markings, every block's buildings at full height (shop fronts
  * with awnings and signs, brick walk-ups, glass towers, low houses with pitched roofs at the outskirts,
  * a gas station, a parking structure), parks, street lamps, traffic lights that go through their
- * cycle (shared/city.ts lightPhase), benches, bins and hydrants. The ground's at y = 0: put the group
+ * cycle (shared/city.ts lightPhase), benches, bins, hydrants, meters, newspaper boxes and bike racks. The ground's at y = 0: put the group
  * where the street is. The lots round the office that outside.ts builds by hand are left to it.
  */
 export function buildStreetCity(night: NightParts): THREE.Group {

@@ -547,7 +547,7 @@ export function atShopDoor(x: number, z: number, margin = 0.7): boolean {
 
 const R = Math.ceil(RADIUS / PERIOD) + 1;
 
-/** The intersections, street lamps, signal poles and benches, bins and hydrants of the city, made once. */
+/** The intersections, street lamps, signal poles and benches, bins and hydrants of the city (and on its shopping streets parking meters, newspaper boxes, bike racks and bags by the bins), made once. */
 export function cityStreetscape(): Streetscape {
   if (scape) return scape;
   const intersections: Intersection[] = [];
