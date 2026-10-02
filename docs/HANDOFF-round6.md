@@ -27,33 +27,34 @@ Never push to `origin` (AgentSystemLabs/agent-office): this account only has rea
 | Race bots | `src/shared/racebot.ts`, `src/server/racebots.ts` | Same physics as people; fill/level; practice rabbit. |
 | Playtest harness | `scripts/playtest/*`, run with `npm run playtest -- <scenarios>` | Jev is the semantic judge; code asserts are the gate. |
 
-## In flight (branches pushed to the fork; review and merge them)
+## Status at 2026-10-02 (end of the local session)
 
-- **`parth/r6-ui`** (GPT-6.1 Sol): bot lobbies for the arena (B key or button) and the circuit (fill/level, rabbit), arena hit feedback (damage numbers, hitmarkers, death card), bot names everywhere, and `ui/controls.ts`.
-  - Committed `fd5eaed`; a Sonnet review and a Sol fix round may have added commits.
-  - Next: check its tests, review it, merge into `parth/round4`.
-- **`parth/r6-botsfeel`**: arena bots that play like people (counter-strafe, peek, a ramped difficulty).
-  - Committed `3f31655`. The builder notes that per-run hit-rate bands are noisy at 40 s per level and that only the mean holds.
-  - Next: review it, then merge. On `src/shared/bots.ts`, `parth/round4` already took the post-integration SKILL table; this branch changes it again, so keep this branch's tuned values.
-  - Acceptance: Jev rates the arena levels human-like (it gave 0.21–0.40 before) and the difficulty ramp sensible (0.14 before).
+Everything is merged on `parth/round4`: physics, car visuals, supercars, textures, world, arena feel, arena bots (human-like pass), race bots, Sol's UI, and the final review fixes. 625 tests are green and the branch is pushed to the fork.
 
-## Remaining plan
+Full playtest on the merged build (`.playtest/2026-10-02T16-31-53`): all 7 scenarios PASS, 129/129 code asserts.
 
-1. Merge `parth/r6-ui` and `parth/r6-botsfeel`, fixing any conflicts. `npm test` and `npm run typecheck` must be green, then `npm run build`.
-2. Full QA: `PLAYTEST_PORT=4799 npm run playtest`. Fix every failed code assert. Read each Jev flag and act on the real ones.
-   - Last QA: grounded failed only on a probe artefact, which is now fixed.
-   - Jev was "unsure" on handbrake (0.61–0.69), lift-off (0.63) and the oop screen text.
-   - The arena bots scored low; `parth/r6-botsfeel` addresses that.
-   - Race bots: easy/normal fair, hard/insane possibly too strong for average people.
-3. Look at the screenshots yourself (`.playtest/<stamp>/*/*.png`): textures, cars, out-of-place, arena, race with bots.
-4. Final cross-branch integration review by a fresh reviewer, never the implementer. Then fix what it finds.
-5. Open follow-ups from the reports:
-   - Persist lap records.
-   - Check multiplayer edge cases live with two clients.
-   - Traffic cars cast no sun shadow (deliberate, for battery cost).
-   - Bots never use the handbrake.
-   - Remote `Person` objects are never disposed (geometry and label textures leak).
-6. Push to the fork after every merge: `git push fork parth/round4`.
+Jev scores:
+- **Driving:** feel 2.93/3, verdict yes. Unsure on lift-off (0.64) and handbrake (0.68).
+- **Arena bots** (does each level play like people): easy 0.34, normal 0.69, hard 0.44, insane 0.52. Difficulty ramp 0.92. Before round 6 these were 0.21–0.40, with ramp 0.14.
+- **Race bots:** easy 0.77, normal 0.72, hard 0.40, insane 0.24. Ramp 0.96. Hard and insane read as strong against an average-pace autopilot.
+- **Out-of-place screen text:** "unsure" on office (0.40) and plaza (0.39). These come from the screen-text check, not visuals.
+
+## Remaining follow-ups (all low)
+
+- Arena easy/hard human-likeness: a longer per-level playtest would cut noise before retuning.
+- Arena bots dialog:
+  - B doesn't close it.
+  - Focus starts on the close button.
+  - The race lobby has the same focus issue when Join is disabled.
+- Rabbit practice button moves focus to an element with tabindex -1.
+- `controls.ts` lists R (race) and pad B (reset) as if they always work; both only work at the circuit.
+- Server:
+  - The CROUCHED guard is easy to get around.
+  - `arena.bots` and `race.bots` share one global cooldown with no per-sender limit.
+  - Bots get the LAG_R hit widening. Accuracy is calibrated with it, so retune if you remove it.
+- Remote `Person` objects, including race-bot drivers, are never disposed (geometry and label textures leak).
+- Persist lap records.
+- Live check of two-client multiplayer.
 
 ## Conventions
 
