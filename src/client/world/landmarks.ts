@@ -42,7 +42,8 @@ function boardMat(text: string, w: number, h: number, bg: string, ink: string, b
   let m = mats.get(key);
   if (!m) {
     const px = Math.min(1024, Math.round(w * 100));
-    m = new THREE.MeshBasicMaterial({ map: boardTexture(text, px, Math.round((px * h) / w), bg, ink, border), toneMapped: false });
+    // Drawn a touch forward of whatever it lies on (a board's slab, a fascia): a few centimetres' gap alone fights it from far off.
+    m = new THREE.MeshBasicMaterial({ map: boardTexture(text, px, Math.round((px * h) / w), bg, ink, border), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     mats.set(key, m);
   }
   return m;
@@ -68,20 +69,31 @@ class Boards {
 const post = (into: THREE.Group, x: number, y0: number, y1: number, z: number, r: number, color: string) => into.add(mesh(new THREE.CylinderGeometry(r, r, y1 - y0, 6), toon(color), x, (y0 + y1) / 2, z, false));
 
 /**
- * The blade sign on a venue's roof (the café's, the bar's), crossed so it's seen from every street: venues.ts puts it
- * in the building's shell, which goes when you walk in (it'd float over the room).
+ * The blade sign on a venue's roof (the café's, the bar's): two boards, a street's each way, one on top of the other (crossed at one
+ * height each would hide the middle of the other's lettering), each a slab (0.4 thick) lettered on both faces. The lower runs on a pair
+ * of posts under its ends, a mast up the middle (inside its thickness) holds the upper on it, and nothing stands in front of any
+ * lettering. venues.ts puts it in the building's shell, which goes when you walk in (it'd float over the room).
  */
 export function buildRoofSign(v: Venue): THREE.Group {
   const out = new THREE.Group();
   const x = (v.box.minX + v.box.maxX) / 2;
   const z = (v.box.minZ + v.box.maxZ) / 2;
   const cafe = v.id === 'cafe';
+  const [bg, ink] = cafe ? ['#2f5d50', '#fff3d6'] : ['#1d1d2b', '#ffb347'];
   const solid = new THREE.Group();
-  post(solid, x - 1.8, v.height, v.height + 2.4, z, 0.1, '#2b2d42');
-  post(solid, x + 1.8, v.height, v.height + 2.4, z, 0.1, '#2b2d42');
-  out.add(mergeByMaterial(solid));
   const boards = new Boards();
-  for (const yaw of [0, Math.PI / 2]) boards.add(cafe ? '☕ CAFE' : '🦉 BAR', 5.2, 1.7, cafe ? '#2f5d50' : '#1d1d2b', cafe ? '#fff3d6' : '#ffb347', cafe ? '#fff3d6' : '#ffb347', x, v.height + 2.6, z, yaw, true, 0.2);
+  const low = v.height + 1.9;
+  // The lower along z, the upper along x and 5 cm down into it.
+  [Math.PI / 2, 0].forEach((yaw, i) => {
+    const y = low + i * 1.65;
+    const m = mesh(new THREE.BoxGeometry(5.2, 1.7, 0.4), toon(bg), x, y, z, false);
+    m.rotation.y = yaw;
+    solid.add(m);
+    boards.add(cafe ? '☕ CAFE' : '🦉 BAR', 5.2, 1.7, bg, ink, ink, x, y, z, yaw, true, 0.25);
+  });
+  for (const s of [-1, 1]) post(solid, x, v.height, low - 0.75, z + s * 1.8, 0.1, '#2b2d42');
+  post(solid, x, v.height, low + 0.85, z, 0.12, '#2b2d42');
+  out.add(mergeByMaterial(solid));
   boards.into(out);
   return out;
 }
@@ -103,32 +115,46 @@ export function buildLandmarks(dark: () => number, gasPoleHeight: number): THREE
   gx.fillRect(0, 0, 64, 64);
   const glowMap = new THREE.CanvasTexture(g);
 
+  /** A board's body: a box `w` × `h` × 0.4 centred at (x, y, z), facing `yaw`, for the lettered planes to lie on. */
+  const slab = (x: number, y: number, z: number, w: number, h: number, yaw: number, color: string) => {
+    const m = mesh(new THREE.BoxGeometry(w, h, 0.4), toon(color), x, y, z, false);
+    m.rotation.y = yaw;
+    solid.add(m);
+  };
+
   const stripes = (x: number, z: number, h: number, half: number, a: string, b: string) => {
     const n = 8;
     for (let k = 0; k < n; k++) solid.add(mesh(new THREE.BoxGeometry(half * 2, h / n, half * 2), toon(k % 2 ? b : a), x, ((k + 0.5) * h) / n, z, false));
   };
 
-  // The gates' pylons: a striped shaft with a big board near the top, facing the street and the plaza, and a light on its tip.
+  // The gates' pylons: a striped shaft with a big board near the top facing the street and one below it facing the plaza (crossed
+  // at one height each hid the middle of the other's lettering, so from a corner it read "RACIRCUIT"), and a light on its tip.
   for (const p of GATE_PYLONS) {
     const race = p.id === 'race';
     stripes(p.x, p.z, p.h, p.half, race ? '#e63946' : '#3d4147', race ? '#f8f9fa' : '#f4c430');
     const by = p.h - 4;
-    for (const yaw of [0, Math.PI / 2]) boards.add(race ? '🏁 RACE CIRCUIT' : '🎯 ARENA', 11, 3.4, race ? '#ffd166' : '#f4c430', '#2b2d42', '#212529', p.x, by, p.z, yaw, true, p.half + 0.06);
+    [0, Math.PI / 2].forEach((yaw, i) => {
+      boards.add(race ? '🏁 RACE CIRCUIT' : '🎯 ARENA', 11, 3.4, race ? '#ffd166' : '#f4c430', '#2b2d42', '#212529', p.x, by - i * 3.7, p.z, yaw, true, p.half + 0.03);
+      glowAt.push(p.x, by - i * 3.7, p.z);
+    });
     solid.add(mesh(new THREE.SphereGeometry(0.5, 8, 6), toon(race ? '#ff4d4d' : '#ffe066', { emissive: race ? '#ff4d4d' : '#ffe066' }), p.x, p.h + 0.4, p.z, false));
-    glowAt.push(p.x, by, p.z, p.x, p.h + 0.4, p.z);
+    glowAt.push(p.x, p.h + 0.4, p.z);
   }
 
   // The gas station's price sign, hung from the top of its pole (the pole is city.ts's).
   const gas = cityLayout().gas;
   if (gas) {
     const yaw = Math.atan2(gas.fx, gas.fz);
-    boards.add('⛽ GAS', 7.5, 2.8, '#e63946', '#ffffff', '#ffffff', gas.sign.x, gasPoleHeight - 1.4, gas.sign.z, yaw, true, 0.2);
-    boards.add('1.89  2.09', 6, 1.4, '#1d2b3a', '#ffd166', '#ffffff', gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, yaw, true, 0.2);
+    // Each a slab round the pole (0.4 thick), lettered on both faces: not two bare sheets either side of it.
+    slab(gas.sign.x, gasPoleHeight - 1.4, gas.sign.z, 7.5, 2.8, yaw, '#e63946');
+    boards.add('⛽ GAS', 7.5, 2.8, '#e63946', '#ffffff', '#ffffff', gas.sign.x, gasPoleHeight - 1.4, gas.sign.z, yaw, true, 0.25);
+    slab(gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, 6, 1.4, yaw, '#1d2b3a');
+    boards.add('1.89  2.09', 6, 1.4, '#1d2b3a', '#ffd166', '#ffffff', gas.sign.x, gasPoleHeight - 3.6, gas.sign.z, yaw, true, 0.25);
     glowAt.push(gas.sign.x, gasPoleHeight - 2, gas.sign.z);
-    // The canopy's fascia says it too, on the street side.
+    // The canopy's fascia says it too, on the street side (a centimetre proud of the red band along its foot).
     const c = gas.canopy;
     const cw = gas.fz ? c.maxX - c.minX : c.maxZ - c.minZ;
-    boards.add('GAS', Math.min(cw, 6), 0.9, '#f4f1de', '#e63946', '#e63946', (c.minX + c.maxX) / 2 + gas.fx * ((c.maxX - c.minX) / 2 + 0.1), 4.5, (c.minZ + c.maxZ) / 2 + gas.fz * ((c.maxZ - c.minZ) / 2 + 0.1), yaw, false);
+    boards.add('GAS', Math.min(cw, 6), 0.9, '#f4f1de', '#e63946', '#e63946', (c.minX + c.maxX) / 2 + gas.fx * ((c.maxX - c.minX) / 2), 4.5, (c.minZ + c.maxZ) / 2 + gas.fz * ((c.maxZ - c.minZ) / 2), yaw, false, 0.04);
   }
 
   // A big P over the parking deck, crossed so it's seen from every street.

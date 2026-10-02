@@ -140,10 +140,16 @@ export function gate(g: Gate, sign: string, solid: THREE.Group, colliders: Colli
   }
   const label = textPlane(sign, { size: 64, bg: '#ffd166', color: '#2b2d42' });
   label.scale.setScalar(1.6);
-  const face = at(0, -0.9);
-  label.position.set(face.x, y0 + H - 1.2, face.z);
-  // Facing whoever's coming to go through it.
+  // Hung from the beam's front face on two short rods (it used to float 0.75 m below it), facing whoever's coming to go through.
+  const hang = 0.3;
+  const { width: lw, height: lh } = label.geometry.parameters;
+  const face = at(0, -0.47);
+  label.position.set(face.x, y0 + H - hang - (lh * 1.6) / 2, face.z);
   label.rotation.y = g.rotY + Math.PI;
+  for (const side of [-1, 1]) {
+    const rod = at(side * (lw * 0.8 - 0.4), -0.47);
+    box(solid, 0.06, hang + 0.05, 0.06, '#adb5bd', rod.x, H - hang, rod.z, g.rotY, false);
+  }
   const shimmer = new THREE.Mesh(
     new THREE.PlaneGeometry(g.width, H - 0.2),
     new THREE.MeshBasicMaterial({ color: '#9bf6ff', transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }),

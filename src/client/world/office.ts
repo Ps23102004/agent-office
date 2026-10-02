@@ -718,7 +718,8 @@ function buildBalcony(group: THREE.Group, colliders: Collider[], interactables: 
   // A bench under the window, a bistro table with two stools, and plants.
   const bench = new THREE.Group();
   bench.add(mesh(roundedBox(2, 0.08, 0.46, 0.05), wood, 0, 0.45, 0));
-  bench.add(mesh(box(2, 0.32, 0.06), wood, 0, 0.78, -0.2));
+  // The back rests on the seat's rear edge (it hung 13 cm above the seat).
+  bench.add(mesh(box(2, 0.4, 0.06), wood, 0, 0.69, -0.2));
   for (const sx of [-0.85, 0.85]) bench.add(mesh(box(0.06, 0.45, 0.4), ink, sx, 0.22, 0));
   bench.position.set(-9, 0, minZ + 0.3);
   // Somewhere to sit, so not merged with the rest: its own meshes carry what E is about when you look at it.

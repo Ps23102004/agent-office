@@ -4,7 +4,7 @@ import type { NightParts } from './outside';
 import { decorTicker } from '../quality';
 import { mergeByMaterial, mesh, toon, toonVertex } from './toon';
 import { buildTower } from './tower';
-import { GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, shopModules, SHOP_H, type Light, type Lot } from '../../shared/city';
+import { CROSSING_PAINT, GRID, INNER, POST_RADIUS, PERIOD, RADIUS, ROAD_W as ROAD, STREET_X, STREET_Z, WALK, NEIGHBOURS, cityLayout, cityStreetscape, lightPhase, neighbourArea, parkHedges, rng, shopModules, SHOP_H, type Light, type Lot } from '../../shared/city';
 import { districtAt } from '../../shared/places';
 import { buildLandmarks } from './landmarks';
 import { VENUES } from '../../shared/venues';
@@ -233,14 +233,9 @@ function groundTexture(): THREE.CanvasTexture {
       g.fillRect(mid - 1.5, i, 3, 12);
       g.fillRect(i, mid - 1.5, 12, 3);
     }
-    // Zebra crossings round the intersection.
-    g.fillStyle = '#f1f1f1';
-    for (let k = -road / 2 + 3; k < road / 2 - 3; k += 7) {
-      for (const s of [-1, 1]) {
-        g.fillRect(mid + k, mid + s * (walk / 2 + 2) - (s < 0 ? 16 : 0), 4, 16);
-        g.fillRect(mid + s * (walk / 2 + 2) - (s < 0 ? 16 : 0), mid + k, 16, 4);
-      }
-    }
+    // Zebra crossings and stop lines, where the street has them (z runs up the canvas).
+    g.fillStyle = '#f5f5f5';
+    for (const [x0, z0, x1, z1] of [...CROSSING_PAINT.zebra, ...CROSSING_PAINT.stop]) g.fillRect(mid + x0 * px, mid - z1 * px, (x1 - x0) * px, (z1 - z0) * px);
   });
 }
 
@@ -426,11 +421,9 @@ export function buildCity(night: NightParts): City {
     const tops = batch.tops;
     const extras = new THREE.Group();
     const beacons = batch.beacons;
-    // W6: where the café and the bar stand, a plain box each at their height (and the neighbour that
-    // shared the lot), not the lot's own building.
+    // What's hand-built round the office, as the street has it: the café and the bar, and the neighbours, a plain box each at
+    // their height; their lots get no building of their own (nor does the golf hole's block).
     type Box = { minX: number; maxX: number; minZ: number; maxZ: number };
-    const meets = (a: Box, b: Box) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
-    const venueLot = (l: Lot) => VENUES.some((v) => meets(l.plot, v.box) || meets(l.plot, v.terrace));
     const plain = (b: Box, h: number, paint: number) => {
       let bucket = batch.walls.get(paint);
       if (!bucket) batch.walls.set(paint, (bucket = new Walls()));
@@ -439,9 +432,9 @@ export function buildCity(night: NightParts): City {
       tops.top((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2, b.maxX - b.minX, b.maxZ - b.minZ, h * k);
     };
     for (const v of VENUES) plain(v.box, v.height, v.id === 'cafe' ? 6 : BRICKS[0]);
-    for (const n of NEIGHBOURS) if (lots.some((l) => venueLot(l) && meets(l.plot, neighbourArea(n)))) plain(neighbourArea(n), n[3], 3);
+    for (const n of NEIGHBOURS) plain(neighbourArea(n), n[3], 3);
     for (const lot of lots) {
-      if (venueLot(lot)) continue;
+      if (lot.hand) continue;
       const k = rise(lot.ring, drop);
       const topY = stack(batch, lot, k);
       const top = lot.top;
@@ -823,20 +816,8 @@ function streetTexture(): THREE.CanvasTexture {
         R('#f1f1f1', s * (road - 0.55) - 0.07, a0, s * (road - 0.55) + 0.07, a1);
       }
     }
-    // Zebra crossings across all four arms, and stop lines in front of them, the lane each way's own.
-    for (const s of [-1, 1]) {
-      for (let k = -3; k <= 3; k++) {
-        const c = k * 1.05;
-        R('#f5f5f5', s * (road + 0.4) - (s < 0 ? 2 : 0), c - 0.26, s * (road + 0.4) + (s > 0 ? 2 : 0), c + 0.26);
-        R('#f5f5f5', c - 0.26, s * (road + 0.4) - (s < 0 ? 2 : 0), c + 0.26, s * (road + 0.4) + (s > 0 ? 2 : 0));
-      }
-    }
-    const stop = road + 3.1;
-    // Right-hand traffic: heading +x you keep to +z, heading -x to -z, heading +z to -x, heading -z to +x.
-    R('#f5f5f5', -stop - 0.5, 0.2, -stop, road - 0.2);
-    R('#f5f5f5', stop, -road + 0.2, stop + 0.5, -0.2);
-    R('#f5f5f5', -road + 0.2, -stop - 0.5, -0.2, -stop);
-    R('#f5f5f5', 0.2, stop, road - 0.2, stop + 0.5);
+    // Zebra crossings across all four arms (where the walkers cross), and stop lines in front of them (where the cars wait), the lane each way's own.
+    for (const r of [...CROSSING_PAINT.zebra, ...CROSSING_PAINT.stop]) R('#f5f5f5', ...r);
   });
 }
 
@@ -852,7 +833,7 @@ const darkOf = (m: THREE.MeshToonMaterial) => Math.min(1, m.emissiveIntensity / 
  * its roads and sidewalks with their markings, every block's buildings at full height (shop fronts
  * with awnings and signs, brick walk-ups, glass towers, low houses with pitched roofs at the outskirts,
  * a gas station, a parking structure), parks, street lamps, traffic lights that go through their
- * cycle (shared/city.ts lightPhase), benches, bins and hydrants. The ground's at y = 0: put the group
+ * cycle (shared/city.ts lightPhase), benches, bins, hydrants, meters, newspaper boxes and bike racks. The ground's at y = 0: put the group
  * where the street is. The lots round the office that outside.ts builds by hand are left to it.
  */
 export function buildStreetCity(night: NightParts): THREE.Group {
@@ -987,8 +968,9 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     soup.add(box, '#575c68', (p.minX + p.maxX) / 2, -0.03, (p.minZ + p.maxZ) / 2, p.maxX - p.minX, 0.06, p.maxZ - p.minZ);
     const cw = c.maxX - c.minX;
     const cd = c.maxZ - c.minZ;
-    soup.add(box, '#f4f1de', (c.minX + c.maxX) / 2, 4.7, (c.minZ + c.maxZ) / 2, cw, 0.4, cd);
-    soup.add(box, '#e63946', (c.minX + c.maxX) / 2, 4.5, (c.minZ + c.maxZ) / 2, cw + 0.06, 0.16, cd + 0.06);
+    // A deep fascia all round (the GAS board in landmarks.ts goes on its street side, 0.9 m of it), with a red band along its foot.
+    soup.add(box, '#f4f1de', (c.minX + c.maxX) / 2, 4.5, (c.minZ + c.maxZ) / 2, cw, 0.9, cd);
+    soup.add(box, '#e63946', (c.minX + c.maxX) / 2, 4.1, (c.minZ + c.maxZ) / 2, cw + 0.06, 0.16, cd + 0.06);
     for (const [px, pz] of [
       [c.minX + 0.3, c.minZ + 0.3],
       [c.maxX - 0.3, c.maxZ - 0.3],
@@ -1081,15 +1063,47 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     if (p.kind === 'bench') {
       const [sx, sz] = at(0, 0);
       soup.add(box, '#8a5a3b', sx, 0.45, sz, 1.7, 0.08, 0.5, p.rot);
+      // The back rests on the seat's rear edge and goes up from it (it started 9 cm above the seat, hanging on nothing), held by the legs' back edge.
       const [bx, bz] = at(0, -0.22);
-      soup.add(box, '#8a5a3b', bx, 0.78, bz, 1.7, 0.4, 0.06, p.rot);
+      soup.add(box, '#8a5a3b', bx, 0.7, bz, 1.7, 0.42, 0.06, p.rot);
       for (const lx of [-0.7, 0.7]) {
         const [px, pz] = at(lx, 0);
         soup.add(box, '#3d405b', px, 0.22, pz, 0.08, 0.44, 0.44, p.rot);
+        // The uprights are a centimetre deeper than the back and stop a centimetre short of its top: faces in the same plane as the back's would fight it.
+        const [ux, uz] = at(lx, -0.22);
+        soup.add(box, '#3d405b', ux, 0.67, uz, 0.08, 0.46, 0.08, p.rot);
       }
     } else if (p.kind === 'bin') {
       soup.add(cyl, '#2f6f4f', p.x, 0.45, p.z, 0.26, 0.9, 0.26);
       soup.add(cyl, '#1f2933', p.x, 0.93, p.z, 0.29, 0.08, 0.29);
+    } else if (p.kind === 'meter') {
+      // A parking meter: a post with a head on it, its face toward the sidewalk.
+      soup.add(cyl, '#6b7280', p.x, 0.55, p.z, 0.04, 1.1, 0.04);
+      soup.add(box, '#3a3f4b', p.x, 1.2, p.z, 0.2, 0.3, 0.14, p.rot);
+      const [fx, fz] = at(0, -0.075);
+      soup.add(box, '#9fe0c6', fx, 1.24, fz, 0.14, 0.12, 0.02, p.rot);
+    } else if (p.kind === 'paper') {
+      // A newspaper box: a coloured body, a lid, and the window.
+      soup.add(box, '#2a6fdb', p.x, 0.42, p.z, 0.5, 0.84, 0.4, p.rot);
+      soup.add(box, '#cfd4de', p.x, 0.87, p.z, 0.54, 0.06, 0.44, p.rot);
+      const [wx, wz] = at(0, -0.205);
+      soup.add(box, '#f6f1e4', wx, 0.6, wz, 0.34, 0.3, 0.02, p.rot);
+    } else if (p.kind === 'rack') {
+      // A bike rack: three upside-down U's along the kerb.
+      for (const lx of [-0.7, 0, 0.7]) {
+        for (const lz of [-0.22, 0.22]) {
+          const [px, pz] = at(lx, lz);
+          soup.add(box, '#4b5563', px, 0.4, pz, 0.05, 0.8, 0.05, p.rot);
+        }
+        const [tx, tz] = at(lx, 0);
+        soup.add(box, '#4b5563', tx, 0.78, tz, 0.05, 0.05, 0.49, p.rot);
+      }
+    } else if (p.kind === 'bags') {
+      // Rubbish bags set out by the bin: three lumps.
+      for (const [lx, lz, r, c] of [[-0.18, 0.05, 0.2, '#1d1f24'], [0.17, -0.06, 0.18, '#2f6f4f'], [0, 0.17, 0.16, '#1d1f24']] as const) {
+        const [gx, gz] = at(lx, lz);
+        soup.add(ball, c, gx, r * 0.85, gz, r, r * 0.85, r);
+      }
     } else {
       soup.add(cyl, '#e63946', p.x, 0.36, p.z, 0.15, 0.72, 0.15);
       soup.add(ball, '#e63946', p.x, 0.75, p.z, 0.17, 0.17, 0.17);

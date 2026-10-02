@@ -1,0 +1,240 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import * as THREE from 'three';
+import { LOT_PAVING } from '../src/shared/garage.js';
+import {
+  CROSSING_PAINT,
+  GATE_PYLONS,
+  NEIGHBOURS,
+  OFFICE_BLOCK,
+  PERIOD,
+  ROAD_W,
+  STOP_AT,
+  STOP_LINE,
+  STREET_X,
+  STREET_Z,
+  TREE_GAP,
+  ZEBRA,
+  atShopDoor,
+  cityDressing,
+  cityLayout,
+  citySolids,
+  cityStreetscape,
+  footprint,
+  neighbourArea,
+  parkHedges,
+  surfaceAt,
+} from '../src/shared/city.js';
+import { CITY_GATE } from '../src/shared/circuit.js';
+import { CITY_ARENA_GATE } from '../src/shared/arena.js';
+import { VENUES, frontZ } from '../src/shared/venues.js';
+import { poleOnly } from '../src/client/world/dressing.js';
+import { LAT, buildStreetLife, busStops, crossAt, nextCrossing, shelterArea } from '../src/client/world/streetlife.js';
+
+// Where things are put in the city, and what it keeps clear: the garage's lots, the crossings, the parks, the lamps and the
+// sidewalk furniture. Pure numbers (and one simulated minute of street life), no WebGL.
+
+const touches = (a: { minX: number; maxX: number; minZ: number; maxZ: number }, b: typeof a) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
+
+test("the garage's lots are paved only on the office's own block, never over a road or the avenues' sidewalks", () => {
+  assert.equal(LOT_PAVING.length, 2);
+  for (const b of LOT_PAVING) {
+    assert.ok(b.minX >= OFFICE_BLOCK.minX && b.maxX <= OFFICE_BLOCK.maxX && b.minZ >= OFFICE_BLOCK.minZ && b.maxZ <= OFFICE_BLOCK.maxZ, 'inside the block');
+    assert.ok(b.maxX > b.minX && b.maxZ > b.minZ);
+    for (let x = b.minX + 0.25; x < b.maxX; x += 0.5) for (let z = b.minZ + 0.25; z < b.maxZ; z += 0.5) assert.notEqual(surfaceAt(x, z), 'road', `paving over the road at ${x}, ${z}`);
+  }
+});
+
+test('cars wait behind the stop line, which is behind the zebra the walkers cross on', () => {
+  assert.ok(ZEBRA.from > 4 && ZEBRA.to > ZEBRA.from, 'the zebra starts outside the intersection');
+  assert.ok(LAT > ZEBRA.from && LAT < ZEBRA.to, 'walkers cross on the zebra');
+  assert.ok(STOP_LINE.from > ZEBRA.to && STOP_LINE.to > STOP_LINE.from, 'the stop line is behind the zebra');
+  assert.ok(STOP_AT > STOP_LINE.to, 'the bumper stops short of the line');
+});
+
+test('in a minute and a half of street life no stopped car has its nose on a zebra', () => {
+  const life = buildStreetLife();
+  const near = { x: 0, z: STREET_Z };
+  let t = 1000;
+  let stopped = 0;
+  let worst = Infinity;
+  // Stopped is stopped in two looks half a second apart (a car just put on the road is at rest for a moment).
+  const was = new Set<number>();
+  for (let i = 0; i < 90 * 30; i++) {
+    t += 1 / 30;
+    life.update(t, 1 / 30, 0.2, near, [{ x: near.x, z: near.z, vx: 0, vz: 0 }], 12.5);
+    if (i % 15) continue;
+    const now = new Set<number>();
+    for (const v of life.vehicles) {
+      if (!v.on || v.v > 0.05 || v.path) continue;
+      now.add(v.id);
+      if (!was.has(v.id)) continue;
+      // Its nose's distance from the middle of the crossing it's heading for.
+      const o = v.axis === 'x' ? STREET_X : STREET_Z;
+      const ahead = (crossAt(o, nextCrossing(v.s, v.dir, o)) - v.s) * v.dir - v.len / 2;
+      if (ahead > 40) continue;
+      stopped++;
+      worst = Math.min(worst, ahead);
+    }
+    was.clear();
+    for (const id of now) was.add(id);
+  }
+  assert.ok(stopped > 30, `${stopped} stopped cars seen`);
+  assert.ok(worst >= ZEBRA.to - 0.05, `a car stopped with its nose ${worst.toFixed(2)} m from the crossing, on the zebra (${ZEBRA.to})`);
+});
+
+test('no park swallows a hand-built neighbour, and the neighbours stand clear of every hedge', () => {
+  const { parks } = cityLayout();
+  for (const p of parks) {
+    const block = { minX: p.x - p.size / 2, maxX: p.x + p.size / 2, minZ: p.z - p.size / 2, maxZ: p.z + p.size / 2 };
+    for (const n of NEIGHBOURS) {
+      const a = neighbourArea(n);
+      assert.ok(!touches(block, a), `park at ${p.x}, ${p.z} holds the neighbour at ${n[0]}, ${n[1]}`);
+      for (const h of parkHedges(p)) assert.ok(!touches(h, a), `a hedge of the park at ${p.x}, ${p.z} runs through the neighbour at ${n[0]}, ${n[1]}`);
+    }
+  }
+  // The block where the roll said "park" is built up like any other.
+  assert.ok(!parks.some((p) => p.x === -56 && p.z === 55));
+  assert.ok(cityLayout().lots.some((l) => Math.abs(l.x + 56) < 30 && Math.abs(l.z - 55) < 30 && !l.hand), 'lots on it');
+});
+
+test('park trees stand at least TREE_GAP apart', () => {
+  for (const p of cityLayout().parks) {
+    for (let a = 0; a < p.trees.length; a++) {
+      for (let b = a + 1; b < p.trees.length; b++) assert.ok(Math.hypot(p.trees[a].x - p.trees[b].x, p.trees[a].z - p.trees[b].z) >= TREE_GAP, `park at ${p.x}, ${p.z}`);
+    }
+  }
+});
+
+test("street lamps stand clear of the crossings' landings, the signal poles and the venues' doors", () => {
+  const { lamps, poles } = cityStreetscape();
+  assert.ok(lamps.length > 500);
+  for (const l of lamps) {
+    // Along its own street: how far from the nearest cross street's middle.
+    const [along, origin] = l.ax === 0 ? [l.x, STREET_X] : [l.z, STREET_Z];
+    const m = (((along - origin) % PERIOD) + PERIOD) % PERIOD;
+    assert.ok(Math.min(m, PERIOD - m) > 9, `lamp at ${l.x}, ${l.z} is by a crossing`);
+  }
+  for (const l of lamps) {
+    if (Math.hypot(l.x, l.z) > 120) continue;
+    for (const p of poles) assert.ok(Math.hypot(l.x - p.x, l.z - p.z) > 4, `lamp at ${l.x}, ${l.z} is by a signal pole`);
+  }
+  for (const v of VENUES) {
+    for (const l of lamps) assert.ok(Math.abs(l.x - v.door.x) > 1.5 || Math.abs(l.z - frontZ(v)) > 8, `lamp at ${l.x}, ${l.z} stands on ${v.name}'s door`);
+  }
+});
+
+test('the paint at a crossing: bars on the zebra the walkers use, a stop line behind it in each lane, none over another', () => {
+  const { zebra, stop } = CROSSING_PAINT;
+  assert.equal(zebra.length, 28);
+  assert.equal(stop.length, 4);
+  const eps = 1e-9;
+  // A paint rectangle as [from, to] along its street and [from, to] across it (`far` is where the arm's paint starts).
+  const arm = (r: readonly [number, number, number, number], far: number) => (Math.abs(r[0]) >= far - eps ? [r[0], r[2], r[1], r[3]] : [r[1], r[3], r[0], r[2]]);
+  const reach = 3 * 1.05 + 0.26;
+  for (const r of zebra) {
+    const [a0, a1, c0, c1] = arm(r, ZEBRA.from);
+    assert.ok(a0 * a1 > 0 && Math.min(Math.abs(a0), Math.abs(a1)) >= ZEBRA.from - eps && Math.max(Math.abs(a0), Math.abs(a1)) <= ZEBRA.to + eps, 'a bar is off the zebra');
+    assert.ok(c0 >= -reach - eps && c1 <= reach + eps && reach < ROAD_W / 2, 'a bar runs out of the road');
+  }
+  // The walkers' line, either side of the intersection, is on the zebra.
+  for (const lat of [LAT, -LAT]) assert.ok(zebra.some((r) => lat > r[0] && lat < r[2]));
+  for (const r of stop) {
+    const [a0, a1, c0, c1] = arm(r, STOP_LINE.from);
+    assert.ok(Math.min(Math.abs(a0), Math.abs(a1)) >= STOP_LINE.from - eps && Math.max(Math.abs(a0), Math.abs(a1)) <= STOP_LINE.to + eps, 'a stop line is not where it says');
+    assert.ok(c0 * c1 > 0 && Math.abs(c0) >= 0.2 - eps && Math.abs(c1) <= ROAD_W / 2 - 0.2 + eps, 'a stop line is not in one lane');
+    for (const z of zebra) assert.ok(!touches({ minX: r[0], minZ: r[1], maxX: r[2], maxZ: r[3] }, { minX: z[0], minZ: z[1], maxX: z[2], maxZ: z[3] }), 'a stop line on a bar');
+  }
+});
+
+test('no lamp stands in front of a shop door, and no bus shelter (or its sign) stands on a lamp, a bench or a hedge', () => {
+  for (const l of cityStreetscape().lamps) assert.ok(!atShopDoor(l.x, l.z, 0.2), `lamp at ${l.x}, ${l.z} stands in a doorway`);
+  const stops = busStops();
+  assert.ok(stops.length >= 10, `${stops.length} bus stops`);
+  for (const b of stops) {
+    const a = shelterArea(b.x, b.z, b.face);
+    const hit = citySolids((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 3).find((s) => touches(a, s));
+    assert.ok(!hit, `the shelter at ${b.x}, ${b.z} stands on something at ${hit?.minX}, ${hit?.minZ}`);
+    // Its stop sign at the end of it (dressingModels.ts busSigns) is on free ground too.
+    const sx = b.x - 2.1 * Math.cos(b.face) + 0.2 * Math.sin(b.face);
+    const sz = b.z + 2.1 * Math.sin(b.face) + 0.2 * Math.cos(b.face);
+    assert.equal(citySolids(sx, sz, 0.3).length, 0, `the sign of the stop at ${b.x}, ${b.z} is blocked`);
+  }
+});
+
+test("nothing on the sidewalk stands in the café's or the bar's doorway", () => {
+  for (const v of VENUES) {
+    assert.ok(atShopDoor(v.door.x, frontZ(v) + v.fz * 2, 0.2), `${v.name}'s door counts as a door`);
+    for (const p of cityStreetscape().props) assert.ok(!atShopDoor(p.x, p.z, 0.2), `${p.kind} at ${p.x}, ${p.z}`);
+    for (const d of cityDressing().items) if (d.kind !== 'flag') assert.ok(Math.abs(d.x - v.door.x) > 0.8 || Math.abs(d.z - frontZ(v)) > 5, `${d.kind} at ${d.x}, ${d.z} is in ${v.name}'s doorway`);
+  }
+});
+
+test('the new street furniture: meters at the kerb, newspaper boxes, bike racks and bags, on shopping streets, clear of everything', () => {
+  const { props, lamps, poles } = cityStreetscape();
+  const kinds = new Set(props.map((p) => p.kind));
+  for (const k of ['meter', 'paper', 'rack', 'bags'] as const) assert.ok(kinds.has(k), `no ${k} anywhere`);
+  for (const p of props) {
+    assert.equal(surfaceAt(p.x, p.z), 'walk', `${p.kind} at ${p.x}, ${p.z}`);
+    // Not inside a lamp post or a signal pole.
+    for (const l of lamps) assert.ok(Math.hypot(l.x - p.x, l.z - p.z) > 0.5, `${p.kind} is in a lamp`);
+    for (const q of poles) assert.ok(Math.hypot(q.x - p.x, q.z - p.z) > 0.5, `${p.kind} is in a signal pole`);
+  }
+  // Nothing sits on another prop: their footprints don't overlap.
+  const fresh = new Set(['meter', 'paper', 'rack', 'bags']);
+  for (let a = 0; a < props.length; a++) {
+    for (let b = a + 1; b < props.length; b++) {
+      if (!fresh.has(props[a].kind) && !fresh.has(props[b].kind)) continue;
+      if (Math.abs(props[a].x - props[b].x) > 3 || Math.abs(props[a].z - props[b].z) > 3) continue;
+      assert.ok(!touches(footprint(props[a]), footprint(props[b])), `${props[a].kind} and ${props[b].kind} overlap at ${props[a].x.toFixed(1)}, ${props[a].z.toFixed(1)}`);
+    }
+  }
+  // They're solid, at their own height.
+  for (const p of props.filter((p) => p.kind === 'meter' || p.kind === 'rack')) assert.ok(citySolids(p.x, p.z, 0.05).length >= 1, `${p.kind} is solid`);
+});
+
+test("Kenney's street sign keeps its whole pole, from the ground to its top, and loses the blank blades that reach out of it", () => {
+  // Read the real file: its one mesh's positions and indices (after the JSON chunk comes the binary one).
+  const b = readFileSync(new URL('../src/client/models/dressing/road-sign-street.glb', import.meta.url));
+  const jsonLength = b.readUInt32LE(12);
+  const gltf = JSON.parse(b.toString('utf8', 20, 20 + jsonLength));
+  const bin = b.subarray(20 + jsonLength + 8);
+  const prim = gltf.meshes[0].primitives[0];
+  const view = (accessor: number, Type: typeof Float32Array | typeof Uint16Array | typeof Uint32Array) => {
+    const a = gltf.accessors[accessor];
+    const v = gltf.bufferViews[a.bufferView];
+    const from = bin.byteOffset + (v.byteOffset ?? 0) + (a.byteOffset ?? 0);
+    return new Type(bin.buffer.slice(from, from + a.count * Type.BYTES_PER_ELEMENT * (a.type === 'VEC3' ? 3 : 1)));
+  };
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(view(prim.attributes.POSITION, Float32Array), 3));
+  geo.setIndex(new THREE.BufferAttribute(view(prim.indices, gltf.accessors[prim.indices].componentType === 5125 ? Uint32Array : Uint16Array), 1));
+  const SCALE = 5.2; // dressingModels.ts KIT.streetSign
+  const out = poleOnly(geo, SCALE, 0.14);
+  assert.ok(out.index!.count < geo.index!.count, 'the blades go');
+  // What stays covers the pole's height without a gap: the shaft's own triangles run from the base up to the top.
+  const pos = out.getAttribute('position');
+  const spans: [number, number][] = [];
+  for (let t = 0; t < out.index!.count; t += 3) {
+    const ys = [0, 1, 2].map((k) => pos.getY(out.index!.getX(t + k)) * SCALE);
+    spans.push([Math.min(...ys), Math.max(...ys)]);
+    for (let k = 0; k < 3; k++) assert.ok(Math.abs(pos.getX(out.index!.getX(t + k))) * SCALE <= 0.14 && Math.abs(pos.getZ(out.index!.getX(t + k))) * SCALE <= 0.14, 'nothing reaches out of the pole');
+  }
+  spans.sort((p, q) => p[0] - q[0]);
+  let top = spans[0][1];
+  assert.ok(spans[0][0] < 0.01, 'it stands on the ground');
+  for (const [lo, hi] of spans) {
+    assert.ok(lo <= top + 0.01, `a gap in the pole above ${top.toFixed(2)} m`);
+    top = Math.max(top, hi);
+  }
+  assert.ok(top > 2.4 && top < 2.6, `the pole is ${top.toFixed(2)} m tall`);
+  assert.equal(geo.index!.count, 462, 'the model itself is untouched');
+});
+
+test("the gate pylons stand clear of their gates' runways", () => {
+  // The circuit's red runway runs 5 m either side of its gate's x (client/world/circuit.ts buildCityGate), the arena's dark one from there east to its gate, as wide as it.
+  const red = { minX: CITY_GATE.x - 5, maxX: CITY_GATE.x + 5, minZ: -Infinity, maxZ: Infinity };
+  const dark = { minX: CITY_GATE.x + 5, maxX: CITY_ARENA_GATE.x + 2, minZ: CITY_ARENA_GATE.z - CITY_ARENA_GATE.width / 2, maxZ: CITY_ARENA_GATE.z + CITY_ARENA_GATE.width / 2 };
+  for (const p of GATE_PYLONS) for (const r of [red, dark]) assert.ok(!touches({ minX: p.x - p.half, maxX: p.x + p.half, minZ: p.z - p.half, maxZ: p.z + p.half }, r), `pylon ${p.id} stands on a runway`);
+});

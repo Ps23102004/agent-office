@@ -1,5 +1,5 @@
 import { FLOOR, ROAD, WALL_T } from './layout.js';
-import { surfaceAt, type Surface } from './city.js';
+import { OFFICE_BLOCK, surfaceAt, type Surface } from './city.js';
 
 // The cars and bikes in the garage, which anyone can drive: where they're parked, where you can
 // take them (the garage, the lots round it and the street), and the arcade physics a driver's own
@@ -49,6 +49,11 @@ export interface Box {
 /** The paved lot in front of the garage, out to the sidewalk, and the one down its east side. */
 export const LOT: Box = { minX: -30, maxX: 30, minZ: B.maxZ, maxZ: 21 };
 export const SIDE_LOT: Box = { minX: B.maxX, maxX: B.maxX + 12, minZ: B.minZ - 2, maxZ: B.maxZ + 4 };
+/**
+ * What of the two lots is drawn as grey paving (client/world/outside.ts): only what's on the office's own block. Past it are the
+ * city's sidewalks and the avenues either side, which you can drive onto from the lots but which keep their own paint (lane lines, zebras).
+ */
+export const LOT_PAVING: readonly Box[] = [LOT, SIDE_LOT].map((b) => ({ minX: Math.max(b.minX, OFFICE_BLOCK.minX), maxX: Math.min(b.maxX, OFFICE_BLOCK.maxX), minZ: Math.max(b.minZ, OFFICE_BLOCK.minZ), maxZ: Math.min(b.maxZ, OFFICE_BLOCK.maxZ) }));
 /** How far along the street either way (from the building) you can drive, before it's too far to see. */
 export const STREET_END = 90;
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { PERIOD, RADIUS, ROAD_W, STREET_X, STREET_Z, WALK, cityLayout, citySolids, cityStreetscape, lightPhase as signals, rng } from '../../shared/city';
+import { PERIOD, RADIUS, ROAD_W, STOP_AT, STREET_X, STREET_Z, WALK, cityLayout, citySolids, cityStreetscape, lightPhase as signals, rng, type Area } from '../../shared/city';
 import { HAIR_COLORS, SKIN_TONES } from '../../shared/avatar';
 import type { Box } from '../../shared/garage';
 import type { NightParts } from './outside';
@@ -31,8 +31,8 @@ const LANE = ROAD_W / 4;
 /** How far the road's edge is from the street's middle, and the middle of the sidewalk. */
 const CURB = ROAD_W / 2;
 const WALK_OFF = CURB + WALK / 2;
-/** Where a car stops for a light: this far from the middle of the crossing. */
-const STOP = CURB + 1.2;
+/** Where a car stops for a light: its bumper this far from the middle of the crossing, behind the stop line and the zebra (shared/city.ts). */
+const STOP = STOP_AT;
 
 const ACC = 3.2;
 const BRAKE = 7;
@@ -707,8 +707,8 @@ export interface Ring {
   starts: number[];
   crossings: { o0: number; o1: number; axis: Axis; line: number; k: number }[];
 }
-/** How far from a street's middle the walkers keep (the sidewalk's outer part: benches, lamps and bins are inboard). */
-const LAT = 5.65;
+/** How far from a street's middle the walkers keep (the sidewalk's outer part: benches, lamps and bins are inboard): across a street they're on its zebra. */
+export const LAT = 5.65;
 export function makeRing(a: number, b: number, c: number, d: number, cw: boolean): Ring {
   const x0 = crossAt(STREET_X, a) + LAT, x1 = crossAt(STREET_X, b) - LAT, z0 = crossAt(STREET_Z, c) + LAT, z1 = crossAt(STREET_Z, d) - LAT;
   const pts: [number, number][] = cw ? [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] : [[x0, z0], [x0, z1], [x1, z1], [x1, z0]];
@@ -797,17 +797,22 @@ const sideKey = (axis: Axis, coord: number): string => {
 let shelters: ReturnType<typeof busStopsNow> | null = null;
 export const busStops = () => (shelters ??= busStopsNow());
 
-/** Whether a shelter at (x, z) facing `face` has nothing solid under it (a park's hedge, a bench, a lamp, a building). */
-function shelterClear(x: number, z: number, face: number): boolean {
+/**
+ * What a shelter at (x, z) facing `face` covers on the ground: its roof, glass and posts, and the stop's sign at either end of it
+ * (in its own frame, lx along the sidewalk and lz toward the road: -2.2 to 2.2 and -2.0 to 0.3). A world box, as `face` is a quarter turn.
+ */
+export function shelterArea(x: number, z: number, face: number): Area {
   const sx = Math.sin(face), cz = Math.cos(face);
-  for (const lx of [-1.7, -0.85, 0, 0.85, 1.7, 2.1]) {
-    for (const lz of [-1.9, -1.2, -0.4, 0.2]) {
-      const wx = x + lx * cz + lz * sx;
-      const wz = z - lx * sx + lz * cz;
-      if (citySolids(wx, wz, 0.05).some((a) => wx >= a.minX - 0.05 && wx <= a.maxX + 0.05 && wz >= a.minZ - 0.05 && wz <= a.maxZ + 0.05)) return false;
-    }
-  }
-  return true;
+  const at = (lx: number, lz: number) => [x + lx * cz + lz * sx, z - lx * sx + lz * cz];
+  const [ax, az] = at(-2.2, -2);
+  const [bx, bz] = at(2.2, 0.3);
+  return { minX: Math.min(ax, bx), maxX: Math.max(ax, bx), minZ: Math.min(az, bz), maxZ: Math.max(az, bz) };
+}
+
+/** Whether a shelter at (x, z) facing `face` has nothing solid anywhere under it (a park's hedge, a bench, a lamp post, a building). */
+function shelterClear(x: number, z: number, face: number): boolean {
+  const a = shelterArea(x, z, face);
+  return !citySolids((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 3).some((b) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ);
 }
 
 function busStopsNow(): { x: number; z: number; face: number; axis: Axis; coord: number; along: number }[] {

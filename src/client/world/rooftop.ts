@@ -536,12 +536,13 @@ export function buildRooftop(night: NightParts, floors: number): Rooftop {
   const shelf = toon('#4a2c1d');
   bar.add(mesh(new THREE.BoxGeometry(0.6, 1.0, blen - 0.6), shelf, back, 0.5, bz));
   const glowMat = new THREE.MeshBasicMaterial({ color: '#ffb55a' });
-  const glowPanel = mesh(new THREE.PlaneGeometry(blen - 1, 1.5).rotateY(-Math.PI / 2), glowMat, FLOOR.maxX - 0.08, 1.85, bz, false);
+  // The panel and the shelves start on the cabinet's top (1.0 m), not 10 cm above it.
+  const glowPanel = mesh(new THREE.PlaneGeometry(blen - 1, 1.6).rotateY(-Math.PI / 2), glowMat, FLOOR.maxX - 0.08, 1.8, bz, false);
   group.add(glowPanel);
   const bottles = new THREE.Group();
   const bottleColors = ['#2a9d8f', '#e9c46a', '#8ecae6', '#6a994e', '#bc4749', '#f4a261', '#dda15e'];
   let k = 0;
-  for (const y of [1.15, 1.65, 2.15]) {
+  for (const y of [1.04, 1.56, 2.08]) {
     bar.add(mesh(new THREE.BoxGeometry(0.4, 0.04, blen - 1), shelf, FLOOR.maxX - 0.24, y - 0.02, bz, false));
     for (let z = ROOF_BAR.minZ + 0.8; z < ROOF_BAR.maxZ - 0.6; z += 0.24) {
       const h = 0.26 + ((k * 7) % 5) * 0.03;

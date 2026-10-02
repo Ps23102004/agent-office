@@ -8,7 +8,7 @@
 
 import { GOLF_HOLE } from './layout.js';
 import { placeDressing, type Dressing } from './dressing.js';
-import { VENUES, VENUE_DOORS, venueWalls } from './venues.js';
+import { VENUES, VENUE_DOORS, frontZ, venueWalls } from './venues.js';
 
 /** A block and the street beside it (m). */
 export const PERIOD = 56;
@@ -17,8 +17,34 @@ export const STREET_Z = 27;
 /** The road's width, and a sidewalk either side of it. */
 export const ROAD_W = 8;
 export const WALK = 2;
+/**
+ * Where the crossings are painted and where cars wait, from the middle of an intersection along the street
+ * (m): the zebra across each arm, the stop line behind it, and the spot a car's bumper stops at, just short
+ * of that line. Walkers cross on the zebra (client/world/streetlife.ts LAT), cars wait behind it, and the
+ * street's ground (and the roof's view of it) paints exactly these (CROSSING_PAINT).
+ */
+export const ZEBRA = { from: ROAD_W / 2 + 0.4, to: ROAD_W / 2 + 2.4 } as const;
+export const STOP_LINE = { from: ROAD_W / 2 + 3.1, to: ROAD_W / 2 + 3.6 } as const;
+export const STOP_AT = STOP_LINE.to + 0.1;
+/**
+ * The white paint at an intersection, as rectangles [x0, z0, x1, z1] in meters from its middle: the zebra's bars across all four
+ * arms (ZEBRA) and each lane's stop line (STOP_LINE, right-hand traffic: heading +x you keep to +z, heading -x to -z, heading +z to
+ * -x, heading -z to +x). The street's ground and the roof's view of it (client/world/city.ts) both paint exactly these.
+ */
+export const CROSSING_PAINT: { zebra: (readonly [number, number, number, number])[]; stop: (readonly [number, number, number, number])[] } = (() => {
+  const zebra: (readonly [number, number, number, number])[] = [];
+  for (const s of [-1, 1]) {
+    const [a, b] = s > 0 ? [ZEBRA.from, ZEBRA.to] : [-ZEBRA.to, -ZEBRA.from];
+    for (let k = -3; k <= 3; k++) zebra.push([a, k * 1.05 - 0.26, b, k * 1.05 + 0.26], [k * 1.05 - 0.26, a, k * 1.05 + 0.26, b]);
+  }
+  const [from, to, road] = [STOP_LINE.from, STOP_LINE.to, ROAD_W / 2];
+  const stop = [[-to, 0.2, -from, road - 0.2], [from, -road + 0.2, to, -0.2], [-road + 0.2, -to, -0.2, -from], [0.2, from, road - 0.2, to]] as const;
+  return { zebra, stop: [...stop] };
+})();
 /** How far out the city goes: past this the haze has it anyway. */
 export const RADIUS = 330;
+/** How far apart a park's tree trunks stand at least (m): canopies are 2.4 m and more across. */
+export const TREE_GAP = 3.5;
 /** How far a park tree's trunk stands from the line of either path across the park (m): the path's edge and a metre. */
 const PATH_CLEAR = 2.2;
 /** The lots and parks between the streets are this wide (m). */
@@ -89,6 +115,9 @@ export const keepClear = (x: number, z: number) => CLEAR.some((a) => x > a.minX 
 /** The block behind the office, east of it, left open as a paved plaza with the gate to the race circuit on it (circuit.ts). */
 export const RACE_PLAZA: Area = rect(STREET_X + PERIOD / 2, STREET_Z - PERIOD * 1.5, INNER, INNER);
 
+/** The block the office stands on, paved all over as its plaza: everything outside this is the city's streets and sidewalks. */
+export const OFFICE_BLOCK: Area = rect(STREET_X - PERIOD / 2, STREET_Z - PERIOD / 2, INNER, INNER);
+
 /**
  * The tall lit pylons on the race plaza that say where the two gates are, seen from down the street
  * (client/world/landmarks.ts draws them): the circuit's on the plaza's west edge, off the way from the street to its gate, the arena's in
@@ -126,7 +155,7 @@ export interface Lot {
   fz: number;
   /** The whole plot it stands on (what's left when the block is split up). */
   plot: Area;
-  /** On a neighbour's or the golf hole's lot, round the office: only the roof's view has this one (the street has the hand-built ones). */
+  /** On a neighbour's, the golf hole's or the café's or the bar's lot, round the office: those are hand-built (client/world/outside.ts, venues.ts), so neither the street nor the roof's view draws a building of its own here. */
   hand: boolean;
   /** A house's tree in the yard, if it has one. */
   yard?: { x: number; z: number; s: number; tone: 0 | 1 };
@@ -203,6 +232,7 @@ export function cityLayout(): CityLayout {
       // The block the office stands on: a plaza round it.
       if (i === 0 && j === 0) continue;
       // Now and then a park, with trees.
+      let rb = r;
       if (r() < 0.1 && dist > 60) {
         const park: Park = { x: bx, z: bz, size: inner, trees: [] };
         for (let k = 0; k < 7; k++) {
@@ -212,17 +242,23 @@ export function cityLayout(): CityLayout {
           const off = (d: number) => (Math.abs(d) < PATH_CLEAR ? (d < 0 ? -PATH_CLEAR : PATH_CLEAR) : d);
           park.trees.push({ s, tone, x: bx + off((r() - 0.5) * (inner - 6)), z: bz + off((r() - 0.5) * (inner - 6)) });
         }
-        parks.push(park);
-        continue;
+        // A park never swallows a hand-built neighbour (or the golf hole): that block gets lots instead, on dice of its own so the rest of the city stays as it was.
+        if (handBuilt.some((h) => touches(h, rect(bx, bz, inner, inner)))) rb = rng(hash(i, j, 3131));
+        else {
+          // Trunks at least TREE_GAP apart, so two canopies don't merge into one.
+          park.trees = park.trees.filter((t, n) => park.trees.every((o, m) => m >= n || Math.hypot(t.x - o.x, t.z - o.z) >= TREE_GAP));
+          parks.push(park);
+          continue;
+        }
       }
       // The block split into lots: one big one, two halves or four quarters.
-      const split = r();
+      const split = rb();
       const plots: [number, number, number, number][] = [];
       const gap = 2;
       if (split < 0.25) plots.push([bx, bz, inner, inner]);
       else if (split < 0.6) {
         const w = (inner - gap) / 2;
-        const alongX = r() < 0.5;
+        const alongX = rb() < 0.5;
         for (const s of [-1, 1]) plots.push(alongX ? [bx + (s * (w + gap)) / 2, bz, w, inner] : [bx, bz + (s * (w + gap)) / 2, inner, w]);
       } else {
         const w = (inner - gap) / 2;
@@ -232,17 +268,17 @@ export function cityLayout(): CityLayout {
       // downtown, off to the north-east, where the skyline is.
       const downtown = Math.max(0, 1 - Math.hypot(bx - 210, bz + 220) / 150);
       for (const [lx, lz, lw, ld] of plots) {
-        const back = 1 + r() * 3;
+        const back = 1 + rb() * 3;
         const w = lw - back * 2;
         const d = ld - back * 2;
         if (w < 6 || d < 6) continue;
         let h: number;
-        if (dist < 100) h = 9 + r() * 24 + (r() < 0.1 ? 8 : 0);
-        else if (dist < 190) h = r() < 0.1 ? 50 + r() * 40 : 12 + r() * 28;
-        else h = r() < 0.2 ? 65 + r() * 95 : 20 + r() * 30;
+        if (dist < 100) h = 9 + rb() * 24 + (rb() < 0.1 ? 8 : 0);
+        else if (dist < 190) h = rb() < 0.1 ? 50 + rb() * 40 : 12 + rb() * 28;
+        else h = rb() < 0.2 ? 65 + rb() * 95 : 20 + rb() * 30;
         h *= 1 + downtown * 1.3;
-        const glassy = h > 70 && r() < 0.6;
-        const paint = glassy ? GLASS_TOWERS[Math.floor(r() * GLASS_TOWERS.length)] : Math.floor(r() * 7);
+        const glassy = h > 70 && rb() < 0.6;
+        const paint = glassy ? GLASS_TOWERS[Math.floor(rb() * GLASS_TOWERS.length)] : Math.floor(rb() * 7);
         const lot: Lot = {
           x: lx,
           z: lz,
@@ -250,8 +286,8 @@ export function cityLayout(): CityLayout {
           d,
           h,
           paint,
-          ou: Math.floor(r() * 16),
-          ov: Math.floor(r() * 16),
+          ou: Math.floor(rb() * 16),
+          ov: Math.floor(rb() * 16),
           ring: dist < 100 ? 0 : dist < 190 ? 1 : 2,
           kind: glassy ? 'glass' : 'block',
           fx: 0,
@@ -263,20 +299,20 @@ export function cityLayout(): CityLayout {
         let tw = w;
         let td = d;
         // Tall ones step back once on the way up.
-        if (h > 55 && r() < 0.6) {
-          tw = w * (0.55 + r() * 0.25);
-          td = d * (0.55 + r() * 0.25);
-          lot.step = { w: tw, d: td, up: 12 + r() * h * 0.5 };
+        if (h > 55 && rb() < 0.6) {
+          tw = w * (0.55 + rb() * 0.25);
+          td = d * (0.55 + rb() * 0.25);
+          lot.step = { w: tw, d: td, up: 12 + rb() * h * 0.5 };
           tall += lot.step.up;
         }
         // On the roof: a water tower, a box of air conditioning, or a mast with a red light.
-        const what = r();
+        const what = rb();
         if (tall > 90) lot.top = { kind: 'mast' };
-        else if (what < 0.3) lot.top = { kind: 'tank', x: lx + (r() - 0.5) * tw * 0.4, z: lz + (r() - 0.5) * td * 0.4 };
+        else if (what < 0.3) lot.top = { kind: 'tank', x: lx + (rb() - 0.5) * tw * 0.4, z: lz + (rb() - 0.5) * td * 0.4 };
         else if (what < 0.65) {
-          const pw = 3 + r() * 3;
-          const pd = 2 + r() * 2;
-          lot.top = { kind: 'plant', w: pw, d: pd, x: lx + (r() - 0.5) * tw * 0.4, z: lz + (r() - 0.5) * td * 0.4 };
+          const pw = 3 + rb() * 3;
+          const pd = 2 + rb() * 2;
+          lot.top = { kind: 'plant', w: pw, d: pd, x: lx + (rb() - 0.5) * tw * 0.4, z: lz + (rb() - 0.5) * td * 0.4 };
         }
         // Everything from here on has its own dice, so the layout above stays as it was.
         const k = rng(hash(i, j, Math.round(lx), Math.round(lz)));
@@ -394,11 +430,30 @@ export interface SignalPole {
 }
 
 export interface Prop {
-  kind: 'bench' | 'bin' | 'hydrant';
+  kind: 'bench' | 'bin' | 'hydrant' | 'meter' | 'paper' | 'rack' | 'bags';
   x: number;
   z: number;
   /** About the vertical, so its front (local +z) faces the road. */
   rot: number;
+}
+
+/** What each prop takes up on the ground (m, across and deep as it faces the road) and how tall it stands: its solid, and what the sidewalk keeps clear of it. */
+export const PROP_SIZE: Record<Prop['kind'], readonly [w: number, d: number, h: number]> = {
+  bench: [1.7, 0.6, 0.5],
+  bin: [0.6, 0.6, 0.9],
+  hydrant: [0.4, 0.4, 0.6],
+  meter: [0.3, 0.3, 1.3],
+  paper: [0.55, 0.45, 1],
+  rack: [1.9, 0.5, 0.8],
+  bags: [0.7, 0.5, 0.5],
+};
+
+/** What a prop covers on the ground (see PROP_SIZE; a quarter turn swaps its sides), `pad` m wider all round. */
+export function footprint(p: Prop, pad = 0): Area {
+  const [w, d] = PROP_SIZE[p.kind];
+  const alongZ = Math.abs(Math.sin(p.rot)) > 0.5;
+  const [hx, hz] = alongZ ? [d / 2 + pad, w / 2 + pad] : [w / 2 + pad, d / 2 + pad];
+  return { minX: p.x - hx, maxX: p.x + hx, minZ: p.z - hz, maxZ: p.z + hz };
 }
 
 export interface Intersection {
@@ -470,19 +525,23 @@ export function shopModules(l: Lot): ShopModule[] {
 
 let doors: { x: number; z: number; nx: number; nz: number; half: number }[] | null = null;
 /**
- * Whether (x, z) is in front of a shop's door, where something standing would block the way in: the width of the door and a little
+ * Whether (x, z) is in front of a shop's (or the café's or the bar's) door, where something standing would block the way in: the width of the door and a little
  * more either side, from the wall out across the sidewalk. Props and dressing keep out of it.
  */
 export function atShopDoor(x: number, z: number, margin = 0.7): boolean {
-  doors ??= cityLayout().lots.flatMap((l) =>
-    l.kind !== 'shop' || l.hand
-      ? []
-      : shopModules(l).map((m) => {
-          const mid = (SHOP_DOOR[0] + SHOP_DOOR[1]) / 2;
-          const w = Math.hypot(m.u[0], m.u[1]);
-          return { x: m.a[0] + m.u[0] * mid, z: m.a[1] + m.u[1] * mid, nx: m.n[0], nz: m.n[1], half: (w * (SHOP_DOOR[1] - SHOP_DOOR[0])) / 2 };
-        }),
-  );
+  doors ??= [
+    ...cityLayout().lots.flatMap((l) =>
+      l.kind !== 'shop' || l.hand
+        ? []
+        : shopModules(l).map((m) => {
+            const mid = (SHOP_DOOR[0] + SHOP_DOOR[1]) / 2;
+            const w = Math.hypot(m.u[0], m.u[1]);
+            return { x: m.a[0] + m.u[0] * mid, z: m.a[1] + m.u[1] * mid, nx: m.n[0], nz: m.n[1], half: (w * (SHOP_DOOR[1] - SHOP_DOOR[0])) / 2 };
+          }),
+    ),
+    // The café's and the bar's doors too (shared/venues.ts): nothing stands on the way in.
+    ...VENUES.map((v) => ({ x: v.door.x, z: frontZ(v), nx: 0, nz: v.fz, half: v.door.w / 2 })),
+  ];
   return doors.some((d) => {
     const dx = x - d.x;
     const dz = z - d.z;
@@ -494,7 +553,7 @@ export function atShopDoor(x: number, z: number, margin = 0.7): boolean {
 
 const R = Math.ceil(RADIUS / PERIOD) + 1;
 
-/** The intersections, street lamps, signal poles and benches, bins and hydrants of the city, made once. */
+/** The intersections, street lamps, signal poles and benches, bins and hydrants of the city (and on its shopping streets parking meters, newspaper boxes, bike racks and bags by the bins), made once. */
 export function cityStreetscape(): Streetscape {
   if (scape) return scape;
   const intersections: Intersection[] = [];
@@ -514,22 +573,33 @@ export function cityStreetscape(): Streetscape {
       poles.push({ x: x - d, z: z + d, fx: 0, fz: -1, axis: 'z', i, j }, { x: x + d, z: z - d, fx: 0, fz: 1, axis: 'z', i, j });
     }
   }
-  // Lamps down both sides of every street, every 28 m, all the way out.
+  // Lamps down both sides of every street, every 28 m, all the way out: at a quarter and three quarters of the way between the
+  // cross streets, so none stands at a crossing's landing or by a signal pole; one that would stand in front of a door is left out.
+  const lampsAlong = (origin: number) => {
+    const out: number[] = [];
+    for (let a = origin + PERIOD / 4 + 28 * Math.ceil((-RADIUS - origin - PERIOD / 4) / 28); a <= RADIUS; a += 28) out.push(a);
+    return out;
+  };
+  const alongAvenue = lampsAlong(STREET_Z);
+  const alongStreet = lampsAlong(STREET_X);
+  // Not past the ring road (see GRID): that's grass, and then the beach.
+  const inGrid = (x: number, z: number) => x > GRID.minX && x < GRID.maxX && z > GRID.minZ && z < GRID.maxZ;
   for (let k = -R; k <= R; k++) {
-    for (let a = -RADIUS; a <= RADIUS; a += 28) {
-      for (const s of [-1, 1]) {
-        const off = s * (ROAD_W / 2 + 0.6);
-        const sx = STREET_X + k * PERIOD;
-        const sz = STREET_Z + k * PERIOD;
-        // Not past the ring road (see GRID): that's grass, and then the beach.
-        const inGrid = (x: number, z: number) => x > GRID.minX && x < GRID.maxX && z > GRID.minZ && z < GRID.maxZ;
-        if (Math.hypot(sx + off, a) < RADIUS && inGrid(sx + off, a)) lamps.push({ x: sx + off, z: a, ax: -s, az: 0, hand: keepClear(sx + off, a) });
-        if (Math.hypot(a, sz + off) < RADIUS && inGrid(a, sz + off)) lamps.push({ x: a, z: sz + off, ax: 0, az: -s, hand: keepClear(a, sz + off) });
-      }
+    for (const s of [-1, 1]) {
+      const off = s * (ROAD_W / 2 + 0.6);
+      const sx = STREET_X + k * PERIOD + off;
+      const sz = STREET_Z + k * PERIOD + off;
+      for (const a of alongAvenue) if (Math.hypot(sx, a) < RADIUS && inGrid(sx, a) && !atShopDoor(sx, a, 0.2)) lamps.push({ x: sx, z: a, ax: -s, az: 0, hand: keepClear(sx, a) });
+      for (const a of alongStreet) if (Math.hypot(a, sz) < RADIUS && inGrid(a, sz) && !atShopDoor(a, sz, 0.2)) lamps.push({ x: a, z: sz, ax: 0, az: -s, hand: keepClear(a, sz) });
     }
   }
-  // A bench, a bin and a hydrant along the sidewalks of the blocks, now and then.
+  // A bench, a bin and a hydrant along the sidewalks of the blocks, now and then; along the shopping streets also parking
+  // meters at the kerb, a newspaper box, a bike rack and a bag or two by a bin.
   const mid = ROAD_W / 2 + WALK / 2;
+  const shopSides = new Set<string>();
+  for (const l of cityLayout().lots) {
+    if (l.kind === 'shop' && !l.hand) shopSides.add(`${Math.round((l.x - (STREET_X - PERIOD / 2)) / PERIOD)},${Math.round((l.z - (STREET_Z - PERIOD / 2)) / PERIOD)},${l.fz ? 1 : 0},${l.fz || l.fx}`);
+  }
   for (let i = -R; i <= R; i++) {
     for (let j = -R; j <= R; j++) {
       const bx = STREET_X - PERIOD / 2 + i * PERIOD;
@@ -550,8 +620,34 @@ export function cityStreetscape(): Streetscape {
           if (!keepClear(p.x, p.z) && Math.hypot(p.x, p.z) <= PROP_RADIUS && !atShopDoor(p.x, p.z)) props.push({ kind, ...p, rot });
         };
         if (k() < 0.4) put('bench', -9 + k() * 4);
+        const before = props.length;
         if (k() < 0.55) put('bin', 8 + k() * 4);
+        const bin = props.length > before ? props[props.length - 1] : null;
         if (k() < 0.45) put('hydrant', (k() < 0.5 ? -1 : 1) * 19);
+        // The shopping streets' furniture, on dice of its own so the above stays as it was: `lat` m from the street's middle, `u` along the block.
+        if (!shopSides.has(`${i},${j},${alongX ? 1 : 0},${sign}`)) continue;
+        const m = rng(hash(i, j, alongX ? 1 : 2, sign + 3, 78));
+        const place = (kind: Prop['kind'], p: { x: number; z: number }) => {
+          const me = footprint({ kind, ...p, rot }, 0.15);
+          const free =
+            !keepClear(p.x, p.z) &&
+            Math.hypot(p.x, p.z) <= PROP_RADIUS &&
+            !atShopDoor(p.x, p.z, 0.2) &&
+            !props.some((q) => touches(me, footprint(q))) &&
+            !lamps.some((l) => touches(me, rect(l.x, l.z, 0.4, 0.4))) &&
+            !poles.some((q) => touches(me, rect(q.x, q.z, 0.4, 0.4)));
+          if (free) props.push({ kind, ...p, rot });
+        };
+        const at = (lat: number, u: number) => {
+          const c = (alongX ? bz : bx) + sign * (PERIOD / 2 - lat);
+          return alongX ? { x: bx + u, z: c } : { x: c, z: bz + u };
+        };
+        // Three meters a parking space apart, half a metre in from the kerb (clear of the signs at ±19.5 and the lamps at ±14).
+        const first = Math.floor(m() * 4);
+        for (let n = 0; n < 3; n++) place('meter', at(ROAD_W / 2 + 0.45, -16.25 + (first + n) * 6.5));
+        if (m() < 0.7) place('paper', at(ROAD_W / 2 + 0.55, (m() - 0.5) * 36));
+        if (m() < 0.6) place('rack', at(ROAD_W / 2 + 0.7, (m() - 0.5) * 36));
+        if (bin && m() < 0.5) place('bags', { x: bin.x + (alongX ? 0.85 : 0), z: bin.z + (alongX ? 0 : 0.85) });
       }
     }
   }
@@ -729,7 +825,7 @@ export function surfaceAt(x: number, z: number): Surface {
   const g = cityLayout().gas?.plot;
   if (g && x >= g.minX && x <= g.maxX && z >= g.minZ && z <= g.maxZ) return 'road';
   // The office's block is its plaza, paved all over.
-  if (Math.abs(x - (STREET_X - PERIOD / 2)) <= INNER / 2 && Math.abs(z - (STREET_Z - PERIOD / 2)) <= INNER / 2) return 'walk';
+  if (x >= OFFICE_BLOCK.minX && x <= OFFICE_BLOCK.maxX && z >= OFFICE_BLOCK.minZ && z <= OFFICE_BLOCK.maxZ) return 'walk';
   return 'grass';
 }
 
@@ -868,12 +964,7 @@ function solids(): Map<number, Area[]> {
   const s = cityStreetscape();
   for (const l of s.lamps) if (!l.hand && Math.hypot(l.x, l.z) <= POST_RADIUS) post(l.x, l.z, 0.2);
   for (const p of s.poles) post(p.x, p.z, 0.2);
-  for (const p of s.props) {
-    if (p.kind === 'bench') {
-      const alongZ = Math.abs(Math.sin(p.rot)) > 0.5;
-      add(rect(p.x, p.z, alongZ ? 0.6 : 1.7, alongZ ? 1.7 : 0.6), 0.5);
-    } else add(rect(p.x, p.z, p.kind === 'bin' ? 0.6 : 0.4, p.kind === 'bin' ? 0.6 : 0.4), p.kind === 'bin' ? 0.9 : 0.6);
-  }
+  for (const p of s.props) add(footprint(p), PROP_SIZE[p.kind][2]);
   // Signs, parasols, flagpoles: placed against what's above, and their poles are solid too.
   index = map;
   try {
