@@ -8,6 +8,7 @@ import { decorTicker } from '../quality';
 import { toonVertex } from './toon';
 import { CROWD, crowdMaterial, outlineMaterial, pickLook, type CrowdPart, type PedLook } from './crowd';
 import { kitMaterial, kitModel, type KitName } from './carkit';
+import { SHADE, groundShadow, liftFor } from './cars';
 
 // The city's street life, down at ground level: traffic that keeps to its lane, turns at the corners and
 // waits at red lights, and people on the sidewalks who cross when the walk sign says so, stop to look in a
@@ -321,6 +322,11 @@ interface Look {
   radius: number;
   /** Front axle to back (for how far the front wheels steer). */
   wheelbase: number;
+  /** How far its front wheels are ever drawn turned (rad), and the gap over its tires (for its springs: see cars.ts liftFor). */
+  steer: number;
+  clear: number;
+  /** How far out from its hub a tire's outside edge is (m). */
+  tread: number;
   head: V3[];
   tail: V3[];
   beacons: { at: V3; color: 'red' | 'blue' }[];
@@ -363,15 +369,17 @@ function trafficOutline(): THREE.MeshBasicMaterial {
 function lookOf(k: VKind): Look {
   const look = lookIn(k);
   const zs = look.hubs.map((h) => h[2]);
-  return { ...look, wheelbase: zs.length ? Math.max(...zs) - Math.min(...zs) : 1 };
+  look.wheel?.computeBoundingBox();
+  const b = look.wheel?.boundingBox;
+  return { ...look, wheelbase: zs.length ? Math.max(...zs) - Math.min(...zs) : 1, tread: b ? Math.max(-b.min.x, b.max.x) : 0 };
 }
 
-function lookIn(k: VKind): Omit<Look, 'wheelbase'> {
+function lookIn(k: VKind): Omit<Look, 'wheelbase' | 'tread'> {
   const spec = SPECS[k];
   const m = spec.model ? kitModel(spec.model) : null;
   if (m) {
     // One with no paint (the police car's black and white) is all "paint", tinted white.
-    return { body: m.paint ? m.body : null, paint: m.paint ?? m.body, wheel: m.wheel, hubs: m.hubs.map((h) => [h.x, h.y, h.z]), radius: m.radius, head: m.head, tail: m.tail, beacons: m.beacons, paints: spec.paints.length || !m.paintColor ? spec.paints : [m.paintColor] };
+    return { body: m.paint ? m.body : null, paint: m.paint ?? m.body, wheel: m.wheel, hubs: m.hubs.map((h) => [h.x, h.y, h.z]), radius: m.radius, steer: m.steer, clear: m.clear, head: m.head, tail: m.tail, beacons: m.beacons, paints: spec.paints.length || !m.paintColor ? spec.paints : [m.paintColor] };
   }
   const paint = merged(spec.parts());
   paint.setIndex([...Array(paint.attributes.position.count).keys()]);
@@ -385,6 +393,8 @@ function lookIn(k: VKind): Omit<Look, 'wheelbase'> {
     wheel: bike ? null : wheelInCode(r),
     hubs: bike ? [] : spec.hubs ?? [[hx, r, hz], [-hx, r, hz], [hx, r, -hz], [-hx, r, -hz]],
     radius: r,
+    steer: 0.35,
+    clear: Infinity,
     head: ends(spec.len / 2 + 0.02, bike ? 0.9 : 0.65),
     tail: ends(-spec.len / 2 - 0.02, bike ? 0.75 : 0.65),
     beacons: [],
@@ -1046,6 +1056,18 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
       vehicles.push({ id, kind: k, paint, on: false, v: 0, axis: 'x', dir: 1, line: 0, s: 0, path: null, plan: null, braking: false, hold: 0, stuck: 0, seed: id * 7919 + 13, slot: i, gj: -1, S: 0, acc: 0, pitch: 0, roll: 0, x: 0, z: 0, yaw: 0, len: SPECS[k].len, wid: SPECS[k].wid });
     }
   }
+  // Their contact shadows (world/cars.ts): one more batch, a soft patch under each car and darker under its tires.
+  const shadeGeos = Object.fromEntries(KINDS.map((k) => [k, groundShadow(SPECS[k].wid, SPECS[k].len, vlooks[k].hubs.map(([x, , z]) => ({ x, z })), SPECS[k].wid < 1)])) as Record<VKind, THREE.BufferGeometry>;
+  const shades = new THREE.BatchedMesh(vehicles.length, KINDS.reduce((n, k) => n + shadeGeos[k].attributes.position.count, 0), KINDS.reduce((n, k) => n + shadeGeos[k].index!.count, 0), SHADE);
+  shades.name = 'traffic shadows';
+  shades.frustumCulled = false;
+  shades.renderOrder = 1;
+  const shadeGeo = Object.fromEntries(KINDS.map((k) => [k, shades.addGeometry(shadeGeos[k])])) as Record<VKind, number>;
+  const shadeOf = vehicles.map((v) => shades.addInstance(shadeGeo[v.kind]));
+  for (const id of shadeOf) shades.setVisibleAt(id, false);
+  group.add(shades);
+  /** Each kind's wheels as its springs see them (see cars.ts liftFor). */
+  const lifts = Object.fromEntries(KINDS.map((k) => [k, vlooks[k].hubs.map(([x, y, z]) => ({ x, y, z, radius: vlooks[k].radius, clear: vlooks[k].clear, tread: vlooks[k].tread }))]));
   /** How far each car's wheels have turned (rad), and how far its front ones are steered, eased. */
   const spun = vehicles.map(() => 0);
   const steered = vehicles.map(() => 0);
@@ -1558,11 +1580,17 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
   let clock = 0;
 
   const Q = new THREE.Matrix4();
-  /** Car `v` where it is: its body pitched and rolled about its axles' height, the wheels on the road, turning (and the front ones steering). */
+  const turn = new THREE.Euler();
+  const hub = new THREE.Vector3();
+  /**
+   * Car `v` where it is: its body pitched and rolled about its axles' height (and lifted if that'd bring a
+   * fender down on a tire), the wheels on the road, turning (and the front ones steering), its shadow under it.
+   */
   function writeVehicle(v: Vehicle, dt: number) {
     const ids = vparts[v.id];
     const base = v.id * LAMPS;
     for (const id of [ids.body, ids.paint, ...ids.wheels]) if (id >= 0) for (const b of both) b.setVisibleAt(id, v.on);
+    shades.setVisibleAt(shadeOf[v.id], v.on);
     if (!v.on) {
       for (let i = 0; i < LAMPS; i++) lamps.setMatrixAt(base + i, ZERO);
       lastYaw[v.id] = v.yaw;
@@ -1573,16 +1601,19 @@ export function buildStreetLife(_night?: NightParts): StreetLife {
     // Body: about the hubs' height, so its springs don't lift the wheels off the road.
     q.setFromAxisAngle(RIGHT, v.pitch).multiply(qt.setFromAxisAngle(FWD, v.roll));
     Q.makeRotationFromQuaternion(q);
-    P.makeRotationY(v.yaw).setPosition(v.x, 0, v.z);
-    M.multiplyMatrices(P, T.makeTranslation(0, h, 0)).multiply(Q).multiply(T.makeTranslation(0, -h, 0));
+    const lift = liftFor(lifts[v.kind], turn.set(v.pitch, 0, v.roll), hub.set(0, h, 0), 0);
+    P.makeRotationY(v.yaw).setPosition(v.x, 0.012, v.z);
+    shades.setMatrixAt(shadeOf[v.id], P);
+    P.setPosition(v.x, 0, v.z);
+    M.multiplyMatrices(P, T.makeTranslation(0, h + lift, 0)).multiply(Q).multiply(T.makeTranslation(0, -h, 0));
     for (const b of both) {
       if (ids.body >= 0) b.setMatrixAt(ids.body, M);
       b.setMatrixAt(ids.paint, M);
     }
     // Wheels: rolled as far as it's gone; the front ones turned by how fast it's turning.
-    const turn = dt > 0 ? wrap(v.yaw - lastYaw[v.id]) / dt : 0;
+    const turning = dt > 0 ? wrap(v.yaw - lastYaw[v.id]) / dt : 0;
     lastYaw[v.id] = v.yaw;
-    const want = v.v > 0.5 ? clamp(Math.atan((turn * look.wheelbase) / v.v), -0.5, 0.5) : steered[v.id];
+    const want = v.v > 0.5 ? clamp(Math.atan((turning * look.wheelbase) / v.v), -look.steer, look.steer) : steered[v.id];
     steered[v.id] += (want - steered[v.id]) * Math.min(1, dt * 8);
     spun[v.id] = (spun[v.id] + (v.v * dt) / h) % (Math.PI * 2);
     ids.wheels.forEach((id, i) => {

@@ -25,6 +25,10 @@ export interface KitModel {
   /** Where the wheels' hubs are; +x is the left side. */
   hubs: { x: number; y: number; z: number; front: boolean }[];
   radius: number;
+  /** How far over each tire's top the body is at rest (m): how far it can come down on its springs. Infinity on an open-wheeler. */
+  clear: number;
+  /** How far its front wheels are ever drawn turned (rad). */
+  steer: number;
   head: V3[];
   tail: V3[];
   beacons: { at: V3; color: 'red' | 'blue' }[];
@@ -38,6 +42,21 @@ export interface KitModel {
 }
 
 let kit: Map<KitName, KitModel> | null = null;
+
+/**
+ * Kenney's tires fill their arches to the millimetre, so a body that dips at all on its springs comes
+ * down through them: they're drawn this much smaller (and their hubs that much lower, still on the
+ * road), which leaves 2 x radius x (1 - TIRE) over each, 6.5 cm. Not the race car's: nothing's over them.
+ */
+const TIRE = 0.92;
+/**
+ * And the front ones tucked this far in under the arches, so they stay inside the body steered as far
+ * as KIT_STEER (further, their edges swing out past its sides). The racers' stick out past the body
+ * anyway: theirs stay put, and turn as far as an open-wheeler's.
+ */
+const TUCK = 0.03;
+const KIT_STEER = 0.35;
+const RACER_STEER = 0.42;
 
 /** Every geometry the same shape of attributes (float position, normal, rgb color, indexed), so they batch together. */
 function plain(geo: THREE.BufferGeometry): THREE.BufferGeometry {
@@ -65,18 +84,30 @@ export function setCarKit(scene: THREE.Object3D) {
     if (!geos.has(g)) geos.set(g, plain(g));
     return geos.get(g)!;
   };
+  // A wheel shared by several models is made smaller once (it's round about its hub: across it stays as wide).
+  const smaller = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+  const shrink = (g: THREE.BufferGeometry) => {
+    if (!smaller.has(g)) smaller.set(g, g.clone().scale(1, TIRE, TIRE));
+    return smaller.get(g)!;
+  };
   for (const node of scene.children) {
     const name = node.name as KitName;
     const x = node.userData as { length: number; width: number; height: number; belt: number; cabin: [number, number]; radius: number; wheels: V3[]; head: V3[]; tail: V3[]; beacons: [number, number, number, 'red' | 'blue'][]; paint: string | null };
     const body = geo(node.getObjectByName(`${name}_body`));
-    const wheel = geo(node.getObjectByName(`${name}_wheel`));
-    if (!body || !wheel || !x.wheels) continue;
-    const hubs = x.wheels.map(([hx, hy, hz]) => ({ x: hx, y: hy, z: hz, front: hz > 0 }));
+    const whole = geo(node.getObjectByName(`${name}_wheel`));
+    if (!body || !whole || !x.wheels) continue;
+    const open = name === 'race';
+    const racer = name === 'race' || name === 'race-future';
+    const k = open ? 1 : TIRE;
+    const wheel = open ? whole : shrink(whole);
+    const hubs = x.wheels.map(([hx, hy, hz]) => ({ x: racer || hz <= 0 ? hx : hx - Math.sign(hx) * TUCK, y: hy - x.radius * (1 - k), z: hz, front: hz > 0 }));
     out.set(name, {
       body, wheel, hubs,
       paint: geo(node.getObjectByName(`${name}_paint`)),
       paintColor: x.paint,
-      radius: x.radius,
+      radius: x.radius * k,
+      clear: open ? Infinity : 2 * x.radius * (1 - k),
+      steer: racer ? RACER_STEER : KIT_STEER,
       head: x.head,
       tail: x.tail,
       beacons: x.beacons.map(([bx, by, bz, color]) => ({ at: [bx, by, bz], color })),

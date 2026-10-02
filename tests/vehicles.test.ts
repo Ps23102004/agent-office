@@ -211,7 +211,8 @@ test('at full lean a bike\'s wheels stay on its axles and its rider stays on the
   }
 });
 
-// A car's springs move its body, not its wheels: however it rolls, dives or bobs, the tires stay on the road.
+// A car's springs move its body, not its wheels: however it rolls, dives or bobs, the tires stay on the road,
+// and the fenders never come down onto them.
 test('every car tire stays on the ground at speed with steer, and under hard braking', () => {
   for (const kind of (Object.keys(SPECS) as CarKind[]).filter((k) => SPECS[k].width >= 1)) {
     const defs = CARS.some((c) => c.kind === kind) ? CARS : CIRCUIT_CARS;
@@ -231,11 +232,22 @@ test('every car tire stays on the ground at speed with steer, and under hard bra
         return min - v.root.position.y;
       });
     };
+    // The arch over each tire's outside edge, where the body has put it: never lower than the gap over the tire allows.
+    const fenders = () => {
+      v.body.updateMatrix();
+      for (const w of v.wheels) {
+        const top = w.position.y + w.userData.radius;
+        const arch = new THREE.Vector3(w.position.x + Math.sign(w.position.x) * w.userData.tread, top, w.position.z).applyMatrix4(v.body.matrix);
+        assert.ok(arch.y > top - w.userData.clear - 1e-6, `${kind} fender ${((top - w.userData.clear - arch.y) * 100).toFixed(1)} cm into its tire`);
+      }
+    };
     const step = (speed: number, steer: number, frames: number) => {
       for (let f = 0; f < frames; f++) {
-        fleet.place(i, { ...still, speed: speed + (f === 0 ? 0 : 0), steer });
+        // Going round as its steer says, the way the physics would have it.
+        fleet.place(i, { ...still, rotY: v.pose.rotY + (speed * Math.tan(steer)) / SPECS[kind].wheelbase / 30, speed, steer });
         fleet.update(1 / 30, [], [], 0, { car: i, driving: true }, new THREE.Vector3(0, STREET_Y, 0));
         for (const y of low()) assert.ok(Math.abs(y) < 0.01, `${kind} tire ${y} m off the road`);
+        fenders();
       }
     };
     step(35, 0.4, 30);
@@ -243,10 +255,6 @@ test('every car tire stays on the ground at speed with steer, and under hard bra
     // Flat out to stopped in one step: a hard dive on the nose.
     step(0, 0, 1);
     assert.ok(Math.abs(v.body.rotation.x) > 0.01, 'the nose dives');
-    // It dives and rolls about its axles, not the road: the body over the hubs stays over them, never down onto the tires.
-    const hub = v.wheels[0].position.y;
-    const over = v.body.position.clone().add(new THREE.Vector3(0, hub, 0).applyEuler(v.body.rotation));
-    assert.ok(Math.abs(over.x) < 0.001 && Math.abs(over.y - hub) < 0.02 && Math.abs(over.z) < 0.001, `${kind} pivots at ${over.toArray().map((n) => n.toFixed(3))}`);
     step(0, 0, 10);
   }
 });

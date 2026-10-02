@@ -868,8 +868,10 @@ export function buildStreetCity(night: NightParts): THREE.Group {
   const gp = groundGeo.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (gp.getX(i) - STREET_X) / PERIOD + 0.5, (gp.getZ(i) - STREET_Z) / PERIOD + 0.5);
   const groundMat = new THREE.MeshToonMaterial({ map: streetTexture(), gradientMap: gradient, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
-  group.add(new THREE.Mesh(groundGeo, groundMat));
-  group.add(buildIsland(night));
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  // Cars' and people's shadows on the road (main.ts keeps the sun's shadows round you down here).
+  ground.receiveShadow = true;
+  group.add(ground, buildIsland(night));
 
   // Walls: a material per paint, and the shop fronts' atlas.
   const paintMats = new Map<number, THREE.MeshToonMaterial>();
@@ -981,7 +983,8 @@ export function buildStreetCity(night: NightParts): THREE.Group {
     if (!gas) return;
     const p = gas.plot;
     const c = gas.canopy;
-    soup.add(box, '#575c68', (p.minX + p.maxX) / 2, 0.03, (p.minZ + p.maxZ) / 2, p.maxX - p.minX, 0.06, p.maxZ - p.minZ);
+    // Cars drive onto it (shared/city.ts surfaceAt calls it road): its top's level with the street, over the ground by the ground's depth offset.
+    soup.add(box, '#575c68', (p.minX + p.maxX) / 2, -0.03, (p.minZ + p.maxZ) / 2, p.maxX - p.minX, 0.06, p.maxZ - p.minZ);
     const cw = c.maxX - c.minX;
     const cd = c.maxZ - c.minZ;
     soup.add(box, '#f4f1de', (c.minX + c.maxX) / 2, 4.7, (c.minZ + c.maxZ) / 2, cw, 0.4, cd);
