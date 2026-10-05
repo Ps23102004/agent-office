@@ -6,3 +6,6 @@ dist
 pw.txt
 __pycache__/
 .playtest/
+# Raw capture output and the throwaway office the capture runs in.
+docs/media/raw/
+docs/media/office-data/

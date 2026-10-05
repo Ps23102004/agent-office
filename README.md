@@ -10,6 +10,20 @@
 > npm test                     # 625 tests
 > ```
 
+<p align="center">
+  <a href="docs/media/launch.mp4"><img src="docs/media/launch.gif" alt="20-second tour: the office, driving through the city, racing on the circuit, the arena" width="720"></a>
+</p>
+
+<p align="center"><a href="docs/media/launch.mp4">Watch the 20-second video (MP4)</a> · <a href="docs/media/tour.mp4">Full 50-second tour</a></p>
+
+| The office | The city |
+|---|---|
+| ![The office floor](docs/media/office.png) | ![Driving through the city](docs/media/city.png) |
+| **The race circuit** | **The arena** |
+| ![Racing on the circuit with position, lap and splits](docs/media/circuit.png) | ![First-person arena with a score board and bots](docs/media/arena.png) |
+
+Recorded from the real built game with `node scripts/media/capture.mjs` and cut with `python3 scripts/media/build.py` (needs `npm run build`, a GPU, ffmpeg and Pillow).
+
 **What I added**
 
 - **Battery graphics mode** (default; Balanced / Full in Settings): 30 fps cap, pause when the tab is hidden, shadow map redrawn only on change. Idle office goes from about 2,390 to about 750 draw calls per frame (measured with `renderer.info`).
