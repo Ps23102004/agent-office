@@ -1,3 +1,28 @@
+# Agent Office: Parth's edition
+
+> **This is my fork of [AgentSystemLabs/agent-office](https://github.com/AgentSystemLabs/agent-office)** (MIT, © AgentSystemLabs). The office, the worker/terminal system and the GitHub boards are theirs. Everything listed below is what I added on top over 163 commits (Sep 29 - Oct 2, 2026): about +30,000 / -1,000 lines across 194 files, branched from upstream `1dcdc52`. I have not merged upstream's newer commits (35 files conflict), so this edition lags upstream. The installer lines further down fetch **upstream's** release, not this fork; to run this edition:
+>
+> ```bash
+> git clone https://github.com/Ps23102004/agent-office && cd agent-office
+> npm install && npm run dev   # Vite on :5173, server on :4600 (password: dev)
+> npm test                     # 625 tests
+> ```
+
+**What I added**
+
+- **Battery graphics mode** (default; Balanced / Full in Settings): 30 fps cap, pause when the tab is hidden, shadow map redrawn only on change. Idle office goes from about 2,390 to about 750 draw calls per frame (measured with `renderer.info`).
+- **Omni worker**: a provider that points Claude Code at a local model proxy, so a worker can run on a local model with the same hooks.
+- **An open-world city around the office**: street grid, shop fronts, signals, props, an island with a beach and sea, and ambient traffic and pedestrians that follow a shared clock (rush hours, daily roles, dogs, joggers).
+- **Driving**: tire-model physics with a grip/drift hybrid, OBB car-vs-car collisions, boost, first/third-person camera, Kenney car kit baked to vertex colours, motorbikes and bicycles.
+- **Race circuit**: 3.4 km track with sector splits, cut detection, best-lap ghost, practice laps, ride invites, and server-side race bots that use the same physics as players.
+- **Arena**: lag-compensated shooter with HP, SMG, climb/crouch/slide, and bots that run through the same server judge as human peers.
+- **UI**: world map and minimap, drive HUD, title screen, Hang-out / race screens.
+- **Tooling**: `npm run playtest` (Playwright scenarios for driving, grounding, race, arena, textures, fps).
+
+Every stream was built on its own git worktree and reviewed by a different model than the one that wrote it; the review rounds found real defects each time (see `docs/HANDOFF-round6.md`). I directed the work and the scope; a lot of the code was written by coding agents, and I say so rather than hide it.
+
+---
+
 > [!WARNING]
 > **Work in progress.** Agent Office is built for one person's workflow — mine — and it changes fast as I iterate on it.
 > Expect breaking changes between releases: keys that move, screens that get redrawn, features that come and go
