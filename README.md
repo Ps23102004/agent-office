@@ -1,5 +1,7 @@
 # Agent Office: Parth's edition
 
+[![ci](https://github.com/Ps23102004/agent-office/actions/workflows/ci.yml/badge.svg?branch=parth/round4)](https://github.com/Ps23102004/agent-office/actions/workflows/ci.yml)
+
 > **This is my fork of [AgentSystemLabs/agent-office](https://github.com/AgentSystemLabs/agent-office)** (MIT, © AgentSystemLabs). The office, the worker/terminal system and the GitHub boards are theirs. Everything listed below is what I added on top over 163 commits (Sep 29 - Oct 2, 2026): about +30,000 / -1,000 lines across 194 files, branched from upstream `1dcdc52`. I have not merged upstream's newer commits (35 files conflict), so this edition lags upstream. The installer lines further down fetch **upstream's** release, not this fork; to run this edition:
 >
 > ```bash
